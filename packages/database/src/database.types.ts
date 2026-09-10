@@ -1,5 +1,5 @@
 /**
- * Checked-in bootstrap types for Phase 1A. Regenerate from the local database
+ * Checked-in Supabase types. Regenerate from the local database
  * with `pnpm db:types` whenever a migration changes the schema.
  */
 export type Json =
@@ -237,12 +237,187 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["product_prices"]["Insert"]>;
         Relationships: [];
       };
+      sales: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          profile_id: string;
+          status: "DRAFT" | "COMPLETED" | "CANCELLED" | "REFUNDED";
+          total_cents: number;
+          total_weight_grams: number;
+          created_at: Timestamp;
+          completed_at: Timestamp | null;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          branch_id: string;
+          profile_id: string;
+          status?: "DRAFT" | "COMPLETED" | "CANCELLED" | "REFUNDED";
+          total_cents?: number;
+          total_weight_grams?: number;
+          created_at?: Timestamp;
+          completed_at?: Timestamp | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["sales"]["Insert"]>;
+        Relationships: [];
+      };
+      sale_items: {
+        Row: {
+          id: string;
+          sale_id: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          product_name_snapshot: string;
+          weight_grams: number;
+          price_per_kg_cents: number;
+          subtotal_cents: number;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          sale_id: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          product_name_snapshot: string;
+          weight_grams: number;
+          price_per_kg_cents: number;
+          subtotal_cents: number;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["sale_items"]["Insert"]>;
+        Relationships: [];
+      };
+      payments: {
+        Row: {
+          id: string;
+          sale_id: string;
+          organization_id: string;
+          branch_id: string;
+          method: "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER";
+          amount_cents: number;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          sale_id: string;
+          organization_id: string;
+          branch_id: string;
+          method: "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER";
+          amount_cents: number;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["payments"]["Insert"]>;
+        Relationships: [];
+      };
+      stock_movements: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          type:
+            | "PURCHASE"
+            | "SALE"
+            | "WASTE"
+            | "ADJUSTMENT_POSITIVE"
+            | "ADJUSTMENT_NEGATIVE"
+            | "TRANSFER_IN"
+            | "TRANSFER_OUT"
+            | "RETURN";
+          quantity_grams: number;
+          sale_id: string | null;
+          reason: string | null;
+          profile_id: string;
+          occurred_at: Timestamp;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          type:
+            | "PURCHASE"
+            | "SALE"
+            | "WASTE"
+            | "ADJUSTMENT_POSITIVE"
+            | "ADJUSTMENT_NEGATIVE"
+            | "TRANSFER_IN"
+            | "TRANSFER_OUT"
+            | "RETURN";
+          quantity_grams: number;
+          sale_id?: string | null;
+          reason?: string | null;
+          profile_id: string;
+          occurred_at?: Timestamp;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["stock_movements"]["Insert"]>;
+        Relationships: [];
+      };
     };
-    Views: Record<never, never>;
-    Functions: Record<never, never>;
+    Views: {
+      stock_levels: {
+        Row: {
+          organization_id: string | null;
+          branch_id: string | null;
+          product_id: string | null;
+          quantity_grams: number | null;
+          last_movement_at: Timestamp | null;
+        };
+        Relationships: [];
+      };
+    };
+    Functions: {
+      get_pos_catalog: {
+        Args: { p_branch_id: string };
+        Returns: {
+          organization_id: string;
+          branch_id: string;
+          branch_name: string;
+          category_id: string;
+          category_name: string;
+          category_sort_order: number;
+          product_id: string;
+          product_name: string;
+          product_sku: string | null;
+          unit_type: "WEIGHT" | "UNIT";
+          price_per_kg_cents: number;
+          price_valid_from: Timestamp;
+        }[];
+      };
+      complete_sale: {
+        Args: {
+          p_branch_id: string;
+          p_items: Json;
+          p_payment_method: string;
+        };
+        Returns: {
+          sale_id: string;
+          total_cents: number;
+          total_weight_grams: number;
+          completed_at: Timestamp;
+        }[];
+      };
+    };
     Enums: {
       unit_type: "WEIGHT" | "UNIT";
       membership_status: "INVITED" | "ACTIVE" | "DISABLED";
+      sale_status: "DRAFT" | "COMPLETED" | "CANCELLED" | "REFUNDED";
+      payment_method: "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER";
+      stock_movement_type:
+        | "PURCHASE"
+        | "SALE"
+        | "WASTE"
+        | "ADJUSTMENT_POSITIVE"
+        | "ADJUSTMENT_NEGATIVE"
+        | "TRANSFER_IN"
+        | "TRANSFER_OUT"
+        | "RETURN";
     };
     CompositeTypes: Record<never, never>;
   };

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCurrency, formatWeight, priceForWeight } from "./measurements";
+import {
+  formatCurrency,
+  formatWeight,
+  parseWeightToGrams,
+  priceForWeight,
+  sumMoney
+} from "./measurements";
 
 describe("priceForWeight", () => {
   it("calculates the acceptance-example subtotal exactly", () => {
@@ -23,7 +29,35 @@ describe("formatters", () => {
   });
 
   it("formats integer cents as Argentine pesos", () => {
-    expect(formatCurrency(1_250_050n)).toContain("12.500,5");
+    expect(formatCurrency(1_250_050n)).toBe("$ 12.500,50");
   });
 });
 
+describe("parseWeightToGrams", () => {
+  it("accepts the Argentine decimal separator", () => {
+    expect(parseWeightToGrams("1,250")).toBe(1_250);
+    expect(parseWeightToGrams("0,800")).toBe(800);
+  });
+
+  it("accepts whole kilograms and dot-separated input", () => {
+    expect(parseWeightToGrams("2")).toBe(2_000);
+    expect(parseWeightToGrams("0.075")).toBe(75);
+  });
+
+  it("rejects zero, negatives and precision below one gram", () => {
+    expect(() => parseWeightToGrams("0")).toThrow(RangeError);
+    expect(() => parseWeightToGrams("-1")).toThrow(RangeError);
+    expect(() => parseWeightToGrams("1,0005")).toThrow(RangeError);
+  });
+});
+
+describe("ticket totals", () => {
+  it("matches the complete acceptance ticket without floating point", () => {
+    const vacio = priceForWeight(1_200_000n, parseWeightToGrams("1,250"));
+    const asado = priceForWeight(1_000_000n, parseWeightToGrams("0,800"));
+
+    expect(vacio).toBe(1_500_000n);
+    expect(asado).toBe(800_000n);
+    expect(sumMoney([vacio, asado])).toBe(2_300_000n);
+  });
+});

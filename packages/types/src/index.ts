@@ -31,3 +31,44 @@ export interface ProductSummary {
   unitType: UnitType;
   active: boolean;
 }
+
+export const SALE_STATUSES = ["DRAFT", "COMPLETED", "CANCELLED", "REFUNDED"] as const;
+export type SaleStatus = (typeof SALE_STATUSES)[number];
+
+export const PAYMENT_METHODS = ["CASH", "TRANSFER", "DEBIT", "CREDIT", "OTHER"] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const STOCK_MOVEMENT_TYPES = [
+  "PURCHASE",
+  "SALE",
+  "WASTE",
+  "ADJUSTMENT_POSITIVE",
+  "ADJUSTMENT_NEGATIVE",
+  "TRANSFER_IN",
+  "TRANSFER_OUT",
+  "RETURN"
+] as const;
+export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
+
+export interface PosCatalogProduct {
+  organizationId: EntityId;
+  branchId: EntityId;
+  branchName: string;
+  categoryId: EntityId;
+  categoryName: string;
+  categorySortOrder: number;
+  productId: EntityId;
+  productName: string;
+  productSku: string | null;
+  unitType: UnitType;
+  pricePerKgCents: bigint;
+}
+
+export interface TicketLine {
+  id: EntityId;
+  productId: EntityId;
+  productName: string;
+  weightGrams: number;
+  pricePerKgCents: bigint;
+  subtotalCents: bigint;
+}

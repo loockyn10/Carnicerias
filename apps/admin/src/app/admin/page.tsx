@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 
 import { createClient } from "../../lib/supabase/server";
 import { logout } from "./actions";
@@ -122,6 +123,12 @@ export default async function AdminValidationPage() {
           <DiagnosticItem label="Precios visibles" value={String(pricesResult.count ?? 0)} />
           <DiagnosticItem label="Moneda / zona" value={`${organizationResult.data?.currency ?? "—"} · ${organizationResult.data?.timezone ?? "—"}`} />
         </dl>
+
+        <div className="mt-8 border-t border-stone-200 pt-6">
+          <Link className="inline-flex rounded-lg bg-rose-800 px-5 py-3 font-semibold text-white hover:bg-rose-900" href="/admin/sales">
+            Ver ventas y stock
+          </Link>
+        </div>
       </section>
     </main>
   );
