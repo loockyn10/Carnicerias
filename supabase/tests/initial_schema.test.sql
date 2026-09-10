@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(25);
+select plan(35);
 
 select has_table('public', 'organizations', 'organizations exists');
 select has_table('public', 'branches', 'branches exists');
@@ -32,7 +32,23 @@ select has_trigger('auth', 'users', 'on_auth_user_created', 'Auth creates a prof
 select col_type_is('public', 'product_prices', 'price_cents', 'bigint', 'prices use integer cents');
 select has_function('app_private', 'has_permission', array['uuid', 'text'], 'permission helper exists');
 
+select ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'), 'authenticated can select profiles');
+select ok(has_table_privilege('authenticated', 'public.organization_members', 'SELECT'), 'authenticated can select memberships');
+select ok(has_table_privilege('authenticated', 'public.organizations', 'SELECT'), 'authenticated can select organizations');
+select ok(has_table_privilege('authenticated', 'public.roles', 'SELECT'), 'authenticated can select roles');
+select ok(has_table_privilege('authenticated', 'public.branches', 'SELECT'), 'authenticated can select branches');
+select ok(has_table_privilege('authenticated', 'public.products', 'SELECT'), 'authenticated can select products');
+select ok(not has_table_privilege('anon', 'public.profiles', 'SELECT'), 'anonymous cannot select profiles');
+select ok(not has_table_privilege('anon', 'public.organization_members', 'SELECT'), 'anonymous cannot select memberships');
+select ok(
+  (select prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_private' and p.proname = 'has_permission'),
+  'permission helper is security definer'
+);
+select ok(
+  (select coalesce(array_to_string(proconfig, ','), '') = 'search_path=""' from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app_private' and p.proname = 'has_permission'),
+  'permission helper has an empty search path'
+);
+
 select * from finish();
 
 rollback;
-

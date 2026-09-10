@@ -18,7 +18,7 @@ supabase start
 supabase db reset
 ```
 
-Al terminar `supabase start`, copiá `API URL` y `anon key` a `.env.local`. No copies la `service_role key` a ninguna variable `NEXT_PUBLIC_*` ni `VITE_*`.
+Para Admin, copiá `apps/admin/.env.example` a `apps/admin/.env.local` y completá la URL y la publishable key del proyecto. Next.js usa como raíz de entorno la carpeta de la app, por lo que el `.env.local` del repositorio no sustituye a `apps/admin/.env.local`. No copies una secret key ni la `service_role key` a ninguna variable `NEXT_PUBLIC_*`.
 
 En dos terminales separadas:
 
@@ -35,7 +35,7 @@ El shell web del POS existe solo para validar la estructura compartida. Tauri, S
 
 ## Crear el primer administrador local
 
-1. Iniciá Supabase y creá un usuario desde Authentication en Studio.
+1. Creá un usuario desde Authentication > Users en Supabase Dashboard.
 2. La trigger de Auth crea automáticamente su fila en `profiles`.
 3. En el SQL Editor local, concedé la membresía inicial:
 
@@ -52,7 +52,10 @@ select
   '10000000-0000-4000-8000-000000000001',
   'ACTIVE'
 from auth.users
-where email = 'admin@example.com';
+where lower(email) = lower('admin@example.com')
+on conflict (organization_id, profile_id) do update
+set role_id = excluded.role_id,
+    status = excluded.status;
 ```
 
 Este bootstrap se realiza en un entorno servidor confiable. Un usuario recién registrado nunca se asigna a sí mismo una organización o un rol.
@@ -107,3 +110,4 @@ La organización `Carnicerías Demo` contiene `Sucursal Centro`, `Sucursal Norte
 - El cliente usa solo la anon key y depende de RLS. La service-role key es exclusivamente servidor.
 
 Consultá [la arquitectura](docs/architecture.md) antes de iniciar la siguiente fase.
+Para comprobar la Fase 1A contra el proyecto vinculado, seguí [la validación remota](docs/remote-validation.md).
