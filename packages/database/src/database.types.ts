@@ -248,6 +248,8 @@ export interface Database {
           total_weight_grams: number;
           created_at: Timestamp;
           completed_at: Timestamp | null;
+          device_id: string | null;
+          sync_event_id: string | null;
         };
         Insert: {
           id?: string;
@@ -259,6 +261,8 @@ export interface Database {
           total_weight_grams?: number;
           created_at?: Timestamp;
           completed_at?: Timestamp | null;
+          device_id?: string | null;
+          sync_event_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["sales"]["Insert"]>;
         Relationships: [];
@@ -359,6 +363,70 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["stock_movements"]["Insert"]>;
         Relationships: [];
       };
+      pos_devices: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          label: string | null;
+          status: "ACTIVE" | "DISABLED";
+          registered_by: string;
+          registered_at: Timestamp;
+          last_seen_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          label?: string | null;
+          status?: "ACTIVE" | "DISABLED";
+          registered_by: string;
+          registered_at?: Timestamp;
+          last_seen_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["pos_devices"]["Insert"]>;
+        Relationships: [];
+      };
+      pos_sync_receipts: {
+        Row: {
+          event_id: string;
+          sale_id: string;
+          device_id: string;
+          payload_hash: string;
+          received_at: Timestamp;
+        };
+        Insert: {
+          event_id: string;
+          sale_id: string;
+          device_id: string;
+          payload_hash: string;
+          received_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["pos_sync_receipts"]["Insert"]>;
+        Relationships: [];
+      };
+      pos_catalog_changes: {
+        Row: {
+          sequence: number;
+          organization_id: string;
+          branch_id: string | null;
+          entity_type: "BRANCH" | "CATEGORY" | "PRODUCT" | "PRICE";
+          entity_id: string;
+          changed_at: Timestamp;
+        };
+        Insert: {
+          sequence?: number;
+          organization_id: string;
+          branch_id?: string | null;
+          entity_type: "BRANCH" | "CATEGORY" | "PRODUCT" | "PRICE";
+          entity_id: string;
+          changed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["pos_catalog_changes"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       stock_levels: {
@@ -403,6 +471,18 @@ export interface Database {
           completed_at: Timestamp;
         }[];
       };
+      register_pos_device: {
+        Args: { p_device_id: string; p_branch_id: string; p_label?: string | null };
+        Returns: Json;
+      };
+      pull_pos_state: {
+        Args: { p_device_id: string; p_after_sequence?: number };
+        Returns: Json;
+      };
+      sync_offline_sale: {
+        Args: { p_device_id: string; p_event_id: string; p_payload: Json };
+        Returns: Json;
+      };
     };
     Enums: {
       unit_type: "WEIGHT" | "UNIT";
@@ -418,6 +498,7 @@ export interface Database {
         | "TRANSFER_IN"
         | "TRANSFER_OUT"
         | "RETURN";
+      pos_device_status: "ACTIVE" | "DISABLED";
     };
     CompositeTypes: Record<never, never>;
   };

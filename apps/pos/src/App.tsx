@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
 import {
   formatCurrency,
@@ -8,12 +8,16 @@ import {
   sumMoney
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
+import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
+import { isDesktopRuntime, localDatabase, type LocalRuntime } from "./lib/local-database";
 import { supabase } from "./lib/supabase";
+import { registerDesktopDevice, synchronizeDesktop } from "./lib/sync-engine";
 
 interface AuthUser {
   id: string;
   email: string;
+  offline: boolean;
 }
 
 interface Branch {
@@ -62,7 +66,7 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void 
       return;
     }
 
-    onAuthenticated({ id: data.user.id, email: data.user.email ?? email });
+    onAuthenticated({ id: data.user.id, email: data.user.email ?? email, offline: false });
   }
 
   return (
@@ -109,6 +113,7 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void 
 }
 
 export default function App() {
+  const desktop = isDesktopRuntime();
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [roleName, setRoleName] = useState("");
@@ -125,29 +130,65 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [binding, setBinding] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>({
+    state: navigator.onLine ? "online" : "offline",
+    pendingCount: 0,
+    syncingCurrent: 0,
+    syncingTotal: 0,
+    lastSuccessfulSyncAt: null,
+    lastError: null
+  });
 
   useEffect(() => {
-    void supabase.auth.getSession().then(({ data }) => {
+    const controller = new AbortController();
+    void (async () => {
+      const runtime = desktop ? await localDatabase.runtime() : null;
+      const { data } = await supabase.auth.getSession();
+      if (controller.signal.aborted) return;
+      if (runtime) {
+        setLocalRuntime(runtime);
+        setSyncStatus((current) => ({
+          ...current,
+          state: navigator.onLine ? current.state : "offline",
+          pendingCount: runtime.pendingCount,
+          lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
+          lastError: runtime.lastError
+        }));
+      }
       const sessionUser = data.session?.user;
-      setUser(
-        sessionUser
-          ? { id: sessionUser.id, email: sessionUser.email ?? sessionUser.id }
-          : null
-      );
+      const cachedUser = runtime?.profileId && runtime.userEmail &&
+        runtime.deviceStatus === "ACTIVE" && runtime.authorizationExpiresAt &&
+        new Date(runtime.authorizationExpiresAt).getTime() > Date.now()
+        ? { id: runtime.profileId, email: runtime.userEmail, offline: true }
+        : null;
+      setUser(navigator.onLine && sessionUser
+        ? { id: sessionUser.id, email: sessionUser.email ?? sessionUser.id, offline: false }
+        : cachedUser);
       setAuthReady(true);
+    })().catch((startupError: unknown) => {
+      if (!controller.signal.aborted) {
+        setError(startupError instanceof Error ? startupError.message : "No se pudo iniciar el POS");
+        setAuthReady(true);
+      }
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       const sessionUser = session?.user;
-      setUser(
-        sessionUser
-          ? { id: sessionUser.id, email: sessionUser.email ?? sessionUser.id }
-          : null
-      );
+      if (sessionUser && navigator.onLine) {
+        setUser({ id: sessionUser.id, email: sessionUser.email ?? sessionUser.id, offline: false });
+      } else if (event === "SIGNED_OUT" && navigator.onLine) {
+        setUser(null);
+      }
     });
 
-    return () => data.subscription.unsubscribe();
-  }, []);
+    return () => {
+      controller.abort();
+      data.subscription.unsubscribe();
+    };
+  }, [desktop]);
 
   useEffect(() => {
     if (!user) {
@@ -155,6 +196,23 @@ export default function App() {
       setBranchId("");
       setCatalog([]);
       setTicket([]);
+      return;
+    }
+
+    if (desktop && user.offline) {
+      if (!localRuntime?.organizationId || !localRuntime.branchId || !localRuntime.branchName) {
+        setError("La autorización offline local no tiene una sucursal válida");
+        return;
+      }
+      setRoleName(localRuntime.roleName ?? "Operador offline");
+      setBranches([{
+        id: localRuntime.branchId,
+        organization_id: localRuntime.organizationId,
+        name: localRuntime.branchName,
+        code: localRuntime.branchName
+      }]);
+      setBranchId(localRuntime.branchId);
+      setLoading(false);
       return;
     }
 
@@ -187,14 +245,17 @@ export default function App() {
         ]);
 
       if (roleError || branchError) throw new Error(roleError?.message ?? branchError?.message);
-      const firstBranch = visibleBranches[0];
+      const authorizedBranches = desktop && localRuntime?.branchId
+        ? visibleBranches.filter((branch) => branch.id === localRuntime.branchId)
+        : visibleBranches;
+      const firstBranch = authorizedBranches[0];
       if (!firstBranch) throw new Error("No tenés una sucursal habilitada para operar");
       if (controller.signal.aborted) return;
 
       setRoleName(role?.name ?? "Operador");
-      setBranches(visibleBranches);
+      setBranches(authorizedBranches);
       setBranchId((current) =>
-        visibleBranches.some((branch) => branch.id === current) ? current : firstBranch.id
+        authorizedBranches.some((branch) => branch.id === current) ? current : firstBranch.id
       );
     })()
       .catch((contextError: unknown) => {
@@ -209,7 +270,7 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [user]);
+  }, [desktop, localRuntime, user]);
 
   useEffect(() => {
     if (!branchId) return;
@@ -219,6 +280,27 @@ export default function App() {
     setCategoryId("ALL");
 
     void (async () => {
+      if (desktop) {
+        if (localRuntime?.branchId !== branchId) {
+          setCatalog([]);
+          return;
+        }
+        const data = await localDatabase.catalog(branchId);
+        if (controller.signal.aborted) return;
+        setCatalog(data.map((row) => ({
+          organizationId: row.organizationId,
+          branchId: row.branchId,
+          branchName: row.branchName,
+          categoryId: row.categoryId,
+          categoryName: row.categoryName,
+          categorySortOrder: row.categorySortOrder,
+          productId: row.productId,
+          productName: row.productName,
+          productSku: row.productSku,
+          pricePerKgCents: BigInt(row.pricePerKgCents)
+        })));
+        return;
+      }
       const { data, error: catalogError } = await supabase.rpc("get_pos_catalog", {
         p_branch_id: branchId
       });
@@ -251,7 +333,81 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [branchId]);
+  }, [branchId, desktop, localRuntime?.catalogCursor]);
+
+  const runSync = useCallback(async () => {
+    if (!desktop || !user || user.offline || !localRuntime?.branchId) return;
+    try {
+      const runtime = await synchronizeDesktop(user, setSyncStatus);
+      setLocalRuntime(runtime);
+    } catch {
+      // The sync engine persisted the failure and published the diagnostic state.
+    }
+  }, [desktop, localRuntime?.branchId, user]);
+
+  useEffect(() => {
+    if (!desktop || !user) return;
+
+    const handleOffline = () => {
+      setSyncStatus((current) => ({ ...current, state: "offline" }));
+    };
+    const handleOnline = () => {
+      if (user.offline) {
+        void supabase.auth.getUser().then(({ data, error: authError }) => {
+          if (!authError) {
+            setUser({
+              id: data.user.id,
+              email: data.user.email ?? data.user.id,
+              offline: false
+            });
+          }
+        });
+      } else {
+        void runSync();
+      }
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    if (!user.offline) void runSync();
+    const interval = window.setInterval(() => {
+      if (!user.offline) void runSync();
+    }, 10_000);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [desktop, runSync, user]);
+
+  async function bindDevice() {
+    if (!desktop || !localRuntime || !user || user.offline || !branchId) return;
+    setBinding(true);
+    setError(null);
+    try {
+      await registerDesktopDevice(localRuntime, branchId, user);
+      const runtime = await localDatabase.runtime();
+      setLocalRuntime(runtime);
+      setNotice(`Dispositivo vinculado a ${runtime.branchName ?? "la sucursal"}`);
+      await runSync();
+    } catch (bindingError) {
+      setError(bindingError instanceof Error ? bindingError.message : "No se pudo vincular el dispositivo");
+    } finally {
+      setBinding(false);
+    }
+  }
+
+  async function retryLastEvent() {
+    const eventId = await localDatabase.forceLastRetry();
+    if (!eventId) {
+      setNotice("Todavía no hay ventas locales para reintentar");
+      return;
+    }
+    const runtime = await localDatabase.runtime();
+    setLocalRuntime(runtime);
+    await runSync();
+  }
 
   const categories = useMemo(() => {
     const unique = new Map<string, { id: string; name: string; order: number }>();
@@ -327,6 +483,39 @@ export default function App() {
     setError(null);
     setNotice(null);
 
+    if (desktop) {
+      try {
+        if (!localRuntime?.organizationId || !localRuntime.branchId || !localRuntime.profileId) {
+          throw new Error("Este dispositivo todavía no está vinculado y autorizado");
+        }
+        const sale = createOfflineSale({
+          organizationId: localRuntime.organizationId,
+          branchId: localRuntime.branchId,
+          profileId: localRuntime.profileId,
+          deviceId: localRuntime.deviceId,
+          ticket,
+          paymentMethod
+        });
+        const receipt = await localDatabase.confirmSale(sale);
+        setTicket([]);
+        setPaymentMethod("CASH");
+        const runtime = await localDatabase.runtime();
+        setLocalRuntime(runtime);
+        setSyncStatus((current) => ({
+          ...current,
+          state: navigator.onLine ? "online" : "offline",
+          pendingCount: runtime.pendingCount
+        }));
+        setNotice(`Venta ${receipt.saleId.slice(0, 8)} confirmada localmente por ${formatCurrency(BigInt(receipt.totalCents))}`);
+        void runSync();
+      } catch (saleError) {
+        setError(saleError instanceof Error ? saleError.message : "La venta local no pudo completarse");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     const { data, error: saleError } = await supabase.rpc("complete_sale", {
       p_branch_id: branchId,
       p_items: ticket.map((line) => ({
@@ -355,6 +544,10 @@ export default function App() {
   }
 
   async function logout() {
+    if (desktop) {
+      await localDatabase.clearAuthorization();
+      setLocalRuntime(await localDatabase.runtime());
+    }
     await supabase.auth.signOut();
     setUser(null);
   }
@@ -366,15 +559,33 @@ export default function App() {
   if (!user) return <Login onAuthenticated={setUser} />;
 
   const activeBranch = branches.find((branch) => branch.id === branchId);
+  const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";
+  const syncLabel = syncStatus.state === "syncing"
+    ? `SINCRONIZANDO · ${String(syncStatus.syncingCurrent)} de ${String(syncStatus.syncingTotal)}`
+    : syncStatus.state === "offline"
+      ? `OFFLINE · ${String(syncStatus.pendingCount)} venta${syncStatus.pendingCount === 1 ? "" : "s"} pendiente${syncStatus.pendingCount === 1 ? "" : "s"}`
+      : syncStatus.state === "error"
+        ? "ERROR DE SINCRONIZACIÓN"
+        : syncStatus.pendingCount > 0
+          ? `ONLINE · ${String(syncStatus.pendingCount)} pendientes`
+          : "ONLINE · Todo sincronizado";
 
   return (
     <main className="min-h-screen bg-stone-950 text-stone-100">
       <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-stone-800 bg-stone-900 px-5 py-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">POS online</p>
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">{desktop ? "POS offline-first" : "POS online"}</p>
           <p className="text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
         </div>
         <div className="flex items-center gap-3">
+          {desktop ? (
+            <button
+              className={`rounded-xl border px-3 py-2 text-xs font-black ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
+              onClick={() => setDiagnosticsOpen(true)}
+            >
+              {syncLabel}
+            </button>
+          ) : null}
           {branches.length > 1 ? (
             <select
               className="rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 font-semibold"
@@ -395,6 +606,19 @@ export default function App() {
           <button className="rounded-xl border border-stone-700 px-3 py-2 font-semibold hover:bg-stone-800" onClick={() => void logout()}>Salir</button>
         </div>
       </header>
+
+      {deviceNeedsBinding ? (
+        <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-700 bg-amber-950 px-4 py-3 text-amber-100">
+          <span>Elegí la sucursal definitiva de este equipo. Después de vincularlo no podrá operar otra sucursal.</span>
+          <button
+            className="rounded-lg bg-amber-300 px-4 py-2 font-black text-stone-950 disabled:opacity-50"
+            disabled={binding || !navigator.onLine || !branchId}
+            onClick={() => void bindDevice()}
+          >
+            {binding ? "Vinculando…" : "Vincular dispositivo"}
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="mx-4 mt-4 rounded-xl border border-red-800 bg-red-950 px-4 py-3 text-red-100">{error}</div> : null}
       {notice ? <div className="mx-4 mt-4 rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-emerald-100">{notice}</div> : null}
@@ -465,12 +689,42 @@ export default function App() {
                 {PAYMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
-            <button className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" disabled={loading || ticket.length === 0} onClick={() => void completeSale()}>
+            <button className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" disabled={loading || ticket.length === 0 || deviceNeedsBinding} onClick={() => void completeSale()}>
               {loading ? "Procesando…" : "Confirmar venta"}
             </button>
           </div>
         </aside>
       </div>
+
+      {diagnosticsOpen && localRuntime ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
+          <section className="w-full max-w-xl rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Diagnóstico</p>
+                <h2 className="mt-1 text-3xl font-black">Estado del POS</h2>
+              </div>
+              <button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setDiagnosticsOpen(false)}>Cerrar</button>
+            </div>
+            <dl className="mt-6 grid grid-cols-[auto_1fr] gap-x-5 gap-y-3 text-sm">
+              <dt className="font-bold text-stone-400">Internet</dt><dd>{navigator.onLine ? "Disponible" : "Sin conexión"}</dd>
+              <dt className="font-bold text-stone-400">Supabase</dt><dd>{syncStatus.state === "error" ? "Error" : navigator.onLine ? "Disponible" : "No verificable"}</dd>
+              <dt className="font-bold text-stone-400">SQLite</dt><dd>Operativo</dd>
+              <dt className="font-bold text-stone-400">Última sync</dt><dd>{localRuntime.lastSuccessfulSyncAt ? new Date(localRuntime.lastSuccessfulSyncAt).toLocaleString("es-AR") : "Nunca"}</dd>
+              <dt className="font-bold text-stone-400">Pendientes</dt><dd>{localRuntime.pendingCount}</dd>
+              <dt className="font-bold text-stone-400">Ventas locales</dt><dd>{localRuntime.localSalesCount}</dd>
+              <dt className="font-bold text-stone-400">Device ID</dt><dd className="break-all font-mono text-xs">{localRuntime.deviceId}</dd>
+              <dt className="font-bold text-stone-400">Sucursal</dt><dd>{localRuntime.branchName ?? "Sin vincular"}</dd>
+              <dt className="font-bold text-stone-400">Autorización offline</dt><dd>{localRuntime.authorizationExpiresAt ? `Hasta ${new Date(localRuntime.authorizationExpiresAt).toLocaleString("es-AR")}` : "No disponible"}</dd>
+              <dt className="font-bold text-stone-400">Último error</dt><dd className="break-words text-red-300">{syncStatus.lastError ?? localRuntime.lastError ?? "Ninguno"}</dd>
+            </dl>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button className="rounded-xl bg-emerald-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void runSync()}>Sincronizar ahora</button>
+              <button className="rounded-xl border border-stone-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void retryLastEvent()}>Reenviar último evento</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {selectedProduct ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">

@@ -9,10 +9,12 @@
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@carnicerias/types": "workspace:*"
+  },
   "devDependencies": {
     "eslint": "^9.35.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }
 }
-

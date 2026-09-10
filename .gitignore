@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 .next/
 dist/
+target/
 coverage/
 .turbo/
 *.tsbuildinfo
@@ -11,4 +12,3 @@ coverage/
 !.env.example
 supabase/.branches/
 supabase/.temp/
-

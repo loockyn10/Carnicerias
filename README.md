@@ -1,6 +1,6 @@
 # Plataforma de gestión para carnicerías
 
-Sistema multi-sucursal y multiempresa. La **Fase 1B** agrega un POS online operativo, ventas transaccionales, pagos y ledger de stock sobre la base autenticada de Fase 1A. El modo offline todavía no está implementado.
+Sistema multi-sucursal y multiempresa. La **Fase 1C** convierte el POS React/Vite en una aplicación Tauri offline-first con SQLite, outbox e intercambio incremental con Supabase.
 
 ## Requisitos
 
@@ -8,6 +8,7 @@ Sistema multi-sucursal y multiempresa. La **Fase 1B** agrega un POS online opera
 - pnpm 11
 - Docker Desktop (para Supabase local)
 - Supabase CLI 2.x disponible como `supabase`
+- Rust stable MSVC, Microsoft C++ Build Tools y WebView2 para compilar el POS de escritorio
 
 ## Puesta en marcha
 
@@ -24,14 +25,14 @@ En dos terminales separadas:
 
 ```bash
 pnpm dev:admin
-pnpm dev:pos
+pnpm dev:pos:desktop
 ```
 
 - Admin: <http://localhost:3000>
-- POS online: <http://localhost:1420>
+- POS de escritorio: ventana Tauri; Vite usa internamente <http://localhost:1420>
 - Supabase Studio: <http://localhost:54323>
 
-El POS requiere una membresía `ACTIVE`. Los empleados deben tener además una fila activa en `branch_members`; los administradores pueden operar las sucursales de su organización. Tauri, SQLite, operación offline y sincronización pertenecen a la siguiente fase.
+El POS requiere una membresía `ACTIVE`. Los empleados deben tener además una fila activa en `branch_members`; los administradores pueden vincular el equipo a una sucursal autorizada. El primer ingreso y vinculación requieren Internet. Luego puede vender offline durante 24 horas desde la última validación.
 
 ## Crear el primer administrador local
 
@@ -67,6 +68,7 @@ Para asignar un empleado, usá el rol `10000000-0000-4000-8000-000000000002` y a
 ```bash
 pnpm check
 pnpm build
+pnpm build:pos:desktop
 supabase db lint --local
 pnpm db:test
 ```
@@ -82,11 +84,11 @@ pnpm db:types
 ```text
 apps/
   admin/             Next.js, responsive, despliegue futuro en Vercel
-  pos/               POS online React/Vite; Tauri se incorpora en la fase offline
+  pos/               POS React/Vite/Tauri con SQLite local
 packages/
   business-logic/    reglas puras, dinero y peso
   database/          cliente Supabase RLS-bound y tipos generados
-  sync/              frontera reservada para sincronización offline
+  sync/              contratos, outbox, backoff y transformación de ventas
   types/             contratos de dominio sin dependencias de UI
   ui/                tokens y futuros componentes compartidos
 supabase/
@@ -104,10 +106,11 @@ La organización `Carnicerías Demo` contiene `Sucursal Centro`, `Sucursal Norte
 ## Convenciones importantes
 
 - Dinero persistido como centavos enteros (`bigint` en PostgreSQL, `bigint` en dominio TypeScript).
-- Peso persistido como gramos enteros cuando se implemente venta/stock.
+- Peso persistido como gramos enteros.
 - Timestamps en UTC; presentación en `America/Argentina/Buenos_Aires`.
 - Los precios son históricos: se cierra `valid_to` y se inserta una nueva fila; no se reescribe el importe anterior.
 - El cliente usa solo la anon key y depende de RLS. La service-role key es exclusivamente servidor.
 
 Consultá [la arquitectura](docs/architecture.md) antes de iniciar la siguiente fase.
+Consultá [el diseño offline-first](docs/offline-first.md) para seguridad, conflictos y recuperación.
 Para comprobar la Fase 1A contra el proyecto vinculado, seguí [la validación remota](docs/remote-validation.md).

@@ -10,6 +10,8 @@
     "build": "pnpm -r --if-present build",
     "dev:admin": "pnpm --filter @carnicerias/admin dev",
     "dev:pos": "pnpm --filter @carnicerias/pos dev",
+    "dev:pos:desktop": "pnpm --filter @carnicerias/pos dev:desktop",
+    "build:pos:desktop": "pnpm --filter @carnicerias/pos build:desktop",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
