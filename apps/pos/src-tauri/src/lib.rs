@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
 const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_config.sql");
+const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_sale_snapshots.sql");
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -105,6 +106,11 @@ struct OfflineSaleItem {
     product_name_snapshot: String,
     weight_grams: i64,
     price_per_kg_cents: String,
+    #[serde(default)] original_price_per_kg_cents: Option<String>,
+    #[serde(default)] discount_rule_id: Option<String>,
+    #[serde(default)] discount_type: Option<String>,
+    #[serde(default)] discount_value: Option<String>,
+    #[serde(default)] discount_cents: Option<String>,
     subtotal_cents: String,
 }
 
@@ -224,6 +230,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(COMMERCIAL_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (2, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let snapshots_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 3)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !snapshots_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(DISCOUNT_SNAPSHOT_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (3, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -466,13 +479,16 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
     let mut computed_weight = 0_i64;
     for item in &sale.items {
         let price = parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?;
+        let original_price = item.original_price_per_kg_cents.as_deref().map(|value| parse_i64(value, "originalPricePerKgCents")).transpose()?.unwrap_or(price);
         let subtotal = parse_i64(&item.subtotal_cents, "subtotalCents")?;
+        let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
         let expected = price
             .checked_mul(item.weight_grams)
             .and_then(|value| value.checked_add(500))
             .map(|value| value / 1000)
             .ok_or_else(|| "Sale amount overflow".to_string())?;
-        if item.weight_grams <= 0 || subtotal != expected {
+        let normal_subtotal = original_price.checked_mul(item.weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+        if item.weight_grams <= 0 || subtotal != expected || discount_cents != normal_subtotal - subtotal {
             return Err("Invalid local sale calculation".to_string());
         }
         let catalog_matches: bool = transaction
@@ -481,7 +497,7 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                    select 1 from catalog_products p join catalog_prices cp on cp.product_id = p.id
                    where p.id = ?1 and p.active = 1 and cp.branch_id = ?2 and cp.price_per_kg_cents = ?3
                  )",
-                params![item.product_id, sale.branch_id, price],
+                params![item.product_id, sale.branch_id, original_price],
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
@@ -510,13 +526,15 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         .map_err(|error| error.to_string())?;
 
     for item in &sale.items {
+        let original_price = item.original_price_per_kg_cents.as_deref().map(|value| parse_i64(value, "originalPricePerKgCents")).transpose()?.unwrap_or_else(|| parse_i64(&item.price_per_kg_cents, "pricePerKgCents").unwrap_or(0));
+        let discount_value = item.discount_value.as_deref().map(|value| parse_i64(value, "discountValue")).transpose()?;
+        let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
         transaction
             .execute(
                 "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams,
-                  price_per_kg_cents, subtotal_cents, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, subtotal_cents, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams,
-                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?,
-                        parse_i64(&item.subtotal_cents, "subtotalCents")?, sale.created_at],
+                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, parse_i64(&item.subtotal_cents, "subtotalCents")?, sale.created_at],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -778,6 +796,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
     }
 }

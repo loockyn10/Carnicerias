@@ -101,7 +101,8 @@ export async function synchronizeDesktop(
       });
       const attemptedAt = new Date().toISOString();
       await localDatabase.markSyncing(event.id, attemptedAt);
-      const { error } = await supabase.rpc("sync_offline_sale", {
+      const hasDiscount = event.payload.items.some((item) => item.discountCents !== undefined && item.discountCents !== "0");
+      const { error } = await supabase.rpc(hasDiscount ? "sync_discounted_offline_sale" : "sync_offline_sale", {
         p_device_id: runtime.deviceId,
         p_event_id: event.id,
         p_payload: event.payload as unknown as Json

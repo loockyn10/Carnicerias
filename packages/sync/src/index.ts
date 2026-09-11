@@ -22,6 +22,11 @@ export interface OfflineSaleItemPayload {
   productNameSnapshot: string;
   weightGrams: number;
   pricePerKgCents: string;
+  originalPricePerKgCents?: string;
+  discountRuleId?: string | null;
+  discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+  discountValue?: string | null;
+  discountCents?: string;
   subtotalCents: string;
 }
 
@@ -128,6 +133,11 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     productNameSnapshot: line.productName,
     weightGrams: line.weightGrams,
     pricePerKgCents: line.pricePerKgCents.toString(),
+    originalPricePerKgCents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
+    discountRuleId: line.discountRuleId ?? null,
+    discountType: line.discountType ?? null,
+    discountValue: line.discountValue?.toString() ?? null,
+    discountCents: (line.discountCents ?? 0n).toString(),
     subtotalCents: line.subtotalCents.toString()
   }));
   const totalCents = input.ticket.reduce((total, line) => total + line.subtotalCents, 0n);

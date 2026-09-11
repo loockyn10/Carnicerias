@@ -72,5 +72,9 @@ export interface TicketLine {
   weightGrams: number;
   pricePerKgCents: bigint;
   originalPricePerKgCents?: bigint;
+  discountRuleId?: string | null;
+  discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+  discountValue?: bigint | null;
+  discountCents?: bigint;
   subtotalCents: bigint;
 }

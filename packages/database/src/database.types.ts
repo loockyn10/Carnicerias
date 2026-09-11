@@ -616,6 +616,10 @@ export interface Database {
         Args: { p_device_id: string; p_event_id: string; p_payload: Json };
         Returns: Json;
       };
+      sync_discounted_offline_sale: {
+        Args: { p_device_id: string; p_event_id: string; p_payload: Json };
+        Returns: Json;
+      };
       save_category: {
         Args: { p_category_id: string | null; p_name: string; p_slug: string; p_sort_order?: number; p_active?: boolean };
         Returns: string;

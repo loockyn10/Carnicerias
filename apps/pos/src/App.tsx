@@ -517,6 +517,10 @@ export default function App() {
         weightGrams: grams,
         pricePerKgCents: applied.finalPricePerKgCents,
         originalPricePerKgCents: selectedProduct.pricePerKgCents,
+        discountRuleId: applied.ruleId,
+        discountType: applied.discountType,
+        discountValue: applied.discountValue,
+        discountCents: applied.discountCents,
         subtotalCents: subtotal
       };
 
@@ -567,7 +571,7 @@ export default function App() {
         void loadRecentSales().catch(() => undefined);
         void runSync();
       } catch (saleError) {
-        setError(saleError instanceof Error ? saleError.message : "La venta local no pudo completarse");
+        setError(saleError instanceof Error ? saleError.message : `La venta local no pudo completarse: ${String(saleError)}`);
       } finally {
         saleInFlight.current = false;
         setLoading(false);
