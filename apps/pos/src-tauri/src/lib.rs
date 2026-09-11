@@ -7,6 +7,7 @@ use tauri::{Manager, State};
 use uuid::Uuid;
 
 const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
+const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_config.sql");
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -80,6 +81,22 @@ struct CatalogPullPayload {
     removed_product_ids: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommercialDiscount { id: String, product_id: String, branch_id: Option<String>, minimum_grams: i64, discount_type: String, discount_value: String }
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalAnnouncement { id: String, title: String, message: String, r#type: String, priority: i64, branch_id: Option<String> }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalCommercialConfig { discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalDiscount { id: String, product_id: String, minimum_grams: i64, discount_type: String, discount_value: String }
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommercialConfig { discounts: Vec<CommercialDiscount>, announcements: Vec<LocalAnnouncement> }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OfflineSaleItem {
@@ -139,6 +156,17 @@ struct LocalSaleReceipt {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RecentLocalSale {
+    sale_id: String,
+    status: String,
+    total_cents: String,
+    total_weight_grams: String,
+    completed_at: String,
+    synced_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OutboxRecord {
     id: String,
     aggregate_type: String,
@@ -189,6 +217,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
                 [now()],
             )
             .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let commercial_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 2)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !commercial_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(COMMERCIAL_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (2, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -371,6 +406,27 @@ fn apply_catalog_pull(
     transaction.commit().map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialConfig) -> Result<(), String> {
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    transaction.execute("delete from local_weight_discounts", []).map_err(|error| error.to_string())?;
+    transaction.execute("delete from local_announcements", []).map_err(|error| error.to_string())?;
+    for discount in config.discounts { transaction.execute("insert into local_weight_discounts(id,product_id,branch_id,minimum_grams,discount_type,discount_value) values(?1,?2,?3,?4,?5,?6)", params![discount.id,discount.product_id,discount.branch_id,discount.minimum_grams,parse_i64(&discount.discount_value,"discountValue")?]).map_err(|error| error.to_string())?; }
+    for notice in config.announcements { transaction.execute("insert into local_announcements(id,title,message,type,priority,branch_id) values(?1,?2,?3,?4,?5,?6)", params![notice.id,notice.title,notice.message,notice.r#type,notice.priority,notice.branch_id]).map_err(|error| error.to_string())?; }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_local_commercial_config(state: State<'_, DatabaseState>) -> Result<LocalCommercialConfig, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let mut discounts = connection.prepare("select id,product_id,minimum_grams,discount_type,discount_value from local_weight_discounts order by minimum_grams desc").map_err(|e| e.to_string())?;
+    let discounts = discounts.query_map([], |r| Ok(LocalDiscount { id:r.get(0)?, product_id:r.get(1)?, minimum_grams:r.get(2)?, discount_type:r.get(3)?, discount_value:r.get::<_,i64>(4)?.to_string() })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    let mut notices = connection.prepare("select id,title,message,type,priority,branch_id from local_announcements order by priority desc").map_err(|e|e.to_string())?;
+    let announcements = notices.query_map([], |r| Ok(LocalAnnouncement { id:r.get(0)?, title:r.get(1)?, message:r.get(2)?, r#type:r.get(3)?, priority:r.get(4)?, branch_id:r.get(5)? })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    Ok(LocalCommercialConfig { discounts, announcements })
+}
+
 fn set_metadata(transaction: &Transaction<'_>, key: &str, value: &str, timestamp: &str) -> Result<(), String> {
     transaction
         .execute(
@@ -506,6 +562,31 @@ fn confirm_local_sale(state: State<'_, DatabaseState>, sale: OfflineSalePayload)
         total_weight_grams: sale.total_weight_grams,
         completed_at: sale.completed_at,
     })
+}
+
+#[tauri::command]
+fn get_recent_local_sales(state: State<'_, DatabaseState>, limit: i64) -> Result<Vec<RecentLocalSale>, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let safe_limit = limit.clamp(1, 25);
+    let mut statement = connection
+        .prepare(
+            "select id, status, total_cents, total_weight_grams, completed_at, synced_at
+             from local_sales order by completed_at desc, id desc limit ?1",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([safe_limit], |row| {
+            Ok(RecentLocalSale {
+                sale_id: row.get(0)?,
+                status: row.get(1)?,
+                total_cents: row.get::<_, i64>(2)?.to_string(),
+                total_weight_grams: row.get::<_, i64>(3)?.to_string(),
+                completed_at: row.get(4)?,
+                synced_at: row.get(5)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -669,7 +750,10 @@ pub fn run() {
             get_local_runtime,
             get_local_catalog,
             apply_catalog_pull,
+            apply_commercial_config,
+            get_local_commercial_config,
             confirm_local_sale,
+            get_recent_local_sales,
             get_due_outbox,
             mark_outbox_syncing,
             mark_outbox_synced,

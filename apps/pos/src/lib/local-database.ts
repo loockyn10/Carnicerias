@@ -6,6 +6,8 @@ import type {
   OutboxRecord
 } from "@carnicerias/sync";
 
+export interface LocalCommercialConfig { discounts: { id: string; productId: string; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
+
 export interface LocalRuntime {
   deviceId: string;
   organizationId: string | null;
@@ -45,6 +47,15 @@ export interface LocalSaleReceipt {
   completedAt: string;
 }
 
+export interface RecentLocalSale {
+  saleId: string;
+  status: string;
+  totalCents: string;
+  totalWeightGrams: string;
+  completedAt: string;
+  syncedAt: string | null;
+}
+
 export const isDesktopRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
 function desktopOnly<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -61,8 +72,11 @@ export const localDatabase = {
   catalog: (branchId: string) => desktopOnly<LocalCatalogRow[]>("get_local_catalog", { branchId }),
   applyPull: (pull: CatalogPullPayload, profileId: string, userEmail: string) =>
     desktopVoid("apply_catalog_pull", { pull, profileId, userEmail }),
+  applyCommercialConfig: (config: unknown) => desktopVoid("apply_commercial_config", { config }),
+  commercialConfig: () => desktopOnly<LocalCommercialConfig>("get_local_commercial_config"),
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),
+  recentSales: (limit = 10) => desktopOnly<RecentLocalSale[]>("get_recent_local_sales", { limit }),
   dueOutbox: (currentTime: string) =>
     desktopOnly<OutboxRecord[]>("get_due_outbox", { currentTime }),
   markSyncing: (eventId: string, attemptedAt: string) =>

@@ -250,6 +250,10 @@ export interface Database {
           completed_at: Timestamp | null;
           device_id: string | null;
           sync_event_id: string | null;
+          cancellation_key: string | null;
+          cancelled_at: Timestamp | null;
+          cancelled_by: string | null;
+          cancellation_reason: string | null;
         };
         Insert: {
           id?: string;
@@ -263,6 +267,10 @@ export interface Database {
           completed_at?: Timestamp | null;
           device_id?: string | null;
           sync_event_id?: string | null;
+          cancellation_key?: string | null;
+          cancelled_at?: Timestamp | null;
+          cancelled_by?: string | null;
+          cancellation_reason?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["sales"]["Insert"]>;
         Relationships: [];
@@ -338,6 +346,7 @@ export interface Database {
           profile_id: string;
           occurred_at: Timestamp;
           created_at: Timestamp;
+          stock_operation_id: string | null;
         };
         Insert: {
           id?: string;
@@ -359,6 +368,7 @@ export interface Database {
           profile_id: string;
           occurred_at?: Timestamp;
           created_at?: Timestamp;
+          stock_operation_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["stock_movements"]["Insert"]>;
         Relationships: [];
@@ -427,6 +437,112 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["pos_catalog_changes"]["Insert"]>;
         Relationships: [];
       };
+      audit_logs: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string | null;
+          actor_profile_id: string | null;
+          event_type: string;
+          entity_type: string;
+          entity_id: string | null;
+          before_data: Json | null;
+          after_data: Json | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          branch_id?: string | null;
+          actor_profile_id?: string | null;
+          event_type: string;
+          entity_type: string;
+          entity_id?: string | null;
+          before_data?: Json | null;
+          after_data?: Json | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["audit_logs"]["Insert"]>;
+        Relationships: [];
+      };
+      branch_product_stock_settings: {
+        Row: {
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          minimum_stock_grams: number;
+          target_stock_grams: number;
+          updated_by: string;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          minimum_stock_grams?: number;
+          target_stock_grams?: number;
+          updated_by: string;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["branch_product_stock_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      stock_operations: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
+          supplier: string | null;
+          waste_reason: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER" | null;
+          note: string | null;
+          occurred_at: Timestamp;
+          actor_profile_id: string;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          branch_id: string;
+          operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
+          supplier?: string | null;
+          waste_reason?: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER" | null;
+          note?: string | null;
+          occurred_at?: Timestamp;
+          actor_profile_id: string;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["stock_operations"]["Insert"]>;
+        Relationships: [];
+      };
+      stock_operation_items: {
+        Row: {
+          id: string;
+          operation_id: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          quantity_grams: number;
+          system_quantity_before_grams: number | null;
+          physical_quantity_grams: number | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          operation_id: string;
+          organization_id: string;
+          branch_id: string;
+          product_id: string;
+          quantity_grams: number;
+          system_quantity_before_grams?: number | null;
+          physical_quantity_grams?: number | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["stock_operation_items"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       stock_levels: {
@@ -435,6 +551,23 @@ export interface Database {
           branch_id: string | null;
           product_id: string | null;
           quantity_grams: number | null;
+          last_movement_at: Timestamp | null;
+        };
+        Relationships: [];
+      };
+      branch_stock_status: {
+        Row: {
+          organization_id: string | null;
+          branch_id: string | null;
+          branch_name: string | null;
+          product_id: string | null;
+          product_name: string | null;
+          sku: string | null;
+          current_stock_grams: number | null;
+          minimum_stock_grams: number | null;
+          target_stock_grams: number | null;
+          suggested_replenishment_grams: number | null;
+          stock_status: string | null;
           last_movement_at: Timestamp | null;
         };
         Relationships: [];
@@ -483,6 +616,54 @@ export interface Database {
         Args: { p_device_id: string; p_event_id: string; p_payload: Json };
         Returns: Json;
       };
+      save_category: {
+        Args: { p_category_id: string | null; p_name: string; p_slug: string; p_sort_order?: number; p_active?: boolean };
+        Returns: string;
+      };
+      save_product: {
+        Args: { p_product_id: string | null; p_category_id: string; p_name: string; p_slug: string; p_sku: string; p_unit_type: "WEIGHT" | "UNIT"; p_active?: boolean };
+        Returns: string;
+      };
+      set_product_price: {
+        Args: { p_product_id: string; p_branch_id: string | null; p_price_cents: number | null; p_effective_at?: string };
+        Returns: string | null;
+      };
+      set_stock_policy: {
+        Args: { p_branch_id: string; p_product_id: string; p_minimum_stock_grams: number; p_target_stock_grams: number };
+        Returns: undefined;
+      };
+      record_stock_operation: {
+        Args: { p_branch_id: string; p_operation_type: string; p_items: Json; p_supplier?: string | null; p_waste_reason?: string | null; p_note?: string | null; p_occurred_at?: string };
+        Returns: string;
+      };
+      cancel_sale: {
+        Args: { p_sale_id: string; p_idempotency_key: string; p_reason: string };
+        Returns: Json;
+      };
+      manage_existing_member: {
+        Args: { p_email: string; p_display_name: string; p_role_key: string; p_branch_id: string | null; p_status?: "INVITED" | "ACTIVE" | "DISABLED" };
+        Returns: string;
+      };
+      list_organization_members: {
+        Args: Record<never, never>;
+        Returns: { profile_id: string; display_name: string; email: string; role_key: string; status: "INVITED" | "ACTIVE" | "DISABLED"; branch_id: string | null; branch_name: string | null }[];
+      };
+      set_pos_device_status: {
+        Args: { p_device_id: string; p_status: "ACTIVE" | "DISABLED" };
+        Returns: undefined;
+      };
+      get_admin_dashboard: {
+        Args: { p_branch_id?: string | null };
+        Returns: Json;
+      };
+      get_pos_commercial_config: {
+        Args: { p_branch_id: string };
+        Returns: Json;
+      };
+      complete_discounted_sale: {
+        Args: { p_branch_id: string; p_items: Json; p_payment_method: string };
+        Returns: { sale_id: string; total_cents: number; total_weight_grams: number; completed_at: Timestamp }[];
+      };
     };
     Enums: {
       unit_type: "WEIGHT" | "UNIT";
@@ -499,6 +680,8 @@ export interface Database {
         | "TRANSFER_OUT"
         | "RETURN";
       pos_device_status: "ACTIVE" | "DISABLED";
+      stock_operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
+      waste_reason: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER";
     };
     CompositeTypes: Record<never, never>;
   };

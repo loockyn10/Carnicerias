@@ -63,3 +63,43 @@ export function parseWeightToGrams(input: string): number {
 export function sumMoney(values: readonly bigint[]): bigint {
   return values.reduce((total, value) => total + value, 0n);
 }
+
+export interface WeightDiscountRule {
+  id: string;
+  minimumGrams: number;
+  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG";
+  discountValue: bigint;
+}
+
+export interface AppliedWeightDiscount {
+  ruleId: string | null;
+  originalPricePerKgCents: bigint;
+  finalPricePerKgCents: bigint;
+  discountType: WeightDiscountRule["discountType"] | null;
+  discountValue: bigint | null;
+  discountCents: bigint;
+  subtotalCents: bigint;
+}
+
+/** Resolves the highest eligible threshold; price and totals stay integer-only. */
+export function applyWeightDiscount(
+  originalPricePerKgCents: bigint,
+  grams: number,
+  rules: readonly WeightDiscountRule[]
+): AppliedWeightDiscount {
+  const rule = rules.filter((candidate) => candidate.minimumGrams <= grams)
+    .sort((left, right) => right.minimumGrams - left.minimumGrams)[0];
+  if (!rule) return {
+    ruleId: null, originalPricePerKgCents, finalPricePerKgCents: originalPricePerKgCents,
+    discountType: null, discountValue: null, discountCents: 0n,
+    subtotalCents: priceForWeight(originalPricePerKgCents, grams)
+  };
+  const finalPricePerKgCents = rule.discountType === "PERCENTAGE"
+    ? originalPricePerKgCents * (10_000n - rule.discountValue) / 10_000n
+    : rule.discountValue;
+  const normalSubtotal = priceForWeight(originalPricePerKgCents, grams);
+  const subtotalCents = priceForWeight(finalPricePerKgCents, grams);
+  return { ruleId: rule.id, originalPricePerKgCents, finalPricePerKgCents,
+    discountType: rule.discountType, discountValue: rule.discountValue,
+    discountCents: normalSubtotal - subtotalCents, subtotalCents };
+}

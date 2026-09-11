@@ -3,5 +3,7 @@ export {
   formatWeight,
   parseWeightToGrams,
   priceForWeight,
-  sumMoney
+  sumMoney,
+  applyWeightDiscount
 } from "./measurements";
+export type { AppliedWeightDiscount, WeightDiscountRule } from "./measurements";

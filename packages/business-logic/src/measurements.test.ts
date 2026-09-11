@@ -7,6 +7,7 @@ import {
   priceForWeight,
   sumMoney
 } from "./measurements";
+import { applyWeightDiscount } from "./measurements";
 
 describe("priceForWeight", () => {
   it("calculates the acceptance-example subtotal exactly", () => {
@@ -59,5 +60,25 @@ describe("ticket totals", () => {
     expect(vacio).toBe(1_500_000n);
     expect(asado).toBe(800_000n);
     expect(sumMoney([vacio, asado])).toBe(2_300_000n);
+  });
+});
+
+describe("weight discounts", () => {
+  it("uses the highest applicable threshold without floating point", () => {
+    const result = applyWeightDiscount(1_000_000n, 5_400, [
+      { id: "three", minimumGrams: 3_000, discountType: "PERCENTAGE", discountValue: 500n },
+      { id: "five", minimumGrams: 5_000, discountType: "PERCENTAGE", discountValue: 1_000n }
+    ]);
+    expect(result.ruleId).toBe("five");
+    expect(result.finalPricePerKgCents).toBe(900_000n);
+    expect(result.subtotalCents).toBe(4_860_000n);
+  });
+
+  it("supports promotional fixed prices", () => {
+    const result = applyWeightDiscount(1_200_000n, 3_500, [
+      { id: "fixed", minimumGrams: 3_000, discountType: "FIXED_PRICE_PER_KG", discountValue: 1_090_000n }
+    ]);
+    expect(result.finalPricePerKgCents).toBe(1_090_000n);
+    expect(result.discountCents).toBe(385_000n);
   });
 });

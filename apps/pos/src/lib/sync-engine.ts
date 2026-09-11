@@ -33,6 +33,9 @@ async function applyPull(runtime: LocalRuntime, user: SyncUser): Promise<Catalog
   }
   const pull = asPullPayload(data);
   await localDatabase.applyPull(pull, user.id, user.email);
+  const config = await supabase.rpc("get_pos_commercial_config", { p_branch_id: pull.branchId });
+  if (config.error) throw config.error;
+  await localDatabase.applyCommercialConfig(config.data);
   return pull;
 }
 
@@ -49,6 +52,9 @@ export async function registerDesktopDevice(
   if (error) throw error;
   const pull = asPullPayload(data);
   await localDatabase.applyPull(pull, user.id, user.email);
+  const config = await supabase.rpc("get_pos_commercial_config", { p_branch_id: pull.branchId });
+  if (config.error) throw config.error;
+  await localDatabase.applyCommercialConfig(config.data);
   return pull;
 }
 

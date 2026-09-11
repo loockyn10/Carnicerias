@@ -1,135 +1,63 @@
-import { redirect } from "next/navigation";
-import Link from "next/link";
+import { formatCurrency, formatWeight } from "@carnicerias/business-logic";
 
+import { requireAdminContext } from "../../lib/admin";
 import { createClient } from "../../lib/supabase/server";
-import { logout } from "./actions";
 
-interface DiagnosticItemProps {
-  label: string;
-  value: string;
+interface PeriodMetric { grossCents: number; previousGrossCents: number; salesCount: number; averageTicketCents: number; kilograms: number }
+interface ProductMetric { productId: string; name: string; kilograms: number; grossCents: number }
+interface DashboardData {
+  periods: { today: PeriodMetric; week: PeriodMetric; month: PeriodMetric };
+  paymentsThisMonth: { method: string; amountCents: number; salesCount: number }[];
+  topProductsByRevenue: ProductMetric[];
+  topProductsByKg: ProductMetric[];
+  leastSoldProducts: ProductMetric[];
+  stockAlerts: { branchName: string; productName: string; status: string; currentStockGrams: number; suggestedReplenishmentGrams: number }[];
 }
 
-function DiagnosticItem({ label, value }: DiagnosticItemProps) {
-  return (
-    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-      <dt className="text-xs font-semibold uppercase tracking-wide text-stone-500">{label}</dt>
-      <dd className="mt-1 break-words font-medium text-stone-900">{value}</dd>
-    </div>
-  );
+function Ranking({ title, items }: { title: string; items: ProductMetric[] }) {
+  return <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 className="text-xl font-black">{title}</h2><div className="mt-4 space-y-3">{items.map((item, index) => <div className="flex items-center justify-between gap-4 border-b border-stone-100 pb-3" key={item.productId}><div><span className="mr-2 text-stone-400">#{index + 1}</span><strong>{item.name}</strong><p className="text-sm text-stone-500">{formatWeight(Math.round(item.kilograms * 1000))}</p></div><strong className="text-rose-800">{formatCurrency(BigInt(item.grossCents))}</strong></div>)}{!items.length ? <p className="text-stone-500">Sin ventas en el período.</p> : null}</div></section>;
 }
 
-export default async function AdminValidationPage() {
+const paymentLabels: Record<string, string> = { CASH: "Efectivo", TRANSFER: "Transferencia", DEBIT: "Débito", CREDIT: "Crédito", OTHER: "Otro" };
+
+function change(metric: PeriodMetric) {
+  if (!metric.previousGrossCents) return metric.grossCents ? "+100%" : "0%";
+  const value = ((metric.grossCents - metric.previousGrossCents) / metric.previousGrossCents) * 100;
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const context = await requireAdminContext();
+  const params = await searchParams;
+  const branchId = typeof params.branch === "string" && params.branch ? params.branch : null;
   const supabase = await createClient();
-  const { data: authData } = await supabase.auth.getUser();
-
-  if (!authData.user) {
-    redirect("/login");
-  }
-
-  const user = authData.user;
-  const [profileResult, membershipResult] = await Promise.all([
-    supabase.from("profiles").select("id, display_name, active, created_at").eq("id", user.id).maybeSingle(),
-    supabase
-      .from("organization_members")
-      .select("id, organization_id, profile_id, role_id, status")
-      .eq("profile_id", user.id)
-      .eq("status", "ACTIVE")
-      .limit(1)
-      .maybeSingle()
+  const [{ data: dashboardRaw, error }, { data: branches }] = await Promise.all([
+    supabase.rpc("get_admin_dashboard", { p_branch_id: branchId }),
+    supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")
   ]);
+  const dashboard = dashboardRaw as unknown as DashboardData | null;
 
-  const membership = membershipResult.data;
-
-  if (!membership) {
-    return (
-      <main className="grid min-h-screen place-items-center bg-stone-100 p-6">
-        <section className="w-full max-w-2xl rounded-xl border border-amber-200 bg-white p-8 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wider text-amber-700">Auth correcto · acceso pendiente</p>
-          <h1 className="mt-2 text-2xl font-semibold">El usuario existe, pero todavía no tiene membresía activa</h1>
-          <p className="mt-4 text-stone-600">
-            Esto es el resultado esperado antes del bootstrap: RLS permite leer el perfil propio, pero no una organización.
-          </p>
-          <dl className="mt-6 grid gap-3 sm:grid-cols-2">
-            <DiagnosticItem label="Auth user ID" value={user.id} />
-            <DiagnosticItem label="Perfil" value={profileResult.data?.display_name ?? profileResult.error?.message ?? "No creado"} />
-            <DiagnosticItem label="Membresía" value={membershipResult.error?.message ?? "Sin filas visibles"} />
-            <DiagnosticItem label="Email" value={user.email ?? "Sin email"} />
-          </dl>
-          <form action={logout} className="mt-6">
-            <button className="rounded-lg border border-stone-300 px-4 py-2 font-medium hover:bg-stone-50" type="submit">
-              Cerrar sesión
-            </button>
-          </form>
-        </section>
-      </main>
-    );
-  }
-
-  const [organizationResult, roleResult, branchesResult, productsResult, pricesResult] = await Promise.all([
-    supabase
-      .from("organizations")
-      .select("id, name, slug, currency, timezone")
-      .eq("id", membership.organization_id)
-      .maybeSingle(),
-    supabase.from("roles").select("id, key, name").eq("id", membership.role_id).maybeSingle(),
-    supabase.from("branches").select("id, name, code").eq("organization_id", membership.organization_id),
-    supabase.from("products").select("id", { count: "exact", head: true }).eq("organization_id", membership.organization_id),
-    supabase.from("product_prices").select("id", { count: "exact", head: true }).eq("organization_id", membership.organization_id)
-  ]);
-
-  const diagnosticError = [
-    profileResult.error,
-    membershipResult.error,
-    organizationResult.error,
-    roleResult.error,
-    branchesResult.error,
-    productsResult.error,
-    pricesResult.error
-  ].find((error) => error !== null);
+  if (error || !dashboard) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el dashboard: {error?.message}</main>;
+  const cards: [string, PeriodMetric][] = [["Hoy", dashboard.periods.today], ["Semana", dashboard.periods.week], ["Mes", dashboard.periods.month]];
 
   return (
-    <main className="min-h-screen bg-stone-100 p-6 sm:p-10">
-      <section className="mx-auto max-w-4xl rounded-xl border border-stone-200 bg-white p-8 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wider text-emerald-700">Fase 1A · validación remota</p>
-            <h1 className="mt-2 text-3xl font-semibold text-stone-900">Auth y RLS funcionando</h1>
-            <p className="mt-2 text-stone-600">Todas las consultas de esta página usan la sesión del usuario y la publishable key.</p>
-          </div>
-          <form action={logout}>
-            <button className="rounded-lg border border-stone-300 px-4 py-2 font-medium hover:bg-stone-50" type="submit">
-              Cerrar sesión
-            </button>
-          </form>
-        </div>
-
-        {diagnosticError ? (
-          <p className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800" role="alert">
-            Error de consulta RLS: {diagnosticError.message}
-          </p>
-        ) : null}
-
-        <dl className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <DiagnosticItem label="Usuario Auth" value={user.email ?? user.id} />
-          <DiagnosticItem label="Perfil" value={profileResult.data?.display_name ?? "No visible"} />
-          <DiagnosticItem label="Organización" value={organizationResult.data?.name ?? "No visible"} />
-          <DiagnosticItem label="Membresía" value={membership.status} />
-          <DiagnosticItem label="Rol" value={roleResult.data ? `${roleResult.data.name} (${roleResult.data.key})` : "No visible"} />
-          <DiagnosticItem
-            label="Sucursales visibles"
-            value={branchesResult.data?.length ? branchesResult.data.map((branch) => branch.name).join(", ") : "Ninguna"}
-          />
-          <DiagnosticItem label="Productos visibles" value={String(productsResult.count ?? 0)} />
-          <DiagnosticItem label="Precios visibles" value={String(pricesResult.count ?? 0)} />
-          <DiagnosticItem label="Moneda / zona" value={`${organizationResult.data?.currency ?? "—"} · ${organizationResult.data?.timezone ?? "—"}`} />
-        </dl>
-
-        <div className="mt-8 border-t border-stone-200 pt-6">
-          <Link className="inline-flex rounded-lg bg-rose-800 px-5 py-3 font-semibold text-white hover:bg-rose-900" href="/admin/sales">
-            Ver ventas y stock
-          </Link>
-        </div>
+    <main className="mx-auto max-w-7xl p-5 sm:p-10">
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Resumen operativo</p><h1 className="mt-1 text-3xl font-black">Dashboard</h1><p className="mt-2 text-stone-600">{branches?.length ?? 0} sucursales activas · métricas calculadas en PostgreSQL.</p></div><form><select className="rounded-lg border border-stone-300 bg-white px-4 py-2" defaultValue={branchId ?? ""} name="branch"><option value="">Todas las sucursales</option>{(branches ?? []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><button className="ml-2 rounded-lg bg-rose-800 px-4 py-2 font-bold text-white">Aplicar</button></form></div>
+      <section className="mt-7 grid gap-4 md:grid-cols-3">
+        {cards.map(([label, metric]) => <article className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" key={label}>
+          <p className="text-xs font-bold uppercase tracking-wider text-stone-500">{label}</p>
+          <p className="mt-2 text-3xl font-black text-rose-800">{formatCurrency(BigInt(metric.grossCents))}</p>
+          <p className={`mt-1 text-sm font-bold ${change(metric).startsWith("-") ? "text-red-700" : "text-emerald-700"}`}>{change(metric)} contra período anterior</p>
+          <dl className="mt-4 grid grid-cols-4 gap-2 text-sm"><div><dt className="text-stone-500">Ventas</dt><dd className="font-black">{metric.salesCount}</dd></div><div><dt className="text-stone-500">Ticket</dt><dd className="font-black">{formatCurrency(BigInt(metric.averageTicketCents))}</dd></div><div><dt className="text-stone-500">Kilos</dt><dd className="font-black">{metric.kilograms}</dd></div><div><dt className="text-stone-500">kg/ticket</dt><dd className="font-black">{metric.salesCount ? (metric.kilograms / metric.salesCount).toFixed(2) : "0"}</dd></div></dl>
+        </article>)}
       </section>
+      <div className="mt-7 grid gap-6 lg:grid-cols-2 xl:grid-cols-4">
+        <Ranking title="Más vendidos por facturación" items={dashboard.topProductsByRevenue} />
+        <Ranking title="Más vendidos por kg" items={dashboard.topProductsByKg} />
+        <Ranking title="Menos vendidos" items={dashboard.leastSoldProducts} />
+        <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Medios de pago · mes</h2><div className="mt-4 space-y-3">{dashboard.paymentsThisMonth.map((item) => <div className="flex justify-between border-b border-stone-100 pb-3" key={item.method}><span>{paymentLabels[item.method] ?? item.method} <small className="text-stone-500">({item.salesCount})</small></span><strong>{formatCurrency(BigInt(item.amountCents))}</strong></div>)}{!dashboard.paymentsThisMonth.length ? <p className="text-stone-500">Sin cobros en el período.</p> : null}</div></section>
+      </div>
+      <section className="mt-7 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Alertas de stock</h2><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{dashboard.stockAlerts.map((alert) => <article className={`rounded-xl border p-4 ${alert.status === "CRITICAL" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`} key={`${alert.branchName}-${alert.productName}`}><p className="text-xs font-bold uppercase text-stone-500">{alert.branchName} · {alert.status === "CRITICAL" ? "Crítico" : "Bajo"}</p><h3 className="mt-1 font-black">{alert.productName}</h3><p className="mt-2">Actual: <strong>{formatWeight(alert.currentStockGrams)}</strong></p><p className="text-sm text-stone-600">Reponer: {formatWeight(alert.suggestedReplenishmentGrams)}</p></article>)}{!dashboard.stockAlerts.length ? <p className="text-emerald-700">No hay alertas.</p> : null}</div></section>
     </main>
   );
 }

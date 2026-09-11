@@ -62,6 +62,7 @@ export interface PosCatalogProduct {
   productSku: string | null;
   unitType: UnitType;
   pricePerKgCents: bigint;
+  originalPricePerKgCents?: bigint;
 }
 
 export interface TicketLine {
@@ -70,5 +71,6 @@ export interface TicketLine {
   productName: string;
   weightGrams: number;
   pricePerKgCents: bigint;
+  originalPricePerKgCents?: bigint;
   subtotalCents: bigint;
 }

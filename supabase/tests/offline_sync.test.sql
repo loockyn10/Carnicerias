@@ -12,7 +12,7 @@ select has_function('public', 'sync_offline_sale', array['uuid', 'uuid', 'jsonb'
 select ok((select relrowsecurity from pg_class where oid = 'public.pos_devices'::regclass), 'devices have RLS');
 select ok((select relrowsecurity from pg_class where oid = 'public.pos_sync_receipts'::regclass), 'receipts have RLS');
 select ok((select relrowsecurity from pg_class where oid = 'public.pos_catalog_changes'::regclass), 'change cursor has RLS');
-select ok(not has_table_privilege('authenticated', 'public.pos_devices', 'SELECT'), 'authenticated cannot query devices directly');
+select ok(has_table_privilege('authenticated', 'public.pos_devices', 'SELECT'), 'authenticated can query devices subject to admin-only RLS');
 select ok(not has_table_privilege('authenticated', 'public.pos_sync_receipts', 'SELECT'), 'authenticated cannot query receipts directly');
 select ok(not has_table_privilege('authenticated', 'public.pos_catalog_changes', 'SELECT'), 'authenticated cannot query cursor directly');
 select ok(has_function_privilege('authenticated', 'public.register_pos_device(uuid,uuid,text)', 'EXECUTE'), 'authenticated can register an authorized device');

@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   formatCurrency,
   formatWeight,
   parseWeightToGrams,
-  priceForWeight,
+  applyWeightDiscount,
   sumMoney
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { isDesktopRuntime, localDatabase, type LocalRuntime } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalRuntime, type RecentLocalSale } from "./lib/local-database";
 import { supabase } from "./lib/supabase";
 import { registerDesktopDevice, synchronizeDesktop } from "./lib/sync-engine";
 
@@ -39,6 +39,8 @@ interface CatalogProduct {
   productSku: string | null;
   pricePerKgCents: bigint;
 }
+interface DiscountRule { id: string; productId: string; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }
+interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
 const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: "CASH", label: "Efectivo" },
@@ -120,6 +122,8 @@ export default function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [categoryId, setCategoryId] = useState("ALL");
   const [search, setSearch] = useState("");
   const [ticket, setTicket] = useState<TicketLine[]>([]);
@@ -132,7 +136,10 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [recentSalesOpen, setRecentSalesOpen] = useState(false);
+  const [recentSales, setRecentSales] = useState<RecentLocalSale[]>([]);
   const [binding, setBinding] = useState(false);
+  const saleInFlight = useRef(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>({
     state: navigator.onLine ? "online" : "offline",
     pendingCount: 0,
@@ -141,6 +148,30 @@ export default function App() {
     lastSuccessfulSyncAt: null,
     lastError: null
   });
+
+  const loadRecentSales = useCallback(async () => {
+    if (!user || !branchId) return;
+    if (desktop) {
+      setRecentSales(await localDatabase.recentSales(10));
+      return;
+    }
+    const { data, error: recentError } = await supabase
+      .from("sales")
+      .select("id, status, total_cents, total_weight_grams, completed_at")
+      .eq("branch_id", branchId)
+      .eq("profile_id", user.id)
+      .order("completed_at", { ascending: false })
+      .limit(10);
+    if (recentError) throw recentError;
+    setRecentSales(data.map((sale) => ({
+      saleId: sale.id,
+      status: sale.status,
+      totalCents: String(sale.total_cents),
+      totalWeightGrams: String(sale.total_weight_grams),
+      completedAt: sale.completed_at ?? "",
+      syncedAt: sale.completed_at
+    })));
+  }, [branchId, desktop, user]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -287,7 +318,7 @@ export default function App() {
         }
         const data = await localDatabase.catalog(branchId);
         if (controller.signal.aborted) return;
-        setCatalog(data.map((row) => ({
+        setCatalog(data.filter((row) => row.unitType === "WEIGHT").map((row) => ({
           organizationId: row.organizationId,
           branchId: row.branchId,
           branchName: row.branchName,
@@ -307,7 +338,7 @@ export default function App() {
         if (catalogError) throw catalogError;
         if (controller.signal.aborted) return;
         setCatalog(
-          data.map((row) => ({
+          data.filter((row) => row.unit_type === "WEIGHT").map((row) => ({
             organizationId: row.organization_id,
             branchId: row.branch_id,
             branchName: row.branch_name,
@@ -333,6 +364,26 @@ export default function App() {
     return () => {
       controller.abort();
     };
+  }, [branchId, desktop, localRuntime?.catalogCursor]);
+
+  useEffect(() => {
+    void loadRecentSales().catch(() => setRecentSales([]));
+  }, [loadRecentSales]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    void (async () => {
+      if (desktop) {
+        const config = await localDatabase.commercialConfig();
+        setDiscounts(config.discounts); setAnnouncements(config.announcements);
+      } else {
+        const { data, error: configError } = await supabase.rpc("get_pos_commercial_config", { p_branch_id: branchId });
+        if (configError) throw configError;
+        const config = data as unknown as { discounts: DiscountRule[]; announcements: Announcement[] };
+        setDiscounts(config.discounts);
+        setAnnouncements(config.announcements);
+      }
+    })().catch((configError: unknown) => setError(configError instanceof Error ? configError.message : "No se pudo cargar promociones"));
   }, [branchId, desktop, localRuntime?.catalogCursor]);
 
   const runSync = useCallback(async () => {
@@ -454,13 +505,15 @@ export default function App() {
 
     try {
       const grams = parseWeightToGrams(weightInput);
-      const subtotal = priceForWeight(selectedProduct.pricePerKgCents, grams);
+      const applied = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, discounts.filter((rule) => rule.productId === selectedProduct.productId).map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
+      const subtotal = applied.subtotalCents;
       const line: TicketLine = {
         id: editingLineId ?? crypto.randomUUID(),
         productId: selectedProduct.productId,
         productName: selectedProduct.productName,
         weightGrams: grams,
-        pricePerKgCents: selectedProduct.pricePerKgCents,
+        pricePerKgCents: applied.finalPricePerKgCents,
+        originalPricePerKgCents: selectedProduct.pricePerKgCents,
         subtotalCents: subtotal
       };
 
@@ -478,7 +531,8 @@ export default function App() {
   }
 
   async function completeSale() {
-    if (!branchId || ticket.length === 0) return;
+    if (!branchId || ticket.length === 0 || saleInFlight.current) return;
+    saleInFlight.current = true;
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -507,26 +561,29 @@ export default function App() {
           pendingCount: runtime.pendingCount
         }));
         setNotice(`Venta ${receipt.saleId.slice(0, 8)} confirmada localmente por ${formatCurrency(BigInt(receipt.totalCents))}`);
+        void loadRecentSales().catch(() => undefined);
         void runSync();
       } catch (saleError) {
         setError(saleError instanceof Error ? saleError.message : "La venta local no pudo completarse");
       } finally {
+        saleInFlight.current = false;
         setLoading(false);
       }
       return;
     }
 
-    const { data, error: saleError } = await supabase.rpc("complete_sale", {
+    const { data, error: saleError } = await supabase.rpc("complete_discounted_sale", {
       p_branch_id: branchId,
       p_items: ticket.map((line) => ({
         product_id: line.productId,
         weight_grams: line.weightGrams,
-        expected_price_per_kg_cents: line.pricePerKgCents.toString()
+        expected_price_per_kg_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString()
       })),
       p_payment_method: paymentMethod
     });
 
     setLoading(false);
+    saleInFlight.current = false;
     if (saleError) {
       setError(saleError.message);
       return;
@@ -541,6 +598,7 @@ export default function App() {
     setNotice(`Venta ${completedSale.sale_id.slice(0, 8)} confirmada por ${formatCurrency(BigInt(completedSale.total_cents))}`);
     setTicket([]);
     setPaymentMethod("CASH");
+    void loadRecentSales().catch(() => undefined);
   }
 
   async function logout() {
@@ -578,6 +636,7 @@ export default function App() {
           <p className="text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
         </div>
         <div className="flex items-center gap-3">
+          <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}>Ventas recientes</button>
           {desktop ? (
             <button
               className={`rounded-xl border px-3 py-2 text-xs font-black ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
@@ -599,7 +658,7 @@ export default function App() {
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           ) : null}
-          <div className="hidden text-right text-xs text-stone-400 sm:block">
+          <div className="text-right text-xs text-stone-400">
             <p className="font-semibold text-stone-200">{roleName}</p>
             <p>{user.email}</p>
           </div>
@@ -622,6 +681,7 @@ export default function App() {
 
       {error ? <div className="mx-4 mt-4 rounded-xl border border-red-800 bg-red-950 px-4 py-3 text-red-100">{error}</div> : null}
       {notice ? <div className="mx-4 mt-4 rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-emerald-100">{notice}</div> : null}
+      {announcements.length ? <div className="mx-4 mt-4 grid gap-2 md:grid-cols-2">{announcements.map((announcement) => <div key={announcement.id} className="rounded-xl border border-amber-700 bg-amber-950 px-4 py-3 text-sm text-amber-100"><strong>{announcement.title}</strong><p>{announcement.message}</p></div>)}</div> : null}
 
       <div className="grid min-h-[calc(100vh-4rem)] lg:grid-cols-[minmax(0,1fr)_410px]">
         <section className="min-w-0 border-stone-800 p-4 lg:border-r lg:p-5">
@@ -647,6 +707,7 @@ export default function App() {
                 <span className="block text-lg font-black">{product.productName}</span>
                 <span className="mt-2 block text-sm text-stone-400">{product.categoryName}</span>
                 <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / kg</small></span>
+                {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{rule.discountType === "PERCENTAGE" ? `${String(Number(rule.discountValue) / 100)}% OFF` : `${formatCurrency(BigInt(rule.discountValue))}/kg`} desde {formatWeight(rule.minimumGrams)}</span>)}
               </button>
             ))}
           </div>
@@ -726,6 +787,15 @@ export default function App() {
         </div>
       ) : null}
 
+      {recentSalesOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
+          <section className="w-full max-w-xl rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
+            <div className="mt-5 space-y-3">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+          </section>
+        </div>
+      ) : null}
+
       {selectedProduct ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <form className="w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
@@ -737,10 +807,10 @@ export default function App() {
               <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />
             </label>
             <div className="mt-5 rounded-2xl bg-stone-950 p-4">
-              <span className="text-sm text-stone-400">Subtotal</span>
+              <span className="text-sm text-stone-400">Total con descuento automático</span>
               <strong className="block text-4xl font-black text-rose-400">
                 {(() => {
-                  try { return formatCurrency(priceForWeight(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput))); }
+                  try { return formatCurrency(applyWeightDiscount(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), discounts.filter((rule) => rule.productId === selectedProduct.productId).map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) }))).subtotalCents); }
                   catch { return "$ 0"; }
                 })()}
               </strong>
