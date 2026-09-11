@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(35);
+select plan(45);
 
 select has_table('public', 'pos_devices', 'POS devices exist');
 select has_table('public', 'pos_sync_receipts', 'idempotency receipts exist');
@@ -53,6 +53,7 @@ insert into public.product_prices (organization_id, product_id, price_cents, val
   ('72000000-0000-4000-8000-000000000001', '75000000-0000-4000-8000-000000000002', 1000000, '2026-01-01T00:00:00Z');
 
 create temporary table phase1c_payload(payload jsonb) on commit drop;
+create temporary table phase1c_discount_payload(payload jsonb) on commit drop;
 create temporary table phase1c_cursor(cursor bigint) on commit drop;
 insert into phase1c_cursor select max(sequence) from public.pos_catalog_changes;
 insert into phase1c_payload values (jsonb_build_object(
@@ -78,7 +79,20 @@ insert into phase1c_payload values (jsonb_build_object(
     jsonb_build_object('id', '76000000-0000-4000-8000-000000000008', 'productId', '75000000-0000-4000-8000-000000000002', 'quantityGrams', '-800', 'occurredAt', now() - interval '1 minute')
   )
 ));
+insert into public.product_weight_discounts(id, organization_id, product_id, minimum_grams, discount_type, discount_value)
+values ('76000000-0000-4000-8000-000000000020', '72000000-0000-4000-8000-000000000001', '75000000-0000-4000-8000-000000000002', 2000, 'PERCENTAGE', 2000);
+insert into phase1c_discount_payload values (jsonb_build_object(
+  'schemaVersion', 1, 'eventId', '76000000-0000-4000-8000-000000000021', 'saleId', '76000000-0000-4000-8000-000000000022',
+  'organizationId', '72000000-0000-4000-8000-000000000001', 'branchId', '73000000-0000-4000-8000-000000000001',
+  'profileId', '71000000-0000-4000-8000-000000000001', 'deviceId', '76000000-0000-4000-8000-000000000003', 'status', 'COMPLETED',
+  'totalCents', '1800000', 'totalWeightGrams', '2250', 'createdAt', now() - interval '2 minutes', 'completedAt', now() - interval '2 minutes',
+  'items', jsonb_build_array(jsonb_build_object('id','76000000-0000-4000-8000-000000000023','productId','75000000-0000-4000-8000-000000000002','productNameSnapshot','Asado Offline','weightGrams',2250,'pricePerKgCents','800000','originalPricePerKgCents','1000000','discountRuleId','76000000-0000-4000-8000-000000000020','discountType','PERCENTAGE','discountValue','2000','discountCents','450000','subtotalCents','1800000')),
+  'payment', jsonb_build_object('id','76000000-0000-4000-8000-000000000024','method','CASH','amountCents','1800000'),
+  'stockMovements', jsonb_build_array(jsonb_build_object('id','76000000-0000-4000-8000-000000000025','productId','75000000-0000-4000-8000-000000000002','quantityGrams','-2250','occurredAt',now() - interval '2 minutes'))
+));
+update public.product_weight_discounts set discount_value = 1000 where id = '76000000-0000-4000-8000-000000000020';
 grant select on phase1c_payload to authenticated;
+grant select on phase1c_discount_payload to authenticated;
 grant select on phase1c_cursor to authenticated;
 
 set local role authenticated;
@@ -119,6 +133,16 @@ select is(
 );
 select is((select count(*) from public.sales where id = '76000000-0000-4000-8000-000000000002'), 1::bigint, 'retry does not duplicate the sale');
 select is((select count(*) from public.sale_items where sale_id = '76000000-0000-4000-8000-000000000002'), 2::bigint, 'retry does not duplicate children');
+select is((select count(*) from public.sale_items where sale_id='76000000-0000-4000-8000-000000000002' and original_price_per_kg_cents is null), 0::bigint, 'legacy items receive a non-null original price');
+select is((select count(*) from public.sale_items where sale_id='76000000-0000-4000-8000-000000000002' and final_price_per_kg_cents=price_per_kg_cents), 2::bigint, 'legacy effective prices equal their historical prices');
+select is((select sum(discount_cents) from public.sale_items where sale_id='76000000-0000-4000-8000-000000000002'), 0::numeric, 'legacy items normalize to zero discount');
+select is((public.sync_offline_sale('76000000-0000-4000-8000-000000000003','76000000-0000-4000-8000-000000000021',(select payload from phase1c_discount_payload))->>'duplicate')::boolean,false,'discounted snapshot pushes after promotion changes');
+select is((select original_price_per_kg_cents from public.sale_items where sale_id='76000000-0000-4000-8000-000000000022'),1000000::bigint,'discounted original price is preserved');
+select is((select final_price_per_kg_cents from public.sale_items where sale_id='76000000-0000-4000-8000-000000000022'),800000::bigint,'discounted effective price is preserved');
+select is((select discount_cents from public.sale_items where sale_id='76000000-0000-4000-8000-000000000022'),450000::bigint,'discount amount is preserved');
+select is((select total_cents from public.sales where id='76000000-0000-4000-8000-000000000022'),1800000::bigint,'discounted sale total is preserved');
+select is((public.sync_offline_sale('76000000-0000-4000-8000-000000000003','76000000-0000-4000-8000-000000000021',(select payload from phase1c_discount_payload))->>'duplicate')::boolean,true,'discounted retry returns duplicate receipt');
+select is((select count(*) from public.sales where id='76000000-0000-4000-8000-000000000022'),1::bigint,'discounted retry inserts one sale');
 select throws_ok(
   $$select public.sync_offline_sale(
     '76000000-0000-4000-8000-000000000003',

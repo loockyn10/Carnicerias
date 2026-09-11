@@ -394,8 +394,9 @@ export default function App() {
       const runtime = await synchronizeDesktop(user, setSyncStatus);
       setLocalRuntime(runtime);
       setOutboxSummary(await localDatabase.outboxSummary());
-    } catch {
+    } catch (syncError) {
       setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
+      setError(syncError instanceof Error ? syncError.message : String(syncError));
     }
   }, [desktop, localRuntime?.branchId, user]);
 

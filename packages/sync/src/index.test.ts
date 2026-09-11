@@ -28,6 +28,8 @@ describe("offline sale envelope", () => {
     expect(payload.totalCents).toBe("2300000");
     expect(payload.totalWeightGrams).toBe("2050");
     expect(payload.items.map((item) => item.pricePerKgCents)).toEqual(["1200000", "1000000"]);
+    expect(payload.items.map((item) => item.originalPricePerKgCents)).toEqual(["1200000", "1000000"]);
+    expect(payload.items.map((item) => item.discountCents)).toEqual(["0", "0"]);
     expect(new Set([
       payload.eventId,
       payload.saleId,
@@ -35,6 +37,18 @@ describe("offline sale envelope", () => {
       ...payload.items.map((item) => item.id),
       ...payload.stockMovements.map((movement) => movement.id)
     ]).size).toBe(7);
+  });
+
+  it("freezes a complete discounted item snapshot", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "CASH", createId: () => crypto.randomUUID(),
+      ticket: [{ id: "line", productId: "asado", productName: "Asado", weightGrams: 2_250,
+        originalPricePerKgCents: 1_000_000n, pricePerKgCents: 800_000n,
+        discountRuleId: "rule", discountType: "PERCENTAGE", discountValue: 2_000n,
+        discountCents: 450_000n, subtotalCents: 1_800_000n }]
+    });
+    expect(payload.items[0]).toMatchObject({ originalPricePerKgCents: "1000000", pricePerKgCents: "800000", discountType: "PERCENTAGE", discountValue: "2000", discountCents: "450000", subtotalCents: "1800000" });
   });
 });
 

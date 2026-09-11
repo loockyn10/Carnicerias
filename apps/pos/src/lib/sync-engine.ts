@@ -15,6 +15,12 @@ interface SyncUser {
 
 type StatusListener = (status: SyncStatusSnapshot) => void;
 
+function describePushError(error: { message: string; code?: string; details?: string | null; hint?: string | null }): string {
+  return [error.code ? `[${error.code}]` : null, error.message, error.details, error.hint ? `Hint: ${error.hint}` : null]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+}
+
 function asPullPayload(value: Json): CatalogPullPayload {
   if (!value || Array.isArray(value) || typeof value !== "object") {
     throw new Error("Supabase returned an invalid catalog payload");
@@ -106,20 +112,20 @@ export async function synchronizeDesktop(
       });
       const attemptedAt = new Date().toISOString();
       await localDatabase.markSyncing(event.id, attemptedAt);
-      const hasDiscount = event.payload.items.some((item) => item.discountCents !== undefined && item.discountCents !== "0");
-      const { error } = await supabase.rpc(hasDiscount ? "sync_discounted_offline_sale" : "sync_offline_sale", {
+      const { error } = await supabase.rpc("sync_offline_sale", {
         p_device_id: runtime.deviceId,
         p_event_id: event.id,
         p_payload: event.payload as unknown as Json
       });
       if (error) {
+        const diagnostic = describePushError(error);
         await localDatabase.markFailed(
           event.id,
-          error.message,
+          diagnostic,
           nextAttemptAt(event.attempts + 1)
         );
         pushFailed += 1;
-        throw error;
+        throw new Error(diagnostic);
       }
       await localDatabase.markSynced(event.id, new Date().toISOString());
       pushSucceeded += 1;
