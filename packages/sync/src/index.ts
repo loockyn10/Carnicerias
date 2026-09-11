@@ -14,6 +14,11 @@ export interface SyncStatusSnapshot {
   syncingTotal: number;
   lastSuccessfulSyncAt: string | null;
   lastError: string | null;
+  pullReceived?: number;
+  pushPendingBefore?: number;
+  pushSucceeded?: number;
+  pushFailed?: number;
+  pushPendingAfter?: number;
 }
 
 export interface OfflineSaleItemPayload {

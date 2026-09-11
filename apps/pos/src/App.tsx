@@ -11,7 +11,7 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { isDesktopRuntime, localDatabase, type LocalRuntime, type RecentLocalSale } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalRuntime, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
 import { supabase } from "./lib/supabase";
 import { registerDesktopDevice, synchronizeDesktop } from "./lib/sync-engine";
 
@@ -139,6 +139,7 @@ export default function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
   const [recentSales, setRecentSales] = useState<RecentLocalSale[]>([]);
+  const [outboxSummary, setOutboxSummary] = useState<OutboxSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const saleInFlight = useRef(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>({
@@ -392,8 +393,9 @@ export default function App() {
     try {
       const runtime = await synchronizeDesktop(user, setSyncStatus);
       setLocalRuntime(runtime);
+      setOutboxSummary(await localDatabase.outboxSummary());
     } catch {
-      // The sync engine persisted the failure and published the diagnostic state.
+      setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
     }
   }, [desktop, localRuntime?.branchId, user]);
 
@@ -780,11 +782,14 @@ export default function App() {
               <dt className="font-bold text-stone-400">SQLite</dt><dd>Operativo</dd>
               <dt className="font-bold text-stone-400">Última sync</dt><dd>{localRuntime.lastSuccessfulSyncAt ? new Date(localRuntime.lastSuccessfulSyncAt).toLocaleString("es-AR") : "Nunca"}</dd>
               <dt className="font-bold text-stone-400">Pendientes</dt><dd>{localRuntime.pendingCount}</dd>
+              <dt className="font-bold text-stone-400">Pull</dt><dd>{syncStatus.pullReceived ?? 0} actualizaciones recibidas</dd>
+              <dt className="font-bold text-stone-400">Push</dt><dd>Antes: {syncStatus.pushPendingBefore ?? 0} · enviadas: {syncStatus.pushSucceeded ?? 0} · fallidas: {syncStatus.pushFailed ?? 0} · después: {syncStatus.pushPendingAfter ?? localRuntime.pendingCount}</dd>
+              <dt className="font-bold text-stone-400">Outbox</dt><dd>{outboxSummary ? `PENDING ${String(outboxSummary.pending)} · FAILED ${String(outboxSummary.failed)} · SYNCED ${String(outboxSummary.synced)}` : "Abrí Sincronizar ahora para actualizar"}</dd>
               <dt className="font-bold text-stone-400">Ventas locales</dt><dd>{localRuntime.localSalesCount}</dd>
               <dt className="font-bold text-stone-400">Device ID</dt><dd className="break-all font-mono text-xs">{localRuntime.deviceId}</dd>
               <dt className="font-bold text-stone-400">Sucursal</dt><dd>{localRuntime.branchName ?? "Sin vincular"}</dd>
               <dt className="font-bold text-stone-400">Autorización offline</dt><dd>{localRuntime.authorizationExpiresAt ? `Hasta ${new Date(localRuntime.authorizationExpiresAt).toLocaleString("es-AR")}` : "No disponible"}</dd>
-              <dt className="font-bold text-stone-400">Último error</dt><dd className="break-words text-red-300">{syncStatus.lastError ?? localRuntime.lastError ?? "Ninguno"}</dd>
+              <dt className="font-bold text-stone-400">Último error</dt><dd className="break-words text-red-300">{syncStatus.lastError ?? outboxSummary?.lastError ?? localRuntime.lastError ?? "Ninguno"}</dd>
             </dl>
             <div className="mt-6 flex flex-wrap gap-3">
               <button className="rounded-xl bg-emerald-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void runSync()}>Sincronizar ahora</button>

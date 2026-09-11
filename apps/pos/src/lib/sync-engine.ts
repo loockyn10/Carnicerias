@@ -87,8 +87,13 @@ export async function synchronizeDesktop(
     lastError: null
   });
 
+  let pullReceived = 0;
+  let pushSucceeded = 0;
+  let pushFailed = 0;
+  const pushPendingBefore = runtime.pendingCount;
   try {
-    await applyPull(runtime, user);
+    const pull = await applyPull(runtime, user);
+    pullReceived = pull.catalog.length;
     const due = await localDatabase.dueOutbox(new Date().toISOString());
     for (const [index, event] of due.entries()) {
       listener({
@@ -113,9 +118,11 @@ export async function synchronizeDesktop(
           error.message,
           nextAttemptAt(event.attempts + 1)
         );
+        pushFailed += 1;
         throw error;
       }
       await localDatabase.markSynced(event.id, new Date().toISOString());
+      pushSucceeded += 1;
     }
 
     runtime = await localDatabase.runtime();
@@ -125,7 +132,8 @@ export async function synchronizeDesktop(
       syncingCurrent: 0,
       syncingTotal: 0,
       lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
-      lastError: null
+      lastError: null,
+      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount
     });
     return runtime;
   } catch (error) {
@@ -136,7 +144,8 @@ export async function synchronizeDesktop(
       syncingCurrent: 0,
       syncingTotal: runtime.pendingCount,
       lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
-      lastError: error instanceof Error ? error.message : "Synchronization failed"
+      lastError: error instanceof Error ? error.message : "Synchronization failed",
+      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount
     });
     throw error;
   }

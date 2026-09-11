@@ -55,6 +55,7 @@ export interface RecentLocalSale {
   completedAt: string;
   syncedAt: string | null;
 }
+export interface OutboxSummary { pending: number; syncing: number; failed: number; synced: number; lastError: string | null; }
 
 export const isDesktopRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
@@ -79,6 +80,7 @@ export const localDatabase = {
   recentSales: (limit = 10) => desktopOnly<RecentLocalSale[]>("get_recent_local_sales", { limit }),
   dueOutbox: (currentTime: string) =>
     desktopOnly<OutboxRecord[]>("get_due_outbox", { currentTime }),
+  outboxSummary: () => desktopOnly<OutboxSummary>("get_outbox_summary"),
   markSyncing: (eventId: string, attemptedAt: string) =>
     desktopVoid("mark_outbox_syncing", { eventId, attemptedAt }),
   markSynced: (eventId: string, syncedAt: string) =>

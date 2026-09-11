@@ -173,6 +173,10 @@ struct RecentLocalSale {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct OutboxSummary { pending: i64, syncing: i64, failed: i64, synced: i64, last_error: Option<String> }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OutboxRecord {
     id: String,
     aggregate_type: String,
@@ -651,6 +655,15 @@ fn get_due_outbox(state: State<'_, DatabaseState>, current_time: String) -> Resu
 }
 
 #[tauri::command]
+fn get_outbox_summary(state: State<'_, DatabaseState>) -> Result<OutboxSummary, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    connection.query_row(
+        "select count(*) filter(where status='PENDING'), count(*) filter(where status='SYNCING'), count(*) filter(where status='FAILED'), count(*) filter(where status='SYNCED'), (select last_error from sync_outbox where last_error is not null order by last_attempt_at desc limit 1) from sync_outbox",
+        [], |row| Ok(OutboxSummary { pending: row.get(0)?, syncing: row.get(1)?, failed: row.get(2)?, synced: row.get(3)?, last_error: row.get(4)? })
+    ).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn mark_outbox_syncing(state: State<'_, DatabaseState>, event_id: String, attempted_at: String) -> Result<(), String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
     connection
@@ -773,6 +786,7 @@ pub fn run() {
             confirm_local_sale,
             get_recent_local_sales,
             get_due_outbox,
+            get_outbox_summary,
             mark_outbox_syncing,
             mark_outbox_synced,
             mark_outbox_failed,
