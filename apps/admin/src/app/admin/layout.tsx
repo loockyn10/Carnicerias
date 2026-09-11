@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 
+import { AdminSidebar } from "../../components/admin-sidebar";
 import { getAdminContext } from "../../lib/admin";
 import { logout } from "./actions";
 
@@ -21,19 +21,9 @@ export default async function AdminLayout({ children }: Readonly<{ children: Rea
   }
 
   return (
-    <div className="min-h-screen bg-stone-100">
-      <header className="border-b border-stone-800 bg-stone-950 text-white">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4">
-          <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">Carnicerías · Admin</p><p className="font-black">{context.organizationName}</p></div>
-          <nav className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-sm" aria-label="Navegación principal">
-            <div className="flex items-center gap-1"><span className="mr-1 text-[10px] font-black uppercase tracking-wider text-stone-500">General</span><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin">Inicio</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/attention">Atención</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/branches/compare">Comparar</Link></div>
-            <div className="flex items-center gap-1"><span className="mr-1 text-[10px] font-black uppercase tracking-wider text-stone-500">Operación</span><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin">Sucursales</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/replenishment">Reposición</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/sales">Ventas</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/stock">Stock</Link></div>
-            <div className="flex items-center gap-1"><span className="mr-1 text-[10px] font-black uppercase tracking-wider text-stone-500">Comercial</span><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/catalog#products">Productos</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/catalog#prices">Precios y descuentos</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/catalog#announcements">Avisos</Link></div>
-            <div className="flex items-center gap-1"><span className="mr-1 text-[10px] font-black uppercase tracking-wider text-stone-500">Gestión</span><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/employees">Empleados</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/devices">Dispositivos</Link><Link className="rounded-lg px-2 py-1.5 font-bold hover:bg-stone-800" href="/admin/audit">Auditoría</Link><form action={logout}><button className="rounded-lg border border-stone-700 px-2 py-1.5 font-bold hover:bg-stone-800">Salir</button></form></div>
-          </nav>
-        </div>
-      </header>
-      {children}
+    <div className="min-h-screen bg-[#f5f4f1] text-stone-800 lg:flex">
+      <AdminSidebar />
+      <div className="min-w-0 flex-1"><header className="flex min-h-16 items-center justify-between border-b border-stone-200 bg-[#fbfaf8] px-5 sm:px-8"><div><p className="text-sm font-semibold text-stone-700">{context.organizationName}</p><p className="text-xs text-stone-500">Administración</p></div><div className="flex items-center gap-3"><span className="hidden text-sm text-stone-500 sm:block">{context.email}</span><form action={logout}><button className="rounded-lg px-3 py-2 text-sm font-semibold text-stone-600 hover:bg-stone-100">Salir</button></form></div></header><div className="border-b border-stone-200 bg-[#fbfaf8] px-5 py-2 lg:hidden"><a className="mr-4 text-sm font-semibold text-rose-900" href="/admin">Inicio</a><a className="mr-4 text-sm font-semibold text-stone-600" href="/admin/sales">Ventas</a><a className="mr-4 text-sm font-semibold text-stone-600" href="/admin/stock">Stock</a><a className="text-sm font-semibold text-stone-600" href="/admin/catalog">Productos</a></div>{children}</div>
     </div>
   );
 }
