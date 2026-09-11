@@ -11,3 +11,47 @@ body {
   margin: 0;
 }
 
+/* First-level titles live in the app shell; keep page content compact. */
+[data-admin-page="/admin"] main > div:first-child,
+[data-admin-page="/admin/branches"] main > p:first-child,
+[data-admin-page="/admin/branches"] main > div:first-child > div:first-child,
+[data-admin-page="/admin/sales"] main > p:first-child,
+[data-admin-page="/admin/sales"] main > h1,
+[data-admin-page="/admin/stock"] main > p:first-child,
+[data-admin-page="/admin/stock"] main > h1,
+[data-admin-page="/admin/stock"] main > h1 + p,
+[data-admin-page="/admin/replenishment"] main > p:first-child,
+[data-admin-page="/admin/replenishment"] main > h1,
+[data-admin-page="/admin/replenishment"] main > h1 + p,
+[data-admin-page="/admin/products"] main > div:first-child > div:first-child,
+[data-admin-page="/admin/promotions"] main > div:first-child > div:first-child,
+[data-admin-page="/admin/announcements"] main > div:first-child > div:first-child,
+[data-admin-page="/admin/employees"] main > p:first-child,
+[data-admin-page="/admin/employees"] main > h1,
+[data-admin-page="/admin/devices"] main > p:first-child,
+[data-admin-page="/admin/devices"] main > h1,
+[data-admin-page="/admin/devices"] main > h1 + p,
+[data-admin-page="/admin/audit"] main > p:first-child,
+[data-admin-page="/admin/audit"] main > h1,
+[data-admin-page="/admin/audit"] main > h1 + p,
+[data-admin-page="/admin/attention"] main > p:first-child,
+[data-admin-page="/admin/attention"] main > h1,
+[data-admin-page="/admin/attention"] main > h1 + p {
+  display: none;
+}
+
+[data-admin-page="/admin"] main > div:first-child + section,
+[data-admin-page="/admin/sales"] main > h1 + form,
+[data-admin-page="/admin/replenishment"] main > h1 + p + form,
+[data-admin-page="/admin/attention"] main > h1 + p + form {
+  margin-top: 0;
+}
+
+[data-admin-page="/admin/branches"] main > div:first-child {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+[data-admin-page="/admin/branches"] main > div:first-child + form {
+  margin-top: 0.75rem;
+}

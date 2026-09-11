@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { AdminSidebar } from "../../components/admin-sidebar";
+import { AdminPageHeader } from "../../components/admin-page-header";
+import { AdminPageContent } from "../../components/admin-page-content";
 import { getAdminContext } from "../../lib/admin";
 import { logout } from "./actions";
 
@@ -24,7 +26,7 @@ export default async function AdminLayout({ children }: Readonly<{ children: Rea
   return (
     <div className="min-h-screen bg-[#f5f4f1] text-stone-800 lg:flex">
       <AdminSidebar />
-      <div className="min-w-0 flex-1"><header className="flex min-h-16 items-center justify-between border-b border-stone-200 bg-[#fbfaf8] px-5 sm:px-8"><div><p className="text-sm font-semibold text-stone-700">{context.organizationName}</p><p className="text-xs text-stone-500">Administración</p></div><div className="flex items-center gap-3"><span className="hidden text-sm text-stone-500 sm:block">{context.email}</span><form action={logout}><button className="rounded-lg px-3 py-2 text-sm font-semibold text-stone-600 hover:bg-stone-100">Salir</button></form></div></header><div className="border-b border-stone-200 bg-[#fbfaf8] px-5 py-2 lg:hidden"><Link className="mr-4 text-sm font-semibold text-rose-900" href="/admin">Inicio</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/branches">Sucursales</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/sales">Ventas</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/stock">Stock</Link><Link className="text-sm font-semibold text-stone-600" href="/admin/products">Productos</Link></div>{children}</div>
+      <div className="min-w-0 flex-1"><header className="flex h-20 items-center justify-between border-b border-stone-200 bg-[#fbfaf8] px-5 sm:px-8"><AdminPageHeader /><div className="flex shrink-0 items-center gap-3"><span className="hidden text-sm text-stone-500 md:block">{context.email}</span><form action={logout}><button className="rounded-lg px-3 py-2 text-sm font-semibold text-stone-600 hover:bg-stone-100">Salir</button></form></div></header><div className="border-b border-stone-200 bg-[#fbfaf8] px-5 py-2 lg:hidden"><Link className="mr-4 text-sm font-semibold text-rose-900" href="/admin">Inicio</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/branches">Sucursales</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/sales">Ventas</Link><Link className="mr-4 text-sm font-semibold text-stone-600" href="/admin/stock">Stock</Link><Link className="text-sm font-semibold text-stone-600" href="/admin/products">Productos</Link></div><AdminPageContent>{children}</AdminPageContent></div>
     </div>
   );
 }
