@@ -4,6 +4,7 @@ import {
   formatCurrency,
   formatWeight,
   parseWeightToGrams,
+  priceForWeight,
   applyWeightDiscount,
   sumMoney
 } from "@carnicerias/business-logic";
@@ -39,7 +40,7 @@ interface CatalogProduct {
   productSku: string | null;
   pricePerKgCents: bigint;
 }
-interface DiscountRule { id: string; productId: string; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }
+interface DiscountRule { id: string; productId: string; branchId: string | null; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
 const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
@@ -505,7 +506,9 @@ export default function App() {
 
     try {
       const grams = parseWeightToGrams(weightInput);
-      const applied = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, discounts.filter((rule) => rule.productId === selectedProduct.productId).map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
+      const applicableRules = discounts.filter((rule) => rule.productId === selectedProduct.productId)
+        .sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
+      const applied = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, applicableRules.map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
       const subtotal = applied.subtotalCents;
       const line: TicketLine = {
         id: editingLineId ?? crypto.randomUUID(),
@@ -807,13 +810,12 @@ export default function App() {
               <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />
             </label>
             <div className="mt-5 rounded-2xl bg-stone-950 p-4">
-              <span className="text-sm text-stone-400">Total con descuento automático</span>
-              <strong className="block text-4xl font-black text-rose-400">
-                {(() => {
-                  try { return formatCurrency(applyWeightDiscount(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), discounts.filter((rule) => rule.productId === selectedProduct.productId).map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) }))).subtotalCents); }
-                  catch { return "$ 0"; }
-                })()}
-              </strong>
+              {(() => { try {
+                const grams = parseWeightToGrams(weightInput);
+                const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
+                const preview = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, rules.map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
+                return <><p className="text-sm text-stone-400">Precio normal: {formatCurrency(priceForWeight(selectedProduct.pricePerKgCents, grams))}</p>{preview.discountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento: -{formatCurrency(preview.discountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
+              } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
             </div>
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" type="button" onClick={() => setSelectedProduct(null)}>Volver</button>

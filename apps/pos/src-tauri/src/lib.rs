@@ -92,7 +92,7 @@ struct LocalAnnouncement { id: String, title: String, message: String, r#type: S
 struct LocalCommercialConfig { discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalDiscount { id: String, product_id: String, minimum_grams: i64, discount_type: String, discount_value: String }
+struct LocalDiscount { id: String, product_id: String, branch_id: Option<String>, minimum_grams: i64, discount_type: String, discount_value: String }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommercialConfig { discounts: Vec<CommercialDiscount>, announcements: Vec<LocalAnnouncement> }
@@ -412,7 +412,7 @@ fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialCo
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     transaction.execute("delete from local_weight_discounts", []).map_err(|error| error.to_string())?;
     transaction.execute("delete from local_announcements", []).map_err(|error| error.to_string())?;
-    for discount in config.discounts { transaction.execute("insert into local_weight_discounts(id,product_id,branch_id,minimum_grams,discount_type,discount_value) values(?1,?2,?3,?4,?5,?6)", params![discount.id,discount.product_id,discount.branch_id,discount.minimum_grams,parse_i64(&discount.discount_value,"discountValue")?]).map_err(|error| error.to_string())?; }
+    for discount in config.discounts { transaction.execute("insert into local_weight_discounts(id,product_id,branch_id,minimum_grams,discount_type,discount_value) values(?1,?2,?3,?4,?5,?6)", params![discount.id,discount.product_id,discount.branch_id,discount.minimum_grams,discount.discount_type,parse_i64(&discount.discount_value,"discountValue")?]).map_err(|error| error.to_string())?; }
     for notice in config.announcements { transaction.execute("insert into local_announcements(id,title,message,type,priority,branch_id) values(?1,?2,?3,?4,?5,?6)", params![notice.id,notice.title,notice.message,notice.r#type,notice.priority,notice.branch_id]).map_err(|error| error.to_string())?; }
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -420,8 +420,8 @@ fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialCo
 #[tauri::command]
 fn get_local_commercial_config(state: State<'_, DatabaseState>) -> Result<LocalCommercialConfig, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
-    let mut discounts = connection.prepare("select id,product_id,minimum_grams,discount_type,discount_value from local_weight_discounts order by minimum_grams desc").map_err(|e| e.to_string())?;
-    let discounts = discounts.query_map([], |r| Ok(LocalDiscount { id:r.get(0)?, product_id:r.get(1)?, minimum_grams:r.get(2)?, discount_type:r.get(3)?, discount_value:r.get::<_,i64>(4)?.to_string() })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    let mut discounts = connection.prepare("select id,product_id,branch_id,minimum_grams,discount_type,discount_value from local_weight_discounts order by minimum_grams desc, branch_id is not null desc").map_err(|e| e.to_string())?;
+    let discounts = discounts.query_map([], |r| Ok(LocalDiscount { id:r.get(0)?, product_id:r.get(1)?, branch_id:r.get(2)?, minimum_grams:r.get(3)?, discount_type:r.get(4)?, discount_value:r.get::<_,i64>(5)?.to_string() })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let mut notices = connection.prepare("select id,title,message,type,priority,branch_id from local_announcements order by priority desc").map_err(|e|e.to_string())?;
     let announcements = notices.query_map([], |r| Ok(LocalAnnouncement { id:r.get(0)?, title:r.get(1)?, message:r.get(2)?, r#type:r.get(3)?, priority:r.get(4)?, branch_id:r.get(5)? })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     Ok(LocalCommercialConfig { discounts, announcements })

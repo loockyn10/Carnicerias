@@ -6,7 +6,7 @@ import type {
   OutboxRecord
 } from "@carnicerias/sync";
 
-export interface LocalCommercialConfig { discounts: { id: string; productId: string; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
+export interface LocalCommercialConfig { discounts: { id: string; productId: string; branchId: string | null; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
 
 export interface LocalRuntime {
   deviceId: string;

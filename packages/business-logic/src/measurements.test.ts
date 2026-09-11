@@ -64,6 +64,13 @@ describe("ticket totals", () => {
 });
 
 describe("weight discounts", () => {
+  it("applies a 20% rule inclusively from 2 kg", () => {
+    const rules = [{ id: "two", minimumGrams: 2_000, discountType: "PERCENTAGE" as const, discountValue: 2_000n }];
+    expect(applyWeightDiscount(1_000_000n, 1_999, rules).subtotalCents).toBe(1_999_000n);
+    expect(applyWeightDiscount(1_000_000n, 2_000, rules).subtotalCents).toBe(1_600_000n);
+    expect(applyWeightDiscount(1_000_000n, 2_500, rules).subtotalCents).toBe(2_000_000n);
+  });
+
   it("uses the highest applicable threshold without floating point", () => {
     const result = applyWeightDiscount(1_000_000n, 5_400, [
       { id: "three", minimumGrams: 3_000, discountType: "PERCENTAGE", discountValue: 500n },
