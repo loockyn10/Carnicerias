@@ -78,6 +78,7 @@ export async function saveCategoryAction(formData: FormData) {
     p_active: formData.get("active") === "on"
   });
   revalidatePath("/admin/catalog");
+  revalidatePath("/admin/products");
 }
 
 export async function saveProductAction(formData: FormData) {
@@ -89,6 +90,26 @@ export async function saveProductAction(formData: FormData) {
     p_active: formData.get("active") === "on"
   });
   revalidatePath("/admin/catalog");
+  revalidatePath("/admin/products");
+}
+
+export interface ProductModalState { error?: string; success?: boolean }
+
+export async function createProductModalAction(_: ProductModalState, formData: FormData): Promise<ProductModalState> {
+  try {
+    const name = text(formData, "name");
+    await rpcOrThrow("save_product", {
+      p_product_id: null, p_category_id: text(formData, "category_id"), p_name: name,
+      p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
+      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
+    });
+    revalidatePath("/admin/products");
+    revalidatePath("/admin/catalog");
+    revalidatePath("/admin/promotions");
+    return { success: true };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo crear el producto" };
+  }
 }
 
 export async function setPriceAction(formData: FormData) {
@@ -99,6 +120,7 @@ export async function setPriceAction(formData: FormData) {
     p_effective_at: text(formData, "effective_at") ? new Date(text(formData, "effective_at")).toISOString() : new Date().toISOString()
   });
   revalidatePath("/admin/catalog");
+  revalidatePath("/admin/products");
 }
 
 async function commercialRpc(name: string, args: Record<string, unknown>) {
@@ -121,6 +143,7 @@ export async function saveWeightDiscountAction(formData: FormData) {
       p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
     });
     revalidatePath("/admin/catalog");
+    revalidatePath("/admin/promotions");
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo guardar el descuento";
     redirect(`/admin/catalog?discount_error=${encodeURIComponent(message)}`);
@@ -134,6 +157,7 @@ export async function saveAnnouncementAction(formData: FormData) {
     p_starts_at: text(formData, "starts_at") ? new Date(text(formData, "starts_at")).toISOString() : new Date().toISOString(), p_ends_at: text(formData, "ends_at") ? new Date(text(formData, "ends_at")).toISOString() : null
   });
   revalidatePath("/admin/catalog");
+  revalidatePath("/admin/announcements");
 }
 
 export async function setStockPolicyAction(formData: FormData) {
