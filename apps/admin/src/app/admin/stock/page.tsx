@@ -12,7 +12,7 @@ export default async function StockPage() {
   const context = await requireAdminContext();
   const supabase = await createClient();
   const [stockResult, branchesResult, productsResult, operationsResult, itemsResult, profilesResult] = await Promise.all([
-    supabase.from("branch_stock_status").select("*").eq("organization_id", context.organizationId).order("branch_name").order("product_name"),
+    supabase.from("branch_stock_status").select("branch_id, branch_name, product_id, product_name, current_stock_grams, minimum_stock_grams, target_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId).order("branch_name").order("product_name"),
     supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
     supabase.from("products").select("id, name, sku").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name"),
     supabase.from("stock_operations").select("id, branch_id, operation_type, supplier, waste_reason, note, occurred_at, actor_profile_id").eq("organization_id", context.organizationId).order("occurred_at", { ascending: false }).limit(50),

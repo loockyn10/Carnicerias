@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 import { createClient } from "./supabase/server";
 
@@ -10,7 +11,7 @@ export interface AdminContext {
   timezone: string;
 }
 
-export async function getAdminContext(): Promise<AdminContext | null> {
+export const getAdminContext = cache(async (): Promise<AdminContext | null> => {
   const supabase = await createClient();
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) redirect("/login");
@@ -37,7 +38,7 @@ export async function getAdminContext(): Promise<AdminContext | null> {
     organizationName: organization.name,
     timezone: organization.timezone
   };
-}
+});
 
 export async function requireAdminContext(): Promise<AdminContext> {
   const context = await getAdminContext();
