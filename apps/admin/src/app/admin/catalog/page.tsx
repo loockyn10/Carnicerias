@@ -6,7 +6,8 @@ import { saveAnnouncementAction, saveCategoryAction, saveProductAction, saveWeig
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export default async function CatalogPage() {
+export default async function CatalogPage({ searchParams }: { searchParams: Promise<{ discount_error?: string }> }) {
+  const params = await searchParams;
   const context = await requireAdminContext();
   const supabase = await createClient();
   const [categoriesResult, productsResult, pricesResult, branchesResult] = await Promise.all([
@@ -26,6 +27,7 @@ export default async function CatalogPage() {
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Gestión comercial</p><h1 className="mt-1 text-3xl font-black">Categorías, productos y precios</h1>
     <p className="mt-2 text-stone-600">Las bajas son lógicas. El historial de precios y las referencias de ventas no se eliminan.</p>
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
+    {params.discount_error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{params.discount_error}</p> : null}
 
     <section className="mt-7 rounded-2xl border bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Categorías</h2>
       <form action={saveCategoryAction} className="mt-4 grid gap-3 md:grid-cols-[2fr_2fr_1fr_auto_auto]">

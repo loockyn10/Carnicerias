@@ -23,11 +23,27 @@ function decimal(value: string, label: string) {
 }
 
 function kilogramsToGrams(value: string) {
-  return Math.round(decimal(value, "Peso") * 1000);
+  const match = /^(\d+)(?:[,.](\d{1,3}))?$/.exec(value.trim());
+  if (!match) throw new Error("Peso inválido");
+  const grams = BigInt(match[1] ?? "") * 1_000n + BigInt((match[2] ?? "").padEnd(3, "0"));
+  if (grams <= 0n || grams > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Peso inválido");
+  return Number(grams);
 }
 
 function pesosToCents(value: string) {
-  return Math.round(decimal(value, "Precio") * 100);
+  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
+  if (!match) throw new Error("Precio inválido");
+  const cents = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
+  if (cents <= 0n || cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Precio inválido");
+  return Number(cents);
+}
+
+function percentageToBasisPoints(value: string) {
+  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
+  if (!match) throw new Error("Descuento inválido");
+  const basisPoints = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
+  if (basisPoints <= 0n || basisPoints > 10_000n) throw new Error("El descuento debe estar entre 0,01% y 100%");
+  return Number(basisPoints);
 }
 
 function slugify(value: string) {
@@ -94,14 +110,21 @@ async function commercialRpc(name: string, args: Record<string, unknown>) {
 }
 
 export async function saveWeightDiscountAction(formData: FormData) {
-  await commercialRpc("save_weight_discount", {
-    p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
-    p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: text(formData, "discount_type"),
-    p_discount_value: text(formData, "discount_type") === "PERCENTAGE" ? Math.round(decimal(text(formData, "discount_value"), "Descuento") * 100) : pesosToCents(text(formData, "discount_value")),
-    p_active: formData.get("active") === "on", p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
-    p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
-  });
-  revalidatePath("/admin/catalog");
+  try {
+    const discountType = text(formData, "discount_type");
+    if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
+    await commercialRpc("save_weight_discount", {
+      p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
+      p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
+      p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value")),
+      p_active: formData.get("active") === "on", p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
+      p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
+    });
+    revalidatePath("/admin/catalog");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo guardar el descuento";
+    redirect(`/admin/catalog?discount_error=${encodeURIComponent(message)}`);
+  }
 }
 
 export async function saveAnnouncementAction(formData: FormData) {
