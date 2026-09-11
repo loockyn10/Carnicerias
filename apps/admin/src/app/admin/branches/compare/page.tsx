@@ -4,6 +4,7 @@ import Link from "next/link";
 import { requireAdminContext } from "../../../../lib/admin";
 import { localDayStart, stockPriority } from "../../../../lib/multibranch";
 import { createClient } from "../../../../lib/supabase/server";
+import { createPerfLogger } from "../../../../lib/perf";
 
 type Period = "today" | "7d" | "30d";
 type Sort = "name" | "revenue" | "weight" | "tickets" | "average" | "discounts" | "waste" | "out" | "low";
@@ -11,23 +12,27 @@ type Sort = "name" | "revenue" | "weight" | "tickets" | "average" | "discounts" 
 function sortLink(period: Period, sort: Sort) { return `/admin/branches/compare?period=${period}&sort=${sort}`; }
 
 export default async function CompareBranchesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const perf = createPerfLogger("/admin/branches/compare");
+  const contextStartedAt = performance.now();
   const context = await requireAdminContext();
+  perf.mark("adminContext", contextStartedAt);
   const params = await searchParams;
   const period: Period = ["7d", "30d"].includes(typeof params.period === "string" ? params.period : "") ? params.period as Period : "today";
   const sort: Sort = ["name", "revenue", "weight", "tickets", "average", "discounts", "waste", "out", "low"].includes(typeof params.sort === "string" ? params.sort : "") ? params.sort as Sort : "revenue";
   const days = period === "today" ? 0 : period === "7d" ? 6 : 29;
   const supabase = await createClient();
   const [branchesResult, salesResult, stockResult, wasteResult] = await Promise.all([
-    supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
-    supabase.from("sales").select("id, branch_id, total_cents, total_weight_grams").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, days)),
-    supabase.from("branch_stock_status").select("branch_id, current_stock_grams, minimum_stock_grams, stock_status").eq("organization_id", context.organizationId),
-    supabase.from("stock_movements").select("branch_id, quantity_grams").eq("organization_id", context.organizationId).eq("type", "WASTE").gte("occurred_at", localDayStart(context.timezone, days))
+    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("sales", supabase.from("sales").select("id, branch_id, total_cents, total_weight_grams").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, days))),
+    perf.measure("stock", supabase.from("branch_stock_status").select("branch_id, current_stock_grams, minimum_stock_grams, stock_status").eq("organization_id", context.organizationId)),
+    perf.measure("waste", supabase.from("stock_movements").select("branch_id, quantity_grams").eq("organization_id", context.organizationId).eq("type", "WASTE").gte("occurred_at", localDayStart(context.timezone, days)))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error, wasteResult.error].find(Boolean);
-  if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo comparar las sucursales: {error.message}</main>;
+  if (error) { perf.flush(); return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo comparar las sucursales: {error.message}</main>; }
   const saleIds = (salesResult.data ?? []).map((sale) => sale.id);
-  const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, discount_cents").in("sale_id", saleIds) : { data: [], error: null };
-  if (itemsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudieron cargar los descuentos: {itemsResult.error.message}</main>;
+  const itemsResult = saleIds.length ? await perf.measure("discounts", supabase.from("sale_items").select("sale_id, discount_cents").in("sale_id", saleIds)) : { data: [], error: null };
+  if (itemsResult.error) { perf.flush(); return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudieron cargar los descuentos: {itemsResult.error.message}</main>; }
+  const transformStartedAt = performance.now();
   const saleBranch = new Map((salesResult.data ?? []).map((sale) => [sale.id, sale.branch_id]));
   const rows = new Map((branchesResult.data ?? []).map((branch) => [branch.id, { id: branch.id, name: branch.name, revenue: 0, grams: 0, tickets: 0, discounts: 0, waste: 0, out: 0, low: 0 }]));
   for (const sale of salesResult.data ?? []) { const row = rows.get(sale.branch_id); if (row) { row.revenue += sale.total_cents; row.grams += sale.total_weight_grams; row.tickets += 1; } }
@@ -39,6 +44,7 @@ export default async function CompareBranchesPage({ searchParams }: { searchPara
     const values: Record<Sort, [string | number, string | number]> = { name: [a.name, b.name], revenue: [a.revenue, b.revenue], weight: [a.grams, b.grams], tickets: [a.tickets, b.tickets], average: [averageA, averageB], discounts: [a.discounts, b.discounts], waste: [a.waste, b.waste], out: [a.out, b.out], low: [a.low, b.low] };
     const [left, right] = values[sort]; return sort === "name" ? String(left).localeCompare(String(right), "es") : Number(right) - Number(left) || a.name.localeCompare(b.name, "es");
   });
+  perf.mark("transform", transformStartedAt); perf.flush();
   const periodLabel = period === "today" ? "Hoy" : period === "7d" ? "Últimos 7 días" : "Últimos 30 días";
   const heading = (label: string, key: Sort) => <th className="p-3"><Link className="hover:text-rose-800 hover:underline" href={sortLink(period, key)}>{label}{sort === key ? " ↓" : ""}</Link></th>;
 

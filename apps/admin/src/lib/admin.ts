@@ -12,10 +12,14 @@ export interface AdminContext {
 }
 
 export const getAdminContext = cache(async (): Promise<AdminContext | null> => {
+  const startedAt = performance.now();
   const supabase = await createClient();
+  const authStartedAt = performance.now();
   const { data: authData } = await supabase.auth.getUser();
+  const authMs = Math.round(performance.now() - authStartedAt);
   if (!authData.user) redirect("/login");
 
+  const membershipStartedAt = performance.now();
   const { data: membership } = await supabase
     .from("organization_members")
     .select("organization_id, role_id")
@@ -23,12 +27,18 @@ export const getAdminContext = cache(async (): Promise<AdminContext | null> => {
     .eq("status", "ACTIVE")
     .limit(1)
     .maybeSingle();
+  const membershipMs = Math.round(performance.now() - membershipStartedAt);
   if (!membership) return null;
 
+  const organizationStartedAt = performance.now();
   const [{ data: role }, { data: organization }] = await Promise.all([
     supabase.from("roles").select("key").eq("id", membership.role_id).maybeSingle(),
     supabase.from("organizations").select("name, timezone").eq("id", membership.organization_id).maybeSingle()
   ]);
+  const organizationMs = Math.round(performance.now() - organizationStartedAt);
+  if (process.env.NODE_ENV !== "production" || process.env.ADMIN_PERF_LOGS === "1") {
+    console.info(`[PERF adminContext]\n  auth: ${String(authMs)}ms\n  membership: ${String(membershipMs)}ms\n  roleAndOrganization: ${String(organizationMs)}ms\n  total: ${String(Math.round(performance.now() - startedAt))}ms`);
+  }
   if (role?.key !== "admin" || !organization) return null;
 
   return {

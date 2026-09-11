@@ -4,9 +4,10 @@ import Link from "next/link";
 import { requireAdminContext } from "../../../lib/admin";
 import { localDayStart, stockPriority } from "../../../lib/multibranch";
 import { createClient } from "../../../lib/supabase/server";
+import { createPerfLogger } from "../../../lib/perf";
 
 export default async function ReplenishmentPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const context = await requireAdminContext();
+  const perf = createPerfLogger("/admin/replenishment"); const contextStartedAt = performance.now(); const context = await requireAdminContext(); perf.mark("adminContext", contextStartedAt);
   const params = await searchParams;
   const search = typeof params.q === "string" ? params.q.trim().toLocaleLowerCase("es") : "";
   const branchId = typeof params.branch === "string" ? params.branch : "";
@@ -15,12 +16,13 @@ export default async function ReplenishmentPage({ searchParams }: { searchParams
   let stockQuery = supabase.from("branch_stock_status").select("branch_id, branch_name, product_id, product_name, current_stock_grams, minimum_stock_grams, target_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId);
   if (branchId) stockQuery = stockQuery.eq("branch_id", branchId);
   const [branchesResult, stockResult, salesResult] = await Promise.all([
-    supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
-    stockQuery,
-    supabase.from("stock_movements").select("branch_id, product_id, quantity_grams").eq("organization_id", context.organizationId).eq("type", "SALE").gte("occurred_at", localDayStart(context.timezone, 6))
+    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("stock", stockQuery),
+    perf.measure("salesLedger", supabase.from("stock_movements").select("branch_id, product_id, quantity_grams").eq("organization_id", context.organizationId).eq("type", "SALE").gte("occurred_at", localDayStart(context.timezone, 6)))
   ]);
   const error = [branchesResult.error, stockResult.error, salesResult.error].find(Boolean);
-  if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la reposición: {error.message}</main>;
+  if (error) { perf.flush(); return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la reposición: {error.message}</main>; }
+  const transformStartedAt = performance.now();
   const soldByProduct = new Map<string, number>();
   for (const movement of salesResult.data ?? []) {
     const key = `${movement.branch_id}:${movement.product_id}`;
@@ -33,6 +35,7 @@ export default async function ReplenishmentPage({ searchParams }: { searchParams
     const soldDaily = (soldByProduct.get(`${row.branch_id ?? ""}:${row.product_id ?? ""}`) ?? 0) / 7;
     return { ...row, current, minimum, target: row.target_stock_grams ?? 0, suggested: row.suggested_replenishment_grams ?? 0, priority, soldDaily };
   }).filter((row) => !search || (row.product_name ?? "").toLocaleLowerCase("es").includes(search)).filter((row) => !onlyNeeded || row.priority.rank < 2).sort((a, b) => a.priority.rank - b.priority.rank || b.suggested - a.suggested || (a.branch_name ?? "").localeCompare(b.branch_name ?? "", "es"));
+  perf.mark("transform", transformStartedAt); perf.flush();
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-10"><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Multisucursal</p><h1 className="mt-1 text-3xl font-black">Qué hay que reponer</h1><p className="mt-2 text-stone-600">Consolidado de stock para organizar compras y reposición.</p>
     <form className="mt-6 grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-[1fr_13rem_auto_auto]"><input className="rounded-lg border border-stone-300 px-3 py-2" defaultValue={typeof params.q === "string" ? params.q : ""} name="q" placeholder="Buscar producto…" /><select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={branchId} name="branch"><option value="">Todas las sucursales</option>{(branchesResult.data ?? []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={onlyNeeded ? "needed" : "all"} name="only"><option value="needed">Sólo requiere reposición</option><option value="all">Todos los productos</option></select><button className="rounded-lg bg-rose-800 px-5 py-2 font-bold text-white">Aplicar</button></form>

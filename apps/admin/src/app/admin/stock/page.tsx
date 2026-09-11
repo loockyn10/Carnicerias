@@ -2,6 +2,7 @@ import { formatWeight } from "@carnicerias/business-logic";
 
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
+import { createPerfLogger } from "../../../lib/perf";
 import { recordAdjustmentAction, recordPurchaseAction, recordWasteAction, setStockPolicyAction } from "../actions";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
@@ -9,22 +10,25 @@ const reasonLabels: Record<string, string> = { DISCARD: "Descarte", EXPIRY: "Ven
 const operationLabels: Record<string, string> = { PURCHASE: "Compra", WASTE: "Merma", ADJUSTMENT: "Ajuste" };
 
 export default async function StockPage() {
-  const context = await requireAdminContext();
+  const perf = createPerfLogger("/admin/stock"); const contextStartedAt = performance.now(); const context = await requireAdminContext(); perf.mark("adminContext", contextStartedAt);
   const supabase = await createClient();
-  const [stockResult, branchesResult, productsResult, operationsResult, itemsResult, profilesResult] = await Promise.all([
-    supabase.from("branch_stock_status").select("branch_id, branch_name, product_id, product_name, current_stock_grams, minimum_stock_grams, target_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId).order("branch_name").order("product_name"),
-    supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
-    supabase.from("products").select("id, name, sku").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name"),
-    supabase.from("stock_operations").select("id, branch_id, operation_type, supplier, waste_reason, note, occurred_at, actor_profile_id").eq("organization_id", context.organizationId).order("occurred_at", { ascending: false }).limit(50),
-    supabase.from("stock_operation_items").select("operation_id, product_id, quantity_grams, system_quantity_before_grams, physical_quantity_grams").eq("organization_id", context.organizationId).order("created_at"),
-    supabase.from("profiles").select("id, display_name")
+  const [stockResult, branchesResult, productsResult, operationsResult, , profilesResult] = await Promise.all([
+    perf.measure("stock", supabase.from("branch_stock_status").select("branch_id, branch_name, product_id, product_name, current_stock_grams, minimum_stock_grams, target_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId).order("branch_name").order("product_name")),
+    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("products", supabase.from("products").select("id, name, sku").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name")),
+    perf.measure("operations", supabase.from("stock_operations").select("id, branch_id, operation_type, supplier, waste_reason, note, occurred_at, actor_profile_id").eq("organization_id", context.organizationId).order("occurred_at", { ascending: false }).limit(50)),
+    Promise.resolve({ data: [], error: null }),
+    perf.measure("profiles", supabase.from("profiles").select("id, display_name"))
   ]);
-  const error = [stockResult.error, branchesResult.error, productsResult.error, operationsResult.error, itemsResult.error, profilesResult.error].find(Boolean);
+  const operationIds = (operationsResult.data ?? []).map((operation) => operation.id);
+  const itemsResult = operationIds.length ? await perf.measure("operationItems", supabase.from("stock_operation_items").select("operation_id, product_id, quantity_grams, system_quantity_before_grams, physical_quantity_grams").in("operation_id", operationIds).order("created_at")) : { data: [], error: null };
+  const transformStartedAt = performance.now(); const error = [stockResult.error, branchesResult.error, productsResult.error, operationsResult.error, itemsResult.error, profilesResult.error].find(Boolean);
   const branches = branchesResult.data ?? [];
   const products = productsResult.data ?? [];
   const productNames = new Map(products.map((item) => [item.id, item.name]));
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const profileNames = new Map((profilesResult.data ?? []).map((item) => [item.id, item.display_name]));
+  perf.mark("transform", transformStartedAt); perf.flush();
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Inventario</p><h1 className="mt-1 text-3xl font-black">Stock por sucursal</h1><p className="mt-2 text-stone-600">El actual se deriva del ledger. Las compras, mermas y ajustes agregan movimientos auditados.</p>
