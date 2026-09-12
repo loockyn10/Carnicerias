@@ -31,12 +31,19 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   if (!branchResult.data) notFound();
   const error = [branchResult.error, dashboardResult.error, stockResult.error, weekSalesResult.error, recentSalesResult.error, restocksResult.error, wasteResult.error].find(Boolean);
   if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la sucursal: {error.message}</main>;
+  const todayStart = localDayStart(context.timezone);
+  const metricsSalesResult = await supabase.from("sales").select("total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1));
+  if (metricsSalesResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudieron cargar las métricas: {metricsSalesResult.error.message}</main>;
   const saleIds = (weekSalesResult.data ?? []).map((sale) => sale.id);
   const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, product_id, product_name_snapshot, weight_grams, subtotal_cents, discount_cents").in("sale_id", saleIds) : { data: [], error: null };
   if (itemsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el detalle comercial: {itemsResult.error.message}</main>;
 
   const dashboard = dashboardResult.data as unknown as DashboardData;
-  const today = dashboard.periods.today;
+  const todayRows = metricsSalesResult.data.filter((sale) => (sale.completed_at ?? "") >= todayStart);
+  const previousRows = metricsSalesResult.data.filter((sale) => (sale.completed_at ?? "") < todayStart);
+  const grossCents = todayRows.reduce((sum, sale) => sum + sale.total_cents, 0);
+  const previousGrossCents = previousRows.reduce((sum, sale) => sum + sale.total_cents, 0);
+  const today = { grossCents, previousGrossCents, salesCount: todayRows.length, averageTicketCents: todayRows.length ? Math.round(grossCents / todayRows.length) : 0, kilograms: todayRows.reduce((sum, sale) => sum + sale.total_weight_grams, 0) / 1000 };
   const stock = (stockResult.data ?? []).map((row) => { const current = row.current_stock_grams ?? 0; const minimum = row.minimum_stock_grams ?? 0; return { ...row, current, minimum, target: row.target_stock_grams ?? 0, suggested: row.suggested_replenishment_grams ?? 0, priority: stockPriority(row.stock_status, current, minimum) }; }).sort((a, b) => a.priority.rank - b.priority.rank || a.current - b.current || (a.product_name ?? "").localeCompare(b.product_name ?? "", "es"));
   const visibleStock = stock.filter((row) => !stockSearch || (row.product_name ?? "").toLocaleLowerCase("es").includes(stockSearch));
   const stockByProduct = new Map(stock.map((row) => [row.product_id, row]));
