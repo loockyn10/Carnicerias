@@ -1,0 +1,16 @@
+"use client";
+
+import { formatWeight } from "@carnicerias/business-logic";
+import { useMemo, useState } from "react";
+
+import { StatusBadge } from "./admin-ui";
+
+export interface BranchStockRow { productId: string; productName: string; current: number; minimum: number; target: number; suggested: number; configured: boolean; rank: number; label: string; daily: number }
+type Filter = "all" | "critical" | "low" | "available";
+
+export function BranchStockPanel({ rows }: { rows: BranchStockRow[] }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const visible = useMemo(() => rows.filter((row) => row.productName.toLocaleLowerCase("es").includes(search.trim().toLocaleLowerCase("es"))).filter((row) => filter === "all" || filter === "critical" && row.rank === 0 || filter === "low" && row.rank === 1 || filter === "available" && row.rank === 2), [filter, rows, search]);
+  return <section className="mt-6"><div className="flex flex-wrap items-center gap-3"><input aria-label="Buscar producto" className="min-w-64 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2" onChange={(event) => setSearch(event.target.value)} placeholder="Buscar producto…" value={search} /><div className="flex flex-wrap gap-1">{([['all','Todos'],['critical','Críticos'],['low','Bajo mínimo'],['available','Disponibles']] as [Filter, string][]).map(([key, label]) => <button className={`rounded-full px-3 py-1.5 text-sm font-bold ${filter === key ? "bg-stone-900 text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`} key={key} onClick={() => setFilter(key)} type="button">{label}</button>)}</div></div><div className="mt-4 overflow-x-auto rounded-xl bg-white shadow-sm"><table className="w-full min-w-[800px] text-left text-sm"><thead className="border-b border-stone-100 bg-stone-50 text-stone-500"><tr><th className="p-3">Producto</th><th className="p-3">Actual</th><th className="p-3">Mínimo</th><th className="p-3">Objetivo</th><th className="p-3">Cobertura</th><th className="p-3">Reponer</th><th className="p-3">Estado</th></tr></thead><tbody>{visible.map((row) => <tr className="border-b border-stone-100 last:border-0" key={row.productId}><td className="p-3 font-bold">{row.productName}</td><td className={`p-3 ${row.current <= 0 ? "font-bold text-red-700" : ""}`}>{row.current <= 0 ? "Sin stock" : formatWeight(row.current)}{row.current < 0 ? <span className="block text-xs">Faltante {formatWeight(Math.abs(row.current))}</span> : null}</td><td className="p-3">{row.configured ? formatWeight(row.minimum) : "Sin configurar"}</td><td className="p-3">{row.configured ? formatWeight(row.target) : "Sin configurar"}</td><td className="p-3">{row.current <= 0 ? "Sin stock" : row.daily > 0 ? `≈ ${(row.current / row.daily).toFixed(1)} días` : "Sin ventas recientes"}</td><td className="p-3 font-bold text-teal-700">{row.configured && row.target > 0 ? formatWeight(row.suggested) : "Configurar objetivo"}</td><td className="p-3"><StatusBadge tone={row.rank === 0 ? "critical" : row.rank === 1 ? "warning" : row.rank === 2 ? "success" : "neutral"}>{row.label}</StatusBadge></td></tr>)}</tbody></table>{!visible.length ? <p className="p-6 text-center text-stone-500">No hay productos para estos filtros.</p> : null}</div></section>;
+}
