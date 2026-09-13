@@ -165,6 +165,7 @@ export interface Database {
           organization_id: string;
           name: string;
           slug: string;
+          color_hex: string | null;
           sort_order: number;
           active: boolean;
           created_at: Timestamp;
@@ -175,6 +176,7 @@ export interface Database {
           organization_id: string;
           name: string;
           slug: string;
+          color_hex?: string | null;
           sort_order?: number;
           active?: boolean;
           created_at?: Timestamp;
@@ -622,6 +624,7 @@ export interface Database {
           branch_name: string;
           category_id: string;
           category_name: string;
+          category_color_hex: string | null;
           category_sort_order: number;
           product_id: string;
           product_name: string;
@@ -661,7 +664,7 @@ export interface Database {
         Returns: Json;
       };
       save_category: {
-        Args: { p_category_id: string | null; p_name: string; p_slug: string; p_sort_order?: number; p_active?: boolean };
+        Args: { p_category_id: string | null; p_name: string; p_slug: string; p_sort_order: number; p_active: boolean; p_color_hex: string | null };
         Returns: string;
       };
       save_product: {

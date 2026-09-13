@@ -31,6 +31,7 @@ export interface LocalCatalogRow {
   branchName: string;
   categoryId: string;
   categoryName: string;
+  categoryColorHex: string | null;
   categorySortOrder: number;
   productId: string;
   productName: string;

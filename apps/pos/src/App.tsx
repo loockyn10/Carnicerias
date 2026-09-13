@@ -34,6 +34,7 @@ interface CatalogProduct {
   branchName: string;
   categoryId: string;
   categoryName: string;
+  categoryColorHex: string | null;
   categorySortOrder: number;
   productId: string;
   productName: string;
@@ -50,6 +51,10 @@ const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: "CREDIT", label: "Crédito" },
   { value: "OTHER", label: "Otro" }
 ];
+
+function categoryAccent(color: string | null | undefined): string | undefined {
+  return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
+}
 
 function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
   const [email, setEmail] = useState("");
@@ -327,6 +332,7 @@ export default function App() {
           branchName: row.branchName,
           categoryId: row.categoryId,
           categoryName: row.categoryName,
+          categoryColorHex: row.categoryColorHex,
           categorySortOrder: row.categorySortOrder,
           productId: row.productId,
           productName: row.productName,
@@ -347,6 +353,7 @@ export default function App() {
             branchName: row.branch_name,
             categoryId: row.category_id,
             categoryName: row.category_name,
+            categoryColorHex: row.category_color_hex,
             categorySortOrder: row.category_sort_order,
             productId: row.product_id,
             productName: row.product_name,
@@ -471,11 +478,12 @@ export default function App() {
   }
 
   const categories = useMemo(() => {
-    const unique = new Map<string, { id: string; name: string; order: number }>();
+    const unique = new Map<string, { id: string; name: string; color: string | null; order: number }>();
     for (const product of catalog) {
       unique.set(product.categoryId, {
         id: product.categoryId,
         name: product.categoryName,
+        color: product.categoryColorHex,
         order: product.categorySortOrder
       });
     }
@@ -672,7 +680,7 @@ export default function App() {
           : "ONLINE · Todo sincronizado";
 
   return (
-    <main className="min-h-screen bg-stone-950 text-stone-100">
+    <main className="min-h-screen bg-stone-950 text-stone-100 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
       <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-stone-800 bg-stone-900 px-5 py-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">{desktop ? "POS offline-first" : "POS online"}</p>
@@ -726,12 +734,12 @@ export default function App() {
       {notice ? <div className="mx-4 mt-4 rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-emerald-100">{notice}</div> : null}
       {announcements.length ? <div className="mx-4 mt-4 grid gap-2 md:grid-cols-2">{announcements.map((announcement) => <div key={announcement.id} className="rounded-xl border border-amber-700 bg-amber-950 px-4 py-3 text-sm text-amber-100"><strong>{announcement.title}</strong><p>{announcement.message}</p></div>)}</div> : null}
 
-      <div className="grid min-h-[calc(100vh-4rem)] lg:grid-cols-[minmax(0,1fr)_410px]">
-        <section className="min-w-0 border-stone-800 p-4 lg:border-r lg:p-5">
+      <div className="grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
+        <section className="min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
           <div className="flex flex-wrap gap-2">
             <button className={`rounded-xl px-4 py-3 font-bold ${categoryId === "ALL" ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId("ALL")}>Todos</button>
             {categories.map((category) => (
-              <button key={category.id} className={`rounded-xl px-4 py-3 font-bold ${categoryId === category.id ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId(category.id)}>{category.name}</button>
+              <button key={category.id} className={`flex items-center gap-2 rounded-xl px-4 py-3 font-bold ${categoryId === category.id ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId(category.id)}><span className="h-2.5 w-2.5 rounded-full bg-stone-500" style={{ backgroundColor: categoryAccent(category.color) }} />{category.name}</button>
             ))}
           </div>
           <input
@@ -740,12 +748,13 @@ export default function App() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
             {filteredProducts.map((product) => (
               <button
                 key={product.productId}
-                className="min-h-32 rounded-2xl border border-stone-700 bg-stone-900 p-4 text-left shadow-lg transition hover:-translate-y-0.5 hover:border-rose-500 hover:bg-stone-800"
+                className="min-h-32 rounded-2xl border border-l-4 border-stone-700 bg-stone-900 p-4 text-left shadow-lg transition hover:-translate-y-0.5 hover:bg-stone-800"
                 onClick={() => openWeight(product)}
+                style={{ borderLeftColor: categoryAccent(product.categoryColorHex) }}
               >
                 <span className="block text-lg font-black">{product.productName}</span>
                 <span className="mt-2 block text-sm text-stone-400">{product.categoryName}</span>
@@ -757,12 +766,12 @@ export default function App() {
           {!loading && filteredProducts.length === 0 ? <p className="mt-10 text-center text-stone-500">No hay productos disponibles.</p> : null}
         </section>
 
-        <aside className="flex min-h-[520px] flex-col bg-stone-900 p-4 lg:p-5">
+        <aside className="flex min-h-[520px] flex-col bg-stone-900 p-4 lg:min-h-0 lg:overflow-hidden lg:p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-black">Ticket actual</h2>
             {ticket.length ? <button className="text-sm font-bold text-red-400 hover:text-red-300" onClick={() => window.confirm("¿Cancelar todo el ticket?") && setTicket([])}>Cancelar</button> : null}
           </div>
-          <div className="mt-4 flex-1 space-y-3 overflow-y-auto">
+          <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto">
             {ticket.length === 0 ? <div className="grid h-44 place-items-center rounded-2xl border border-dashed border-stone-700 text-center text-stone-500">Seleccioná un producto<br />para comenzar</div> : null}
             {ticket.map((line) => {
               const product = catalog.find((candidate) => candidate.productId === line.productId);
@@ -785,10 +794,10 @@ export default function App() {
             })}
           </div>
 
-          <div className="mt-4 border-t border-stone-700 pt-4">
+          <div className="mt-4 shrink-0 border-t border-stone-700 pt-4">
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
             <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
-            {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento efectivo ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
+            {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
             {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
             <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
             <label className="mt-5 grid gap-2 text-sm font-bold text-stone-300">
@@ -862,7 +871,7 @@ export default function App() {
                 const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
                 const rule = rules.find((candidate) => candidate.minimumGrams <= grams);
                 const preview = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
-                return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Efectivo: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
+                return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
               } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
             </div>
             <div className="mt-6 grid grid-cols-2 gap-3">

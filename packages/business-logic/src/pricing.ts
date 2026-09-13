@@ -1,3 +1,5 @@
+import type { PaymentMethod } from "@carnicerias/types";
+
 export interface QuantityDiscount {
   id: string;
   discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG";
@@ -29,6 +31,10 @@ export function validateBasisPoints(value: bigint, allowHundred = false): void {
   }
 }
 
+export function isDiscountEligiblePaymentMethod(method: PaymentMethod): boolean {
+  return method !== "DEBIT" && method !== "CREDIT";
+}
+
 /** Builds the target cash price and its inverse list price without floating point. */
 export function calculatePriceFormation(costCents: bigint, profitMarkupBps: bigint, cashDiscountBps: bigint) {
   if (costCents < 0n || profitMarkupBps < 0n || profitMarkupBps > 100_000n) {
@@ -46,14 +52,14 @@ export function calculateSalePricing(input: {
   listPriceCents: bigint;
   quantity: number;
   quantityDivisor: 1 | 1_000;
-  paymentMethod: string;
+  paymentMethod: PaymentMethod;
   cashDiscountBps: bigint;
   promotion?: QuantityDiscount | null;
 }): SalePricing {
   const { listPriceCents, quantity, quantityDivisor, paymentMethod, promotion } = input;
   if (listPriceCents <= 0n || !Number.isSafeInteger(quantity) || quantity <= 0) throw new RangeError("Invalid sale quantity or price");
   validateBasisPoints(input.cashDiscountBps);
-  const cashDiscountBps = paymentMethod === "CASH" ? input.cashDiscountBps : 0n;
+  const cashDiscountBps = isDiscountEligiblePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
   const cashPriceCents = divideRoundHalfUp(listPriceCents * (10_000n - cashDiscountBps), 10_000n);
   let finalPriceCents = cashPriceCents;
   if (promotion) {

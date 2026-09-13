@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculatePriceFormation, calculateSalePricing } from "./pricing";
+import { calculatePriceFormation, calculateSalePricing, isDiscountEligiblePaymentMethod } from "./pricing";
 
 describe("price formation", () => {
   it("inverts a 10% cash discount after a 30% markup", () => {
@@ -28,7 +28,18 @@ describe("price formation", () => {
   it("has no residual cash discount after changing payment method", () => {
     const base = { listPriceCents: 1_444_444n, quantity: 1, quantityDivisor: 1 as const, cashDiscountBps: 1_000n };
     expect(calculateSalePricing({ ...base, paymentMethod: "CASH" }).finalPriceCents).toBe(1_300_000n);
+    expect(calculateSalePricing({ ...base, paymentMethod: "TRANSFER" }).finalPriceCents).toBe(1_300_000n);
     expect(calculateSalePricing({ ...base, paymentMethod: "DEBIT" }).finalPriceCents).toBe(1_444_444n);
+    expect(calculateSalePricing({ ...base, paymentMethod: "CREDIT" }).finalPriceCents).toBe(1_444_444n);
+    expect(calculateSalePricing({ ...base, paymentMethod: "CASH" }).finalPriceCents).toBe(1_300_000n);
+    expect(calculateSalePricing({ ...base, paymentMethod: "OTHER" }).finalPriceCents).toBe(1_300_000n);
+    expect(calculateSalePricing({ ...base, paymentMethod: "DEBIT" }).finalPriceCents).toBe(1_444_444n);
+  });
+
+  it("defines payment discount eligibility from the real payment methods", () => {
+    expect(["CASH", "TRANSFER", "DEBIT", "CREDIT", "OTHER"].map((method) =>
+      isDiscountEligiblePaymentMethod(method as "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER")))
+      .toEqual([true, true, false, false, true]);
   });
 
   it("uses the same calculation for UNIT products", () => {

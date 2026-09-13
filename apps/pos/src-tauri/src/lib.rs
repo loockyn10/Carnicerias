@@ -10,6 +10,7 @@ const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
 const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_config.sql");
 const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_sale_snapshots.sql");
 const CASH_DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/004_cash_discount_snapshots.sql");
+const CATEGORY_COLORS_SCHEMA: &str = include_str!("../migrations/005_category_colors.sql");
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -40,6 +41,7 @@ struct LocalCatalogRow {
     branch_name: String,
     category_id: String,
     category_name: String,
+    category_color_hex: Option<String>,
     category_sort_order: i64,
     product_id: String,
     product_name: String,
@@ -57,6 +59,7 @@ struct CatalogPullRow {
     branch_name: String,
     category_id: String,
     category_name: String,
+    category_color_hex: Option<String>,
     category_sort_order: i64,
     category_active: bool,
     product_id: String,
@@ -205,6 +208,10 @@ fn parse_i64(value: &str, field: &str) -> Result<i64, String> {
     value.parse::<i64>().map_err(|_| format!("Invalid {field}"))
 }
 
+fn payment_method_receives_discount(method: &str) -> bool {
+    matches!(method, "CASH" | "TRANSFER" | "OTHER")
+}
+
 fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
     connection
         .execute_batch(
@@ -254,6 +261,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(CASH_DISCOUNT_SNAPSHOT_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (4, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let category_colors_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 5)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !category_colors_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(CATEGORY_COLORS_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (5, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -339,7 +353,7 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
         .map_err(|_| "Device is not assigned to this branch".to_string())?;
     let mut statement = connection
         .prepare(
-            "select p.organization_id, cp.branch_id, c.id, c.name, c.sort_order,
+            "select p.organization_id, cp.branch_id, c.id, c.name, c.color_hex, c.sort_order,
                     p.id, p.name, p.sku, p.unit_type, cp.price_per_kg_cents, cp.valid_from
              from catalog_products p
              join catalog_categories c on c.id = p.category_id and c.active = 1
@@ -356,13 +370,14 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
                 branch_name: branch_name.clone(),
                 category_id: row.get(2)?,
                 category_name: row.get(3)?,
-                category_sort_order: row.get(4)?,
-                product_id: row.get(5)?,
-                product_name: row.get(6)?,
-                product_sku: row.get(7)?,
-                unit_type: row.get(8)?,
-                price_per_kg_cents: row.get::<_, i64>(9)?.to_string(),
-                price_valid_from: row.get(10)?,
+                category_color_hex: row.get(4)?,
+                category_sort_order: row.get(5)?,
+                product_id: row.get(6)?,
+                product_name: row.get(7)?,
+                product_sku: row.get(8)?,
+                unit_type: row.get(9)?,
+                price_per_kg_cents: row.get::<_, i64>(10)?.to_string(),
+                price_valid_from: row.get(11)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -401,11 +416,11 @@ fn apply_catalog_pull(
         let price = parse_i64(&row.price_per_kg_cents, "pricePerKgCents")?;
         transaction
             .execute(
-                "insert into catalog_categories(id, organization_id, name, sort_order, active, updated_at)
-                 values (?1, ?2, ?3, ?4, ?5, ?6)
+                "insert into catalog_categories(id, organization_id, name, color_hex, sort_order, active, updated_at)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  on conflict(id) do update set name = excluded.name, sort_order = excluded.sort_order,
-                   active = excluded.active, updated_at = excluded.updated_at",
-                params![row.category_id, row.organization_id, row.category_name, row.category_sort_order,
+                   color_hex = excluded.color_hex, active = excluded.active, updated_at = excluded.updated_at",
+                params![row.category_id, row.organization_id, row.category_name, row.category_color_hex, row.category_sort_order,
                         if row.category_active { 1_i64 } else { 0_i64 }, timestamp],
             )
             .map_err(|error| error.to_string())?;
@@ -505,7 +520,7 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
         let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
         let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
-        if item.weight_grams <= 0 || !(0..10_000).contains(&cash_discount_bps) || (sale.payment.method != "CASH" && cash_discount_bps != 0) {
+        if item.weight_grams <= 0 || !(0..10_000).contains(&cash_discount_bps) || (!payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0) {
             return Err("Invalid local sale calculation".to_string());
         }
         let expected = price
@@ -853,12 +868,19 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_connection(&mut connection).unwrap();
         let first: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,color_hex,sort_order,active,updated_at) values('color-category','org','Cerdo','#E99BAD',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 5);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select color_hex from catalog_categories where id='color-category'", [], |row| row.get::<_,String>(0)).unwrap(), "#E99BAD");
+        assert!(payment_method_receives_discount("CASH"));
+        assert!(payment_method_receives_discount("TRANSFER"));
+        assert!(payment_method_receives_discount("OTHER"));
+        assert!(!payment_method_receives_discount("DEBIT"));
+        assert!(!payment_method_receives_discount("CREDIT"));
     }
 
     #[test]
@@ -866,7 +888,7 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_connection(&mut connection).unwrap();
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
-        connection.execute("insert into catalog_categories values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();

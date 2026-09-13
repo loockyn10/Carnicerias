@@ -103,6 +103,7 @@ export interface CatalogPullRow {
   branchActive: boolean;
   categoryId: string;
   categoryName: string;
+  categoryColorHex: string | null;
   categorySortOrder: number;
   categoryActive: boolean;
   productId: string;

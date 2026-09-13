@@ -56,6 +56,7 @@ export interface PosCatalogProduct {
   branchName: string;
   categoryId: EntityId;
   categoryName: string;
+  categoryColorHex: string | null;
   categorySortOrder: number;
   productId: EntityId;
   productName: string;

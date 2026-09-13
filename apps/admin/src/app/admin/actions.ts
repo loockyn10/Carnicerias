@@ -83,7 +83,8 @@ export async function saveCategoryAction(formData: FormData) {
     p_category_id: optionalId(formData, "category_id"), p_name: name,
     p_slug: text(formData, "slug") || slugify(name),
     p_sort_order: Number(text(formData, "sort_order") || 0),
-    p_active: formData.get("active") === "on"
+    p_active: formData.get("active") === "on",
+    p_color_hex: text(formData, "color_hex") || null
   });
   revalidatePath("/admin/catalog");
   revalidatePath("/admin/products");

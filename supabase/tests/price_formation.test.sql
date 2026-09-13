@@ -1,11 +1,13 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(18);
+select plan(25);
 
 select has_table('public','product_costs','cost history exists');
 select has_table('public','product_pricing_settings','profit history exists');
 select has_table('public','organization_cash_discounts','cash discount history exists');
+select has_column('public','categories','color_hex','categories expose their visual color');
 select has_function('public','calculate_product_price',array['bigint','integer','integer'],'exact price calculator exists');
+select has_function('app_private','payment_method_receives_discount',array['payment_method'],'payment eligibility helper exists');
 select has_function('public','save_product_pricing',array['uuid','bigint','integer'],'automatic pricing RPC exists');
 select has_function('public','set_cash_discount_and_reprice',array['integer','boolean'],'safe bulk repricing RPC exists');
 select ok((select relrowsecurity from pg_class where oid='public.product_costs'::regclass),'costs have RLS');
@@ -18,6 +20,11 @@ select is((select list_price_cents from public.calculate_product_price(1000000,3
 select is((select effective_cash_price_cents from public.calculate_product_price(1000000,3000,1000)),1300000::bigint,'cash price returns to the target');
 select is(app_private.round_ratio_half_up(1444444::bigint*9500,10000),1372222::bigint,'card plus 5 percent promo rounds half up');
 select is(app_private.round_ratio_half_up(1300000::bigint*9500,10000),1235000::bigint,'cash then 5 percent promo is sequential');
+select is(app_private.payment_method_receives_discount('CASH'),true,'cash receives payment discount');
+select is(app_private.payment_method_receives_discount('TRANSFER'),true,'transfer receives payment discount');
+select is(app_private.payment_method_receives_discount('OTHER'),true,'other receives payment discount');
+select is(app_private.payment_method_receives_discount('DEBIT'),false,'debit does not receive payment discount');
+select is(app_private.payment_method_receives_discount('CREDIT'),false,'credit does not receive payment discount');
 select throws_ok($$select * from public.calculate_product_price(1000000,3000,10000)$$,'22023','Invalid price formation values','100 percent discount is rejected');
 select throws_ok($$select * from public.calculate_product_price(-1,3000,1000)$$,'22023','Invalid price formation values','negative cost is rejected');
 
