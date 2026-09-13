@@ -22,11 +22,11 @@ function decimal(value: string, label: string) {
   return parsed;
 }
 
-function kilogramsToGrams(value: string) {
+function kilogramsToGrams(value: string, allowZero = false) {
   const match = /^(\d+)(?:[,.](\d{1,3}))?$/.exec(value.trim());
   if (!match) throw new Error("Peso inválido");
   const grams = BigInt(match[1] ?? "") * 1_000n + BigInt((match[2] ?? "").padEnd(3, "0"));
-  if (grams <= 0n || grams > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Peso inválido");
+  if (grams < 0n || (!allowZero && grams === 0n) || grams > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Peso inválido");
   return Number(grams);
 }
 
@@ -93,6 +93,41 @@ export async function saveProductAction(formData: FormData) {
   revalidatePath("/admin/products");
 }
 
+export interface ProductManageState { error?: string; successToken?: string }
+
+export async function manageProductAction(_: ProductManageState, formData: FormData): Promise<ProductManageState> {
+  try {
+    const name = text(formData, "name");
+    await rpcOrThrow("save_product", {
+      p_product_id: text(formData, "product_id"), p_category_id: text(formData, "category_id"),
+      p_name: name, p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
+      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
+      p_active: formData.get("active") === "on"
+    });
+
+    const rawPrice = text(formData, "price");
+    if (rawPrice) {
+      const priceCents = pesosToCents(rawPrice);
+      const branchId = optionalId(formData, "branch_id");
+      const previousPriceCents = Number(text(formData, "current_price_cents") || 0);
+      const previousBranchId = optionalId(formData, "current_branch_id");
+      if (priceCents !== previousPriceCents || branchId !== previousBranchId) {
+        await rpcOrThrow("set_product_price", {
+          p_product_id: text(formData, "product_id"), p_branch_id: branchId,
+          p_price_cents: priceCents, p_effective_at: new Date().toISOString()
+        });
+      }
+    }
+
+    revalidatePath("/admin/catalog");
+    revalidatePath("/admin/products");
+    revalidatePath("/admin/promotions");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar el producto" };
+  }
+}
+
 export interface ProductModalState { error?: string; success?: boolean }
 
 export async function createProductModalAction(_: ProductModalState, formData: FormData): Promise<ProductModalState> {
@@ -131,22 +166,33 @@ async function commercialRpc(name: string, args: Record<string, unknown>) {
   if (error) throw new Error(error.message);
 }
 
+async function saveWeightDiscount(formData: FormData) {
+  const discountType = text(formData, "discount_type");
+  if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
+  await commercialRpc("save_weight_discount", {
+    p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
+    p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
+    p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value")),
+    p_active: formData.get("active") === "on", p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
+    p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
+  });
+  revalidatePath("/admin/catalog");
+  revalidatePath("/admin/promotions");
+  revalidatePath("/admin/products");
+}
+
 export async function saveWeightDiscountAction(formData: FormData) {
+  await saveWeightDiscount(formData);
+}
+
+export interface PromotionFormState { error?: string; successToken?: string }
+
+export async function saveWeightDiscountFormAction(_: PromotionFormState, formData: FormData): Promise<PromotionFormState> {
   try {
-    const discountType = text(formData, "discount_type");
-    if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
-    await commercialRpc("save_weight_discount", {
-      p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
-      p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
-      p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value")),
-      p_active: formData.get("active") === "on", p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
-      p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
-    });
-    revalidatePath("/admin/catalog");
-    revalidatePath("/admin/promotions");
+    await saveWeightDiscount(formData);
+    return { successToken: crypto.randomUUID() };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "No se pudo guardar el descuento";
-    redirect(`/admin/catalog?discount_error=${encodeURIComponent(message)}`);
+    return { error: error instanceof Error ? error.message : "No se pudo guardar la promoción" };
   }
 }
 
@@ -194,10 +240,21 @@ export async function recordWasteAction(formData: FormData) {
 export async function recordAdjustmentAction(formData: FormData) {
   await rpcOrThrow("record_stock_operation", {
     p_branch_id: text(formData, "branch_id"), p_operation_type: "ADJUSTMENT",
-    p_items: [{ product_id: text(formData, "product_id"), physical_quantity_grams: kilogramsToGrams(text(formData, "physical_kg")) }],
+    p_items: [{ product_id: text(formData, "product_id"), physical_quantity_grams: kilogramsToGrams(text(formData, "physical_kg"), true) }],
     p_note: text(formData, "note") || null
   });
   revalidatePath("/admin/stock");
+}
+
+export interface StockAdjustmentState { error?: string; successToken?: string }
+
+export async function recordAdjustmentFormAction(_: StockAdjustmentState, formData: FormData): Promise<StockAdjustmentState> {
+  try {
+    await recordAdjustmentAction(formData);
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo registrar el ajuste" };
+  }
 }
 
 export async function manageMemberAction(formData: FormData) {
