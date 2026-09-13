@@ -30,6 +30,13 @@ function kilogramsToGrams(value: string, allowZero = false) {
   return Number(grams);
 }
 
+function unitsToInteger(value: string) {
+  if (!/^\d+$/.test(value.trim())) throw new Error("Cantidad de unidades inválida");
+  const units = BigInt(value.trim());
+  if (units <= 0n || units > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Cantidad de unidades inválida");
+  return Number(units);
+}
+
 function pesosToCents(value: string) {
   const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
   if (!match) throw new Error("Precio inválido");
@@ -253,6 +260,45 @@ export async function recordPurchaseAction(formData: FormData) {
     p_supplier: text(formData, "supplier"), p_note: text(formData, "note") || null
   });
   revalidatePath("/admin/stock");
+}
+
+export interface ReplenishmentFormState { error?: string; successToken?: string }
+
+export async function recordReplenishmentFormAction(_: ReplenishmentFormState, formData: FormData): Promise<ReplenishmentFormState> {
+  try {
+    const context = await requireAdminContext();
+    const supabase = await createClient();
+    const productId = text(formData, "product_id");
+    const { data: product, error: productError } = await supabase.from("products")
+      .select("unit_type").eq("organization_id", context.organizationId).eq("id", productId).single();
+    if (productError) throw new Error("Producto inválido para esta organización");
+    const quantity = product.unit_type === "UNIT"
+      ? unitsToInteger(text(formData, "quantity"))
+      : kilogramsToGrams(text(formData, "quantity"));
+    const { error } = await supabase.rpc("record_stock_operation", {
+      p_branch_id: text(formData, "branch_id"), p_operation_type: "PURCHASE",
+      p_items: [{ product_id: productId, quantity_grams: quantity }],
+      p_supplier: null, p_note: text(formData, "note") || "Ingreso desde reposición"
+    });
+    if (error) throw new Error(error.message);
+    revalidatePath("/admin/replenishment");
+    revalidatePath("/admin/stock");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo registrar el ingreso" };
+  }
+}
+
+export async function setReplenishmentTargetDaysFormAction(_: ReplenishmentFormState, formData: FormData): Promise<ReplenishmentFormState> {
+  try {
+    const targetDays = decimal(text(formData, "target_days"), "Objetivo de cobertura");
+    if (targetDays <= 0 || targetDays > 30) throw new Error("El objetivo debe estar entre 0,01 y 30 días");
+    await rpcOrThrow("set_replenishment_target_days", { p_target_days: targetDays });
+    revalidatePath("/admin/replenishment");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar el objetivo" };
+  }
 }
 
 export async function recordWasteAction(formData: FormData) {

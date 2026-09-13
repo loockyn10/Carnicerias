@@ -22,6 +22,7 @@ export interface Database {
           slug: string;
           currency: string;
           timezone: string;
+          replenishment_target_days: number;
           active: boolean;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -32,6 +33,7 @@ export interface Database {
           slug: string;
           currency?: string;
           timezone?: string;
+          replenishment_target_days?: number;
           active?: boolean;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -695,6 +697,26 @@ export interface Database {
       record_stock_operation: {
         Args: { p_branch_id: string; p_operation_type: string; p_items: Json; p_supplier?: string | null; p_waste_reason?: string | null; p_note?: string | null; p_occurred_at?: string };
         Returns: string;
+      };
+      get_replenishment_plan: {
+        Args: { p_days?: number };
+        Returns: {
+          branch_id: string;
+          branch_name: string;
+          product_id: string;
+          product_name: string;
+          unit_type: "WEIGHT" | "UNIT";
+          current_quantity: number;
+          minimum_quantity: number;
+          target_quantity: number;
+          sold_recent_quantity: number;
+          sales_days: number;
+          target_coverage_days: number;
+        }[];
+      };
+      set_replenishment_target_days: {
+        Args: { p_target_days: number };
+        Returns: undefined;
       };
       cancel_sale: {
         Args: { p_sale_id: string; p_idempotency_key: string; p_reason: string };
