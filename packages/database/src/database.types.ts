@@ -796,6 +796,10 @@ export interface Database {
         Args: { p_branch_id: string; p_items: Json; p_payment_method: string };
         Returns: { sale_id: string; total_cents: number; total_weight_grams: number; completed_at: Timestamp }[];
       };
+      get_profitability_analytics: {
+        Args: { p_preset?: string; p_from?: string | null; p_to?: string | null; p_branch_id?: string | null; p_category_id?: string | null; p_product_id?: string | null };
+        Returns: Json;
+      };
       get_settlement_overview: {
         Args: Record<never, never>;
         Returns: Json;

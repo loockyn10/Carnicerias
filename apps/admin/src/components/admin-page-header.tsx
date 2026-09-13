@@ -11,6 +11,7 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/stock": { title: "Stock por sucursal", description: "Inventario, compras, mermas y ajustes." },
   "/admin/replenishment": { title: "Qué hay que reponer", description: "Consolidado para organizar compras y reposición." },
   "/admin/products": { title: "Productos", description: "Catálogo y precios vigentes." },
+  "/admin/analytics": { title: "Rentabilidad", description: "Ganancia bruta comercial por producto y sucursal." },
   "/admin/promotions": { title: "Promociones", description: "Descuentos y reglas comerciales." },
   "/admin/announcements": { title: "Avisos", description: "Comunicación con las sucursales." },
   "/admin/employees": { title: "Empleados", description: "Accesos y miembros de la organización." },

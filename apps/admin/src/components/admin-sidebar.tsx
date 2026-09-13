@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 const groups = [
   { label: "Principal", links: [["⌂", "Inicio", "/admin"]] },
   { label: "Operación", links: [["⌁", "Sucursales", "/admin/branches"], ["↗", "Ventas", "/admin/sales"], ["$", "Rendiciones", "/admin/settlements"], ["□", "Stock", "/admin/stock"], ["⇧", "Reposición", "/admin/replenishment"]] },
-  { label: "Comercial", links: [["◇", "Productos", "/admin/products"], ["%", "Promociones", "/admin/promotions"], ["◌", "Avisos", "/admin/announcements"]] },
+  { label: "Comercial", links: [["◇", "Productos", "/admin/products"], ["%", "Promociones", "/admin/promotions"], ["↗", "Rentabilidad", "/admin/analytics"], ["◌", "Avisos", "/admin/announcements"]] },
   { label: "Gestión", links: [["♙", "Empleados", "/admin/employees"], ["▣", "Dispositivos", "/admin/devices"], ["◷", "Auditoría", "/admin/audit"]] }
 ] as const;
 
