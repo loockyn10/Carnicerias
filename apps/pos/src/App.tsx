@@ -748,7 +748,7 @@ export default function App() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
+          <div className="mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
             {filteredProducts.map((product) => (
               <button
                 key={product.productId}
