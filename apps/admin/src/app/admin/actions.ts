@@ -46,6 +46,14 @@ function percentageToBasisPoints(value: string) {
   return Number(basisPoints);
 }
 
+function percentageToBasisPointsAllowZero(value: string, label: string, maximumBps: bigint) {
+  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
+  if (!match) throw new Error(`${label} inválido`);
+  const basisPoints = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
+  if (basisPoints < 0n || basisPoints > maximumBps) throw new Error(`${label} fuera del rango permitido`);
+  return Number(basisPoints);
+}
+
 function slugify(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -98,6 +106,9 @@ export interface ProductManageState { error?: string; successToken?: string }
 export async function manageProductAction(_: ProductManageState, formData: FormData): Promise<ProductManageState> {
   try {
     const name = text(formData, "name");
+    const rawCost = text(formData, "cost");
+    const rawProfit = text(formData, "profit_markup");
+    if (Boolean(rawCost) !== Boolean(rawProfit)) throw new Error("Completá costo y margen de ganancia para activar el precio automático");
     await rpcOrThrow("save_product", {
       p_product_id: text(formData, "product_id"), p_category_id: text(formData, "category_id"),
       p_name: name, p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
@@ -105,16 +116,12 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       p_active: formData.get("active") === "on"
     });
 
-    const rawPrice = text(formData, "price");
-    if (rawPrice) {
-      const priceCents = pesosToCents(rawPrice);
-      const branchId = optionalId(formData, "branch_id");
-      const previousPriceCents = Number(text(formData, "current_price_cents") || 0);
-      const previousBranchId = optionalId(formData, "current_branch_id");
-      if (priceCents !== previousPriceCents || branchId !== previousBranchId) {
-        await rpcOrThrow("set_product_price", {
-          p_product_id: text(formData, "product_id"), p_branch_id: branchId,
-          p_price_cents: priceCents, p_effective_at: new Date().toISOString()
+    if (rawCost && rawProfit) {
+      const costCents = pesosToCents(rawCost);
+      const profitMarkupBps = percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n);
+      if (costCents !== Number(text(formData, "current_cost_cents") || 0) || profitMarkupBps !== Number(text(formData, "current_profit_markup_bps") || -1)) {
+        await rpcOrThrow("save_product_pricing", {
+          p_product_id: text(formData, "product_id"), p_cost_cents: costCents, p_profit_markup_bps: profitMarkupBps
         });
       }
     }
@@ -133,10 +140,15 @@ export interface ProductModalState { error?: string; success?: boolean }
 export async function createProductModalAction(_: ProductModalState, formData: FormData): Promise<ProductModalState> {
   try {
     const name = text(formData, "name");
-    await rpcOrThrow("save_product", {
-      p_product_id: null, p_category_id: text(formData, "category_id"), p_name: name,
+    const rawCost = text(formData, "cost");
+    const rawProfit = text(formData, "profit_markup");
+    if (!rawCost || !rawProfit) throw new Error("Completá costo y margen de ganancia");
+    await rpcOrThrow("create_product_with_pricing", {
+      p_category_id: text(formData, "category_id"), p_name: name,
       p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
-      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
+      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on",
+      p_cost_cents: pesosToCents(rawCost),
+      p_profit_markup_bps: percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n)
     });
     revalidatePath("/admin/products");
     revalidatePath("/admin/catalog");
@@ -144,6 +156,20 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     return { success: true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo crear el producto" };
+  }
+}
+
+export interface PricingSettingsState { error?: string; successToken?: string }
+export async function saveCashDiscountAction(_: PricingSettingsState, formData: FormData): Promise<PricingSettingsState> {
+  try {
+    await rpcOrThrow("set_cash_discount_and_reprice", {
+      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Descuento en efectivo", 9_999n),
+      p_confirm: true
+    });
+    revalidatePath("/admin/products");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo actualizar la configuración" };
   }
 }
 

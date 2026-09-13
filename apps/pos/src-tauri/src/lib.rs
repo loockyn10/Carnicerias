@@ -9,6 +9,7 @@ use uuid::Uuid;
 const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
 const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_config.sql");
 const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_sale_snapshots.sql");
+const CASH_DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/004_cash_discount_snapshots.sql");
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -90,13 +91,13 @@ struct CommercialDiscount { id: String, product_id: String, branch_id: Option<St
 struct LocalAnnouncement { id: String, title: String, message: String, r#type: String, priority: i64, branch_id: Option<String> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalCommercialConfig { discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
+struct LocalCommercialConfig { cash_discount_bps: i64, discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalDiscount { id: String, product_id: String, branch_id: Option<String>, minimum_grams: i64, discount_type: String, discount_value: String }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CommercialConfig { discounts: Vec<CommercialDiscount>, announcements: Vec<LocalAnnouncement> }
+struct CommercialConfig { #[serde(default)] cash_discount_bps: i64, discounts: Vec<CommercialDiscount>, announcements: Vec<LocalAnnouncement> }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +112,11 @@ struct OfflineSaleItem {
     #[serde(default)] discount_type: Option<String>,
     #[serde(default)] discount_value: Option<String>,
     #[serde(default)] discount_cents: Option<String>,
+    #[serde(default)] cash_discount_bps: Option<String>,
+    #[serde(default)] cash_discount_cents: Option<String>,
+    #[serde(default)] promotion_discount_cents: Option<String>,
+    #[serde(default)] cost_cents_snapshot: Option<String>,
+    #[serde(default)] profit_markup_bps_snapshot: Option<String>,
     subtotal_cents: String,
 }
 
@@ -241,6 +247,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(DISCOUNT_SNAPSHOT_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (3, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let cash_snapshots_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 4)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !cash_snapshots_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(CASH_DISCOUNT_SNAPSHOT_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (4, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -431,6 +444,8 @@ fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialCo
     transaction.execute("delete from local_announcements", []).map_err(|error| error.to_string())?;
     for discount in config.discounts { transaction.execute("insert into local_weight_discounts(id,product_id,branch_id,minimum_grams,discount_type,discount_value) values(?1,?2,?3,?4,?5,?6)", params![discount.id,discount.product_id,discount.branch_id,discount.minimum_grams,discount.discount_type,parse_i64(&discount.discount_value,"discountValue")?]).map_err(|error| error.to_string())?; }
     for notice in config.announcements { transaction.execute("insert into local_announcements(id,title,message,type,priority,branch_id) values(?1,?2,?3,?4,?5,?6)", params![notice.id,notice.title,notice.message,notice.r#type,notice.priority,notice.branch_id]).map_err(|error| error.to_string())?; }
+    if !(0..10_000).contains(&config.cash_discount_bps) { return Err("Invalid cash discount configuration".to_string()); }
+    set_metadata(&transaction, "cash_discount_bps", &config.cash_discount_bps.to_string(), &now())?;
     transaction.commit().map_err(|error| error.to_string())
 }
 
@@ -441,7 +456,8 @@ fn get_local_commercial_config(state: State<'_, DatabaseState>) -> Result<LocalC
     let discounts = discounts.query_map([], |r| Ok(LocalDiscount { id:r.get(0)?, product_id:r.get(1)?, branch_id:r.get(2)?, minimum_grams:r.get(3)?, discount_type:r.get(4)?, discount_value:r.get::<_,i64>(5)?.to_string() })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let mut notices = connection.prepare("select id,title,message,type,priority,branch_id from local_announcements order by priority desc").map_err(|e|e.to_string())?;
     let announcements = notices.query_map([], |r| Ok(LocalAnnouncement { id:r.get(0)?, title:r.get(1)?, message:r.get(2)?, r#type:r.get(3)?, priority:r.get(4)?, branch_id:r.get(5)? })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
-    Ok(LocalCommercialConfig { discounts, announcements })
+    let cash_discount_bps = metadata(&connection, "cash_discount_bps")?.and_then(|value| value.parse().ok()).unwrap_or(0);
+    Ok(LocalCommercialConfig { cash_discount_bps, discounts, announcements })
 }
 
 fn set_metadata(transaction: &Transaction<'_>, key: &str, value: &str, timestamp: &str) -> Result<(), String> {
@@ -486,13 +502,38 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let original_price = item.original_price_per_kg_cents.as_deref().map(|value| parse_i64(value, "originalPricePerKgCents")).transpose()?.unwrap_or(price);
         let subtotal = parse_i64(&item.subtotal_cents, "subtotalCents")?;
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
+        let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
+        let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
+        let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
+        if item.weight_grams <= 0 || !(0..10_000).contains(&cash_discount_bps) || (sale.payment.method != "CASH" && cash_discount_bps != 0) {
+            return Err("Invalid local sale calculation".to_string());
+        }
         let expected = price
             .checked_mul(item.weight_grams)
             .and_then(|value| value.checked_add(500))
             .map(|value| value / 1000)
             .ok_or_else(|| "Sale amount overflow".to_string())?;
         let normal_subtotal = original_price.checked_mul(item.weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
-        if item.weight_grams <= 0 || subtotal != expected || discount_cents != normal_subtotal - subtotal {
+        let cash_price = original_price.checked_mul(10_000 - cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+        let cash_subtotal = cash_price.checked_mul(item.weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+        let has_new_pricing = item.cash_discount_bps.is_some() || item.promotion_discount_cents.is_some();
+        match item.discount_type.as_deref() {
+            Some("PERCENTAGE") => {
+                let value = item.discount_value.as_deref().ok_or_else(|| "Missing percentage promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
+                if !(1..=10_000).contains(&value) { return Err("Invalid percentage promotion".to_string()); }
+                let rounded = cash_price.checked_mul(10_000 - value).and_then(|amount| amount.checked_add(5_000)).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let legacy = cash_price.checked_mul(10_000 - value).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                if price != rounded && (has_new_pricing || price != legacy) { return Err("Percentage promotion snapshot is inconsistent".to_string()); }
+            }
+            Some("FIXED_PRICE_PER_KG") => {
+                let value = item.discount_value.as_deref().ok_or_else(|| "Missing fixed-price promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
+                if price != value || price > cash_price { return Err("Fixed-price promotion snapshot is inconsistent".to_string()); }
+            }
+            Some(_) => return Err("Unsupported promotion type".to_string()),
+            None if price != cash_price => return Err("Undiscounted snapshot is inconsistent".to_string()),
+            None => {}
+        }
+        if subtotal != expected || cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != cash_discount_cents + promotion_discount_cents {
             return Err("Invalid local sale calculation".to_string());
         }
         let catalog_matches: bool = transaction
@@ -533,12 +574,17 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let original_price = item.original_price_per_kg_cents.as_deref().map(|value| parse_i64(value, "originalPricePerKgCents")).transpose()?.unwrap_or_else(|| parse_i64(&item.price_per_kg_cents, "pricePerKgCents").unwrap_or(0));
         let discount_value = item.discount_value.as_deref().map(|value| parse_i64(value, "discountValue")).transpose()?;
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
+        let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
+        let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
+        let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
+        let cost_snapshot = item.cost_cents_snapshot.as_deref().map(|value| parse_i64(value, "costCentsSnapshot")).transpose()?;
+        let profit_snapshot = item.profit_markup_bps_snapshot.as_deref().map(|value| parse_i64(value, "profitMarkupBpsSnapshot")).transpose()?;
         transaction
             .execute(
                 "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams,
-                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, subtotal_cents, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams,
-                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, parse_i64(&item.subtotal_cents, "subtotalCents")?, sale.created_at],
+                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, sale.created_at],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -810,7 +856,35 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn discounted_cash_sale_persists_separated_snapshots() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into catalog_categories values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), device_id,
+            status: "COMPLETED".into(), total_cents: "1235000".into(), total_weight_grams: "1000".into(),
+            created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: 1000,
+                price_per_kg_cents: "1235000".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), discount_cents: Some("209444".into()),
+                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("144444".into()), promotion_discount_cents: Some("65000".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1235000".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1235000".into() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
+        };
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
+        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 65000);
     }
 }

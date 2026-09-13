@@ -32,6 +32,11 @@ export interface OfflineSaleItemPayload {
   discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
   discountValue?: string | null;
   discountCents?: string;
+  cashDiscountBps?: string;
+  cashDiscountCents?: string;
+  promotionDiscountCents?: string;
+  costCentsSnapshot?: string | null;
+  profitMarkupBpsSnapshot?: string | null;
   subtotalCents: string;
 }
 
@@ -143,6 +148,11 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     discountType: line.discountType ?? null,
     discountValue: line.discountValue?.toString() ?? null,
     discountCents: (line.discountCents ?? 0n).toString(),
+    cashDiscountBps: (line.cashDiscountBps ?? 0n).toString(),
+    cashDiscountCents: (line.cashDiscountCents ?? 0n).toString(),
+    promotionDiscountCents: (line.promotionDiscountCents ?? (line.discountCents ?? 0n) - (line.cashDiscountCents ?? 0n)).toString(),
+    costCentsSnapshot: line.costCentsSnapshot?.toString() ?? null,
+    profitMarkupBpsSnapshot: line.profitMarkupBpsSnapshot?.toString() ?? null,
     subtotalCents: line.subtotalCents.toString()
   }));
   const totalCents = input.ticket.reduce((total, line) => total + line.subtotalCents, 0n);

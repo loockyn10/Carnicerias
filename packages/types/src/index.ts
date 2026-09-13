@@ -76,5 +76,10 @@ export interface TicketLine {
   discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
   discountValue?: bigint | null;
   discountCents?: bigint;
+  cashDiscountBps?: bigint;
+  cashDiscountCents?: bigint;
+  promotionDiscountCents?: bigint;
+  costCentsSnapshot?: bigint | null;
+  profitMarkupBpsSnapshot?: bigint | null;
   subtotalCents: bigint;
 }

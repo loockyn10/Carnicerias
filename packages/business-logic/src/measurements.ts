@@ -95,7 +95,7 @@ export function applyWeightDiscount(
     subtotalCents: priceForWeight(originalPricePerKgCents, grams)
   };
   const finalPricePerKgCents = rule.discountType === "PERCENTAGE"
-    ? originalPricePerKgCents * (10_000n - rule.discountValue) / 10_000n
+    ? divideRoundHalfUp(originalPricePerKgCents * (10_000n - rule.discountValue), 10_000n)
     : rule.discountValue;
   const normalSubtotal = priceForWeight(originalPricePerKgCents, grams);
   const subtotalCents = priceForWeight(finalPricePerKgCents, grams);
@@ -103,3 +103,4 @@ export function applyWeightDiscount(
     discountType: rule.discountType, discountValue: rule.discountValue,
     discountCents: normalSubtotal - subtotalCents, subtotalCents };
 }
+import { divideRoundHalfUp } from "./pricing";

@@ -237,6 +237,24 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["product_prices"]["Insert"]>;
         Relationships: [];
       };
+      product_costs: {
+        Row: { id: string; organization_id: string; product_id: string; cost_cents: number; valid_from: Timestamp; valid_to: Timestamp | null; created_by: string | null; created_at: Timestamp };
+        Insert: { id?: string; organization_id: string; product_id: string; cost_cents: number; valid_from?: Timestamp; valid_to?: Timestamp | null; created_by?: string | null; created_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["product_costs"]["Insert"]>;
+        Relationships: [];
+      };
+      product_pricing_settings: {
+        Row: { id: string; organization_id: string; product_id: string; profit_markup_bps: number; updated_by: string | null; valid_from: Timestamp; valid_to: Timestamp | null; created_at: Timestamp; updated_at: Timestamp };
+        Insert: { id?: string; organization_id: string; product_id: string; profit_markup_bps: number; updated_by?: string | null; valid_from?: Timestamp; valid_to?: Timestamp | null; created_at?: Timestamp; updated_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["product_pricing_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      organization_cash_discounts: {
+        Row: { id: string; organization_id: string; cash_discount_bps: number; valid_from: Timestamp; valid_to: Timestamp | null; created_by: string | null; created_at: Timestamp };
+        Insert: { id?: string; organization_id: string; cash_discount_bps: number; valid_from?: Timestamp; valid_to?: Timestamp | null; created_by?: string | null; created_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["organization_cash_discounts"]["Insert"]>;
+        Relationships: [];
+      };
       sales: {
         Row: {
           id: string;
@@ -287,6 +305,17 @@ export interface Database {
           price_per_kg_cents: number;
           subtotal_cents: number;
           created_at: Timestamp;
+          original_price_per_kg_cents: number;
+          discount_rule_id: string | null;
+          discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+          discount_value: number | null;
+          final_price_per_kg_cents: number;
+          discount_cents: number;
+          cash_discount_bps: number;
+          cash_discount_cents: number;
+          promotion_discount_cents: number;
+          cost_cents_snapshot: number | null;
+          profit_markup_bps_snapshot: number | null;
         };
         Insert: {
           id?: string;
@@ -299,6 +328,17 @@ export interface Database {
           price_per_kg_cents: number;
           subtotal_cents: number;
           created_at?: Timestamp;
+          original_price_per_kg_cents: number;
+          discount_rule_id?: string | null;
+          discount_type?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+          discount_value?: number | null;
+          final_price_per_kg_cents: number;
+          discount_cents?: number;
+          cash_discount_bps?: number;
+          cash_discount_cents?: number;
+          promotion_discount_cents?: number;
+          cost_cents_snapshot?: number | null;
+          profit_markup_bps_snapshot?: number | null;
         };
         Update: Partial<Database["public"]["Tables"]["sale_items"]["Insert"]>;
         Relationships: [];
@@ -632,6 +672,19 @@ export interface Database {
         Args: { p_product_id: string; p_branch_id: string | null; p_price_cents: number | null; p_effective_at?: string };
         Returns: string | null;
       };
+      save_product_pricing: {
+        Args: { p_product_id: string; p_cost_cents: number; p_profit_markup_bps: number };
+        Returns: Json;
+      };
+      set_cash_discount_and_reprice: {
+        Args: { p_cash_discount_bps: number; p_confirm?: boolean };
+        Returns: Json;
+      };
+      calculate_product_price: {
+        Args: { p_cost_cents: number; p_profit_markup_bps: number; p_cash_discount_bps: number };
+        Returns: { target_cash_price_cents: number; list_price_cents: number; effective_cash_price_cents: number }[];
+      };
+      create_product_with_pricing: { Args: { p_category_id: string; p_name: string; p_slug: string; p_sku: string; p_unit_type: "WEIGHT" | "UNIT"; p_active: boolean; p_cost_cents?: number | null; p_profit_markup_bps?: number | null }; Returns: string };
       set_stock_policy: {
         Args: { p_branch_id: string; p_product_id: string; p_minimum_stock_grams: number; p_target_stock_grams: number };
         Returns: undefined;
@@ -686,6 +739,7 @@ export interface Database {
       pos_device_status: "ACTIVE" | "DISABLED";
       stock_operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
       waste_reason: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER";
+      weight_discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG";
     };
     CompositeTypes: Record<never, never>;
   };

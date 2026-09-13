@@ -1,0 +1,25 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(18);
+
+select has_table('public','product_costs','cost history exists');
+select has_table('public','product_pricing_settings','profit history exists');
+select has_table('public','organization_cash_discounts','cash discount history exists');
+select has_function('public','calculate_product_price',array['bigint','integer','integer'],'exact price calculator exists');
+select has_function('public','save_product_pricing',array['uuid','bigint','integer'],'automatic pricing RPC exists');
+select has_function('public','set_cash_discount_and_reprice',array['integer','boolean'],'safe bulk repricing RPC exists');
+select ok((select relrowsecurity from pg_class where oid='public.product_costs'::regclass),'costs have RLS');
+select ok((select relrowsecurity from pg_class where oid='public.organization_cash_discounts'::regclass),'cash settings have RLS');
+select ok(not has_table_privilege('authenticated','public.product_costs','INSERT'),'cost history cannot be inserted directly');
+select ok(not has_table_privilege('anon','public.product_costs','SELECT'),'anonymous cannot read costs');
+select ok(not has_function_privilege('anon','public.save_product_pricing(uuid,bigint,integer)','EXECUTE'),'anonymous cannot change pricing');
+select is((select target_cash_price_cents from public.calculate_product_price(1000000,3000,1000)),1300000::bigint,'target cash price is cost plus markup');
+select is((select list_price_cents from public.calculate_product_price(1000000,3000,1000)),1444444::bigint,'list price uses inverse cash discount');
+select is((select effective_cash_price_cents from public.calculate_product_price(1000000,3000,1000)),1300000::bigint,'cash price returns to the target');
+select is(app_private.round_ratio_half_up(1444444::bigint*9500,10000),1372222::bigint,'card plus 5 percent promo rounds half up');
+select is(app_private.round_ratio_half_up(1300000::bigint*9500,10000),1235000::bigint,'cash then 5 percent promo is sequential');
+select throws_ok($$select * from public.calculate_product_price(1000000,3000,10000)$$,'22023','Invalid price formation values','100 percent discount is rejected');
+select throws_ok($$select * from public.calculate_product_price(-1,3000,1000)$$,'22023','Invalid price formation values','negative cost is rejected');
+
+select * from finish();
+rollback;

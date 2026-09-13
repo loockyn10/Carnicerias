@@ -5,7 +5,7 @@ import {
   formatWeight,
   parseWeightToGrams,
   priceForWeight,
-  applyWeightDiscount,
+  calculateSalePricing,
   sumMoney
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
@@ -125,6 +125,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [cashDiscountBps, setCashDiscountBps] = useState(0);
   const [categoryId, setCategoryId] = useState("ALL");
   const [search, setSearch] = useState("");
   const [ticket, setTicket] = useState<TicketLine[]>([]);
@@ -377,11 +378,12 @@ export default function App() {
     void (async () => {
       if (desktop) {
         const config = await localDatabase.commercialConfig();
-        setDiscounts(config.discounts); setAnnouncements(config.announcements);
+        setCashDiscountBps(config.cashDiscountBps); setDiscounts(config.discounts); setAnnouncements(config.announcements);
       } else {
         const { data, error: configError } = await supabase.rpc("get_pos_commercial_config", { p_branch_id: branchId });
         if (configError) throw configError;
-        const config = data as unknown as { discounts: DiscountRule[]; announcements: Announcement[] };
+        const config = data as unknown as { cashDiscountBps: number; discounts: DiscountRule[]; announcements: Announcement[] };
+        setCashDiscountBps(config.cashDiscountBps);
         setDiscounts(config.discounts);
         setAnnouncements(config.announcements);
       }
@@ -393,6 +395,10 @@ export default function App() {
     try {
       const runtime = await synchronizeDesktop(user, setSyncStatus);
       setLocalRuntime(runtime);
+      const config = await localDatabase.commercialConfig();
+      setCashDiscountBps(config.cashDiscountBps);
+      setDiscounts(config.discounts);
+      setAnnouncements(config.announcements);
       setOutboxSummary(await localDatabase.outboxSummary());
     } catch (syncError) {
       setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
@@ -495,6 +501,27 @@ export default function App() {
     () => ticket.reduce((total, line) => total + line.weightGrams, 0),
     [ticket]
   );
+  const ticketListSubtotal = useMemo(() => sumMoney(ticket.map((line) => priceForWeight(line.originalPricePerKgCents ?? line.pricePerKgCents, line.weightGrams))), [ticket]);
+  const ticketCashDiscount = useMemo(() => sumMoney(ticket.map((line) => line.cashDiscountCents ?? 0n)), [ticket]);
+  const ticketPromotionDiscount = useMemo(() => sumMoney(ticket.map((line) => line.promotionDiscountCents ?? 0n)), [ticket]);
+
+  useEffect(() => {
+    setTicket((current) => current.map((line) => {
+      const pricing = calculateSalePricing({
+        listPriceCents: line.originalPricePerKgCents ?? line.pricePerKgCents,
+        quantity: line.weightGrams,
+        quantityDivisor: 1_000,
+        paymentMethod,
+        cashDiscountBps: BigInt(cashDiscountBps),
+        promotion: line.discountType && line.discountValue != null && line.discountRuleId
+          ? { id: line.discountRuleId, discountType: line.discountType, discountValue: line.discountValue }
+          : null
+      });
+      return { ...line, pricePerKgCents: pricing.finalPriceCents, cashDiscountBps: pricing.cashDiscountBps,
+        cashDiscountCents: pricing.cashDiscountCents, promotionDiscountCents: pricing.promotionDiscountCents,
+        discountCents: pricing.discountCents, subtotalCents: pricing.subtotalCents };
+    }));
+  }, [cashDiscountBps, paymentMethod]);
 
   function openWeight(product: CatalogProduct, line?: TicketLine) {
     setSelectedProduct(product);
@@ -511,20 +538,24 @@ export default function App() {
       const grams = parseWeightToGrams(weightInput);
       const applicableRules = discounts.filter((rule) => rule.productId === selectedProduct.productId)
         .sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-      const applied = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, applicableRules.map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
-      const subtotal = applied.subtotalCents;
+      const rule = applicableRules.find((candidate) => candidate.minimumGrams <= grams);
+      const applied = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000,
+        paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
       const line: TicketLine = {
         id: editingLineId ?? crypto.randomUUID(),
         productId: selectedProduct.productId,
         productName: selectedProduct.productName,
         weightGrams: grams,
-        pricePerKgCents: applied.finalPricePerKgCents,
+        pricePerKgCents: applied.finalPriceCents,
         originalPricePerKgCents: selectedProduct.pricePerKgCents,
-        discountRuleId: applied.ruleId,
-        discountType: applied.discountType,
-        discountValue: applied.discountValue,
+        discountRuleId: rule?.id ?? null,
+        discountType: rule?.discountType ?? null,
+        discountValue: rule ? BigInt(rule.discountValue) : null,
         discountCents: applied.discountCents,
-        subtotalCents: subtotal
+        cashDiscountBps: applied.cashDiscountBps,
+        cashDiscountCents: applied.cashDiscountCents,
+        promotionDiscountCents: applied.promotionDiscountCents,
+        subtotalCents: applied.subtotalCents
       };
 
       setTicket((current) =>
@@ -587,7 +618,9 @@ export default function App() {
       p_items: ticket.map((line) => ({
         product_id: line.productId,
         weight_grams: line.weightGrams,
-        expected_price_per_kg_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString()
+        expected_price_per_kg_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
+        expected_cash_discount_bps: (line.cashDiscountBps ?? 0n).toString(),
+        expected_final_price_per_kg_cents: line.pricePerKgCents.toString()
       })),
       p_payment_method: paymentMethod
     });
@@ -738,7 +771,8 @@ export default function App() {
                   <div className="flex justify-between gap-3">
                     <div>
                       <h3 className="font-black">{line.productName}</h3>
-                      <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)} · {formatCurrency(line.pricePerKgCents)}/kg</p>
+                      <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)} × {formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg</p>
+                      {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
                     </div>
                     <strong className="text-lg text-rose-400">{formatCurrency(line.subtotalCents)}</strong>
                   </div>
@@ -753,6 +787,9 @@ export default function App() {
 
           <div className="mt-4 border-t border-stone-700 pt-4">
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
+            <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
+            {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento efectivo ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
+            {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
             <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
             <label className="mt-5 grid gap-2 text-sm font-bold text-stone-300">
               Método de pago
@@ -823,8 +860,9 @@ export default function App() {
               {(() => { try {
                 const grams = parseWeightToGrams(weightInput);
                 const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-                const preview = applyWeightDiscount(selectedProduct.pricePerKgCents, grams, rules.map((rule) => ({ ...rule, discountValue: BigInt(rule.discountValue) })));
-                return <><p className="text-sm text-stone-400">Precio normal: {formatCurrency(priceForWeight(selectedProduct.pricePerKgCents, grams))}</p>{preview.discountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento: -{formatCurrency(preview.discountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
+                const rule = rules.find((candidate) => candidate.minimumGrams <= grams);
+                const preview = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
+                return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Efectivo: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
               } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
             </div>
             <div className="mt-6 grid grid-cols-2 gap-3">

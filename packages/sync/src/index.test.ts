@@ -50,6 +50,19 @@ describe("offline sale envelope", () => {
     });
     expect(payload.items[0]).toMatchObject({ originalPricePerKgCents: "1000000", pricePerKgCents: "800000", discountType: "PERCENTAGE", discountValue: "2000", discountCents: "450000", subtotalCents: "1800000" });
   });
+
+  it("keeps cash and promotion discounts separated in the offline envelope", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "CASH", createId: () => crypto.randomUUID(),
+      ticket: [{ id: "line", productId: "asado", productName: "Asado", weightGrams: 1_000,
+        originalPricePerKgCents: 1_444_444n, pricePerKgCents: 1_235_000n,
+        discountRuleId: "rule", discountType: "PERCENTAGE", discountValue: 500n,
+        discountCents: 209_444n, cashDiscountBps: 1_000n, cashDiscountCents: 144_444n,
+        promotionDiscountCents: 65_000n, subtotalCents: 1_235_000n }]
+    });
+    expect(payload.items[0]).toMatchObject({ cashDiscountBps: "1000", cashDiscountCents: "144444", promotionDiscountCents: "65000", discountCents: "209444" });
+  });
 });
 
 describe("outbox retry", () => {

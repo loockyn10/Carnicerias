@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(35);
+select plan(37);
 
 select has_table('public', 'sales', 'sales exists');
 select has_table('public', 'sale_items', 'sale_items exists');
@@ -110,10 +110,12 @@ select lives_ok(
 );
 
 select is((select count(*) from public.sales), 1::bigint, 'employee sees the assigned-branch sale');
-select is((select total_cents from public.sales limit 1), 1625000::bigint, 'database calculates subtotal with integer rounding');
+select is((select total_cents from public.sales limit 1), 1462500::bigint, 'database applies the organization cash discount with integer rounding');
 select is((select product_name_snapshot from public.sale_items limit 1), 'Vacío Test', 'sale item freezes product name');
-select is((select price_per_kg_cents from public.sale_items limit 1), 1300000::bigint, 'sale item freezes effective price');
-select is((select amount_cents from public.payments limit 1), 1625000::bigint, 'payment matches sale total');
+select is((select price_per_kg_cents from public.sale_items limit 1), 1170000::bigint, 'sale item freezes effective cash price');
+select is((select cash_discount_bps from public.sale_items limit 1), 1000, 'sale item freezes cash discount basis points');
+select is((select cash_discount_cents from public.sale_items limit 1), 162500::bigint, 'sale item freezes cash discount amount');
+select is((select amount_cents from public.payments limit 1), 1462500::bigint, 'payment matches sale total');
 select is((select quantity_grams from public.stock_movements limit 1), (-1250)::bigint, 'sale writes negative stock movement');
 
 select throws_ok(
