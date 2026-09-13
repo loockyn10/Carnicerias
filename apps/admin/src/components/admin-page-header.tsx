@@ -7,6 +7,7 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/branches": { title: "Sucursales", description: "Estado comercial y alertas de cada local." },
   "/admin/branches/compare": { title: "Comparar sucursales", description: "Ventas, descuentos, mermas y estado de stock." },
   "/admin/sales": { title: "Ventas", description: "Historial y seguimiento de ventas." },
+  "/admin/settlements": { title: "Rendiciones", description: "Control de efectivo y cierres históricos por sucursal." },
   "/admin/stock": { title: "Stock por sucursal", description: "Inventario, compras, mermas y ajustes." },
   "/admin/replenishment": { title: "Qué hay que reponer", description: "Consolidado para organizar compras y reposición." },
   "/admin/products": { title: "Productos", description: "Catálogo y precios vigentes." },

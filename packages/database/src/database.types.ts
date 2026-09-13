@@ -259,6 +259,56 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["organization_cash_discounts"]["Insert"]>;
         Relationships: [];
       };
+      settlements: {
+        Row: {
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          period_start: Timestamp;
+          period_end: Timestamp;
+          expected_cash_cents: number;
+          received_cash_cents: number;
+          difference_cents: number;
+          total_sales_cents: number;
+          ticket_count: number;
+          sold_weight_grams: number;
+          payment_totals: Json;
+          employee_totals: Json;
+          device_sync_snapshot: Json;
+          notes: string | null;
+          status: "CONFIRMED" | "VOIDED";
+          created_by: string;
+          created_at: Timestamp;
+          voided_by: string | null;
+          voided_at: Timestamp | null;
+          void_reason: string | null;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          branch_id: string;
+          period_start: Timestamp;
+          period_end: Timestamp;
+          expected_cash_cents: number;
+          received_cash_cents: number;
+          difference_cents: number;
+          total_sales_cents: number;
+          ticket_count: number;
+          sold_weight_grams: number;
+          payment_totals: Json;
+          employee_totals: Json;
+          device_sync_snapshot: Json;
+          notes?: string | null;
+          status?: "CONFIRMED" | "VOIDED";
+          created_by: string;
+          created_at?: Timestamp;
+          voided_by?: string | null;
+          voided_at?: Timestamp | null;
+          void_reason?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["settlements"]["Insert"]>;
+        Relationships: [];
+      };
       sales: {
         Row: {
           id: string;
@@ -746,12 +796,33 @@ export interface Database {
         Args: { p_branch_id: string; p_items: Json; p_payment_method: string };
         Returns: { sale_id: string; total_cents: number; total_weight_grams: number; completed_at: Timestamp }[];
       };
+      get_settlement_overview: {
+        Args: Record<never, never>;
+        Returns: Json;
+      };
+      get_settlement_preview: {
+        Args: { p_branch_id: string; p_period_start_local: string; p_period_end_local: string };
+        Returns: Json;
+      };
+      confirm_settlement: {
+        Args: { p_branch_id: string; p_period_start_local: string; p_period_end_local: string; p_received_cash_cents: number; p_notes?: string | null };
+        Returns: string;
+      };
+      get_settlement_history: {
+        Args: { p_branch_id?: string | null; p_from?: string | null; p_to?: string | null; p_has_difference?: boolean | null; p_settlement_id?: string | null };
+        Returns: Json;
+      };
+      void_settlement: {
+        Args: { p_settlement_id: string; p_reason: string };
+        Returns: undefined;
+      };
     };
     Enums: {
       unit_type: "WEIGHT" | "UNIT";
       membership_status: "INVITED" | "ACTIVE" | "DISABLED";
       sale_status: "DRAFT" | "COMPLETED" | "CANCELLED" | "REFUNDED";
       payment_method: "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER";
+      settlement_status: "CONFIRMED" | "VOIDED";
       stock_movement_type:
         | "PURCHASE"
         | "SALE"

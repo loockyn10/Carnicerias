@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "../../lib/supabase/server";
 import { requireAdminContext } from "../../lib/admin";
+import { parsePesosToCents } from "../../lib/settlements";
 import type { Database } from "@carnicerias/database";
 
 function text(formData: FormData, key: string) {
@@ -354,4 +355,35 @@ export async function cancelSaleAction(formData: FormData) {
   });
   revalidatePath("/admin/sales");
   revalidatePath("/admin");
+}
+
+export interface SettlementFormState { error?: string; settlementId?: string }
+
+export async function confirmSettlementFormAction(_: SettlementFormState, formData: FormData): Promise<SettlementFormState> {
+  try {
+    const settlementId = await rpcOrThrow("confirm_settlement", {
+      p_branch_id: text(formData, "branch_id"),
+      p_period_start_local: text(formData, "period_start"),
+      p_period_end_local: text(formData, "period_end"),
+      p_received_cash_cents: parsePesosToCents(text(formData, "received_cash")),
+      p_notes: text(formData, "notes") || null
+    });
+    revalidatePath("/admin/settlements");
+    revalidatePath("/admin/audit");
+    return { settlementId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo confirmar la rendición" };
+  }
+}
+
+export async function voidSettlementFormAction(_: SettlementFormState, formData: FormData): Promise<SettlementFormState> {
+  try {
+    const settlementId = text(formData, "settlement_id");
+    await rpcOrThrow("void_settlement", { p_settlement_id: settlementId, p_reason: text(formData, "reason") });
+    revalidatePath("/admin/settlements");
+    revalidatePath("/admin/audit");
+    return { settlementId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo anular la rendición" };
+  }
 }
