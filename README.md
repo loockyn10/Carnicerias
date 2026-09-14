@@ -64,4 +64,4 @@ docs                    Fuente de verdad documental
 
 ## Estado importante
 
-El POS ya opera offline con ventas, stock, pricing, promociones, outbox y control horario. Existe una contradicción pendiente: el empleado POS objetivo no debe necesitar Auth individual, pero la implementación actual todavía depende de `auth.users`. No crear una interpretación alternativa; seguir [`docs/TASKS.md`](docs/TASKS.md).
+El POS ya opera offline con ventas, stock, pricing, promociones, outbox y control horario. Los operadores se crean desde Admin como empleados internos sin Auth individual y pueden asignarse a varias sucursales; los accesos administrativos continúan usando Supabase Auth. Seguir [`docs/TASKS.md`](docs/TASKS.md) para el trabajo próximo.

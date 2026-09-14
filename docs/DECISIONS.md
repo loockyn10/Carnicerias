@@ -36,13 +36,11 @@ Un empleado puede estar autorizado a varias sucursales.
 
 ## D-004 — Empleado POS no requiere Auth individual
 
-**Status:** Active / contradicción actual confirmada
+**Status:** Active / implementación confirmada
 
 Los empleados normales deben crearse desde Admin como entidades internas con nombre, PIN y sucursal(es).
 
-Supabase Auth queda para accesos administrativos/dispositivo según arquitectura real.
-
-La implementación todavía obliga a crear `auth.users`; no cambiar esta decisión para acomodar el acoplamiento actual.
+Supabase Auth queda para accesos administrativos/dispositivo según arquitectura real. Los perfiles con Auth conservan un vínculo opcional; las identidades POS internas mantienen UUID propio y el mismo contrato histórico de operador.
 
 **Motivo:** operación rápida y gestión simple cuando se contrata/despide personal.
 

@@ -93,7 +93,7 @@ pnpm exec supabase db lint --linked --level warning --fail-on error
 
 Todas las operaciones `--linked` requieren `supabase login` válido o `SUPABASE_ACCESS_TOKEN`. Hacer dry-run antes del push, usar sólo migraciones incrementales y no editar migraciones ya aplicadas.
 
-El inventario local llega hasta PostgreSQL 021 y SQLite 006. El estado remoto debe verificarse con `migration list --linked`; la auditoría documental no tuvo autenticación suficiente para confirmarlo.
+El inventario local llega hasta PostgreSQL 022 y SQLite 006. El estado remoto debe verificarse con `migration list --linked`; no asumir que la migración 022 está aplicada hasta confirmarlo.
 
 ## Deploy Admin
 

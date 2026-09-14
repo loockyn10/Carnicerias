@@ -38,8 +38,6 @@ Debe poder:
 
 El empleado POS **no requiere una cuenta Supabase Auth individual** como modelo objetivo. La identidad operativa debe ser un empleado interno creado desde Admin con nombre, PIN, una o varias sucursales, tarifa histórica y estado.
 
-La implementación actual todavía depende de `auth.users`; esta contradicción está registrada como P0 en `CURRENT_STATE.md` y `TASKS.md`.
-
 ## Sucursal y dispositivo
 
 Decisión vigente:
@@ -50,7 +48,7 @@ Decisión vigente:
 - Si un empleado no está autorizado para la sucursal del dispositivo, no debe poder operar allí.
 - SQLite/offline/outbox permanecen asociados a la sucursal del dispositivo.
 
-La base admite varias asignaciones mediante `branch_members`, pero la gestión Admin actual conserva una sola asignación activa. Ver `CURRENT_STATE.md`.
+La gestión Admin conserva varias asignaciones activas mediante `branch_members`.
 
 ## Filosofía UX
 

@@ -70,6 +70,7 @@ export interface Database {
       profiles: {
         Row: {
           id: string;
+          auth_user_id: string | null;
           display_name: string;
           active: boolean;
           created_at: Timestamp;
@@ -77,6 +78,7 @@ export interface Database {
         };
         Insert: {
           id: string;
+          auth_user_id?: string | null;
           display_name: string;
           active?: boolean;
           created_at?: Timestamp;
@@ -827,9 +829,29 @@ export interface Database {
         Args: { p_email: string; p_display_name: string; p_role_key: string; p_branch_id: string | null; p_status?: "INVITED" | "ACTIVE" | "DISABLED" };
         Returns: string;
       };
+      create_pos_employee: {
+        Args: {
+          p_display_name: string;
+          p_pin: string;
+          p_branch_ids: string[];
+          p_rate_cents_per_hour: number;
+          p_rate_valid_from_local: string;
+          p_status?: "ACTIVE" | "DISABLED";
+        };
+        Returns: string;
+      };
+      update_pos_employee: {
+        Args: {
+          p_employee_id: string;
+          p_display_name: string;
+          p_branch_ids: string[];
+          p_status: "INVITED" | "ACTIVE" | "DISABLED";
+        };
+        Returns: undefined;
+      };
       list_organization_members: {
         Args: Record<never, never>;
-        Returns: { profile_id: string; display_name: string; email: string; role_key: string; status: "INVITED" | "ACTIVE" | "DISABLED"; branch_id: string | null; branch_name: string | null }[];
+        Returns: { profile_id: string; display_name: string; email: string | null; auth_linked: boolean; role_key: string; status: "INVITED" | "ACTIVE" | "DISABLED"; branch_id: string | null; branch_name: string | null; branch_ids: string[]; branch_names: string[] }[];
       };
       set_pos_device_status: {
         Args: { p_device_id: string; p_status: "ACTIVE" | "DISABLED" };

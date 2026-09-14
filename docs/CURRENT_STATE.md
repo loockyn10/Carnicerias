@@ -13,21 +13,7 @@ Estado verificado contra el repositorio el 14 de septiembre de 2026. Las decisio
 
 ## Contradicciones vigentes
 
-### 1. Empleado POS depende de Supabase Auth
-
-La decisión vigente define un empleado interno creado desde Admin, sin cuenta Supabase Auth individual.
-
-La implementación actual usa `profiles` + `organization_members` + `branch_members`, y `profiles.id` es una FK obligatoria a `auth.users.id`. Para crear un empleado, el Admin todavía exige crear y confirmar primero el usuario Auth y asociarlo por email.
-
-Estado: **contradicción confirmada; P0**.
-
-### 2. Admin single-branch frente a DB many-to-many
-
-`branch_members` permite varias sucursales por perfil. Sin embargo, `manage_existing_member` y el formulario Admin reciben una sola sucursal y desactivan las demás asignaciones.
-
-Estado: **contradicción confirmada; P0/P1**.
-
-### 3. Soporte `UNIT` incompleto en POS
+### Soporte `UNIT` incompleto en POS
 
 El dominio, pricing, snapshots y analytics contemplan `UNIT`. El catálogo operativo del POS y los RPC de venta actualmente trabajan sólo con `WEIGHT`, gramos y precio/kg.
 
@@ -35,6 +21,9 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 
 ## Empleados, operador y sucursal
 
+- Los empleados POS se crean desde Admin como perfiles internos sin cuenta Supabase Auth, con nombre, PIN, tarifa inicial, estado y una o varias sucursales en una transacción.
+- `profiles.auth_user_id` es opcional; los UUID existentes se preservan y una baja de Auth sólo desvincula la cuenta, sin borrar la identidad ni su historia.
+- Los operadores históricos que ya tenían Auth siguen siendo compatibles. La asociación por email se conserva para accesos administrativos existentes.
 - El dispositivo POS queda ligado a una organización y sucursal; cambiar operador no cambia sucursal.
 - El roster incluye perfiles y memberships activos autorizados para esa sucursal.
 - PIN servidor con bcrypt mediante `pgcrypto`.
@@ -42,6 +31,7 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 - Cinco fallos generan bloqueo de cinco minutos.
 - Los grants se ligan a dispositivo, sucursal y empleado, tienen vencimiento y se revocan al desactivar al empleado.
 - La desactivación conserva ventas, turnos y auditoría; no existe hard-delete en Admin.
+- El roster, PIN, grants y branch isolation aceptan identidades internas usando el mismo `profileId`; SQLite y el outbox no requieren cambios.
 - Ventas y movimientos quedan atribuidos al operador seleccionado.
 - Después de reiniciar, la sesión/autorización del dispositivo puede persistir, pero debe seleccionarse operador e ingresar PIN nuevamente.
 - No existe una operación explícita para eliminar/resetear el PIN sin reemplazarlo.
@@ -153,6 +143,7 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 19. `202609130019_harden_pos_operator_authorization.sql`
 20. `202609130020_audit_employee_deactivation.sql`
 21. `202609130021_review_stale_offline_clockins.sql`
+22. `202609140022_internal_pos_employees.sql`
 
 ### SQLite POS
 
@@ -165,13 +156,14 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 
 ### Estado remoto
 
-`REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero la auditoría no tuvo un token disponible para ejecutar `migration list --linked` o el lint remoto. No afirmar que 001–021 están aplicadas hasta comprobarlo autenticadamente.
+`REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero no se ejecutó `migration list --linked` ni se aplicó la migración 022 al remoto. No afirmar que 001–022 están aplicadas hasta comprobarlo autenticadamente.
 
-## Validación de auditoría
+## Validación actual
 
 - Admin typecheck/lint/build: OK.
 - POS typecheck/lint/build web: OK.
 - Vitest: 32 tests OK.
 - Rust: 3 tests OK.
-- Tauri desktop completo: no ejecutado en la auditoría.
-- pgTAP/SQL remoto: no ejecutado.
+- Tauri desktop completo: no ejecutado.
+- La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
+- SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.

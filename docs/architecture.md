@@ -38,7 +38,7 @@ El pull de catálogo usa cursor monotónico y `removedProductIds`. Configuració
 
 La sesión/autorización del dispositivo puede persistir. Después de reiniciar debe exigirse nuevamente selección de operador y PIN; no se restaura automáticamente el operador activo.
 
-## Identidad de operador: objetivo y estado actual
+## Identidad de operador
 
 Arquitectura objetivo:
 
@@ -46,9 +46,9 @@ Arquitectura objetivo:
 2. empleado interno autorizado para una o varias sucursales;
 3. operador activo autenticado con PIN.
 
-El empleado POS normal no debe requerir cuenta Supabase Auth individual. El Admin web continúa usando Supabase Auth.
+El empleado POS normal no requiere cuenta Supabase Auth individual. `profiles` conserva la identidad operativa y sus UUID históricos; `auth_user_id` es un vínculo opcional para identidades que sí acceden mediante Supabase Auth. El Admin web continúa usando Auth y crea empleados internos mediante RPCs transaccionales sin credenciales administrativas en el cliente.
 
-**Contradicción actual:** el esquema representa al empleado con `profiles` + `organization_members` + `branch_members`, y `profiles.id` depende obligatoriamente de `auth.users.id`. Además, aunque `branch_members` admite múltiples sucursales, la RPC y el formulario Admin actuales conservan sólo una asignación activa. Resolver ambas diferencias es trabajo prioritario, sin romper referencias históricas.
+`branch_members` conserva una o varias asignaciones por empleado. Desactivar una membresía revoca los grants vigentes y la excluye del roster, pero no elimina el perfil, las asignaciones ni las referencias históricas. El contrato POS/SQLite continúa usando el mismo `profileId`, por lo que el desacople no requiere migración local ni altera eventos outbox existentes.
 
 ## Seguridad del operador
 
@@ -88,7 +88,7 @@ Productos legacy con precio vigente siguen vendiéndose aunque todavía no tenga
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–021 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–022 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
 
 ## PWA y balanza
 

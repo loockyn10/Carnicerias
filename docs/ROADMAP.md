@@ -1,14 +1,10 @@
 # Roadmap
 
-## Ahora — Identidad operativa
-
-Alinear empleados POS con el modelo interno sin Auth individual y habilitar varias sucursales por empleado, preservando toda referencia histórica y la sucursal fija del dispositivo.
-
-## Después — Estabilización
+## Ahora — Estabilización
 
 Medir performance autenticada en producción, corregir únicamente cuellos demostrados y completar el piloto real de ventas, offline/reconnect, operadores, timekeeping, reposición, rendiciones y rentabilidad.
 
-## Siguiente — Admin PWA
+## Después — Admin PWA
 
 Agregar instalación formal y modo standalone sin convertir el Admin en offline-first ni cachear agresivamente datos vivos.
 

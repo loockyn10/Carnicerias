@@ -15,20 +15,19 @@ pnpm exec supabase db lint --linked --level warning --fail-on error
 pnpm exec supabase test db --linked supabase/tests/operational_pilot.test.sql
 pnpm exec supabase test db --linked supabase/tests/online_pos.test.sql
 pnpm exec supabase test db --linked supabase/tests/offline_sync.test.sql
+pnpm exec supabase test db --linked supabase/tests/internal_pos_employees.test.sql
 ```
 
 Los comandos `--linked` requieren autenticación Supabase. Después, desplegar el Admin con sus variables públicas. No usar `service_role`.
 
-## Alta de empleados: limitación actual
+## Alta de empleados
 
-1. Crear y confirmar el usuario en Supabase Dashboard → Authentication → Users.
-2. Entrar al Admin con un administrador.
-3. Abrir **Empleados** y asociar el email exacto, nombre, rol, estado y sucursal.
-4. Enrolar/autenticar el dispositivo y seleccionar al empleado mediante PIN en el POS.
+1. Entrar al Admin con un administrador.
+2. Abrir **Empleados** y cargar nombre, PIN, tarifa inicial, estado y una o varias sucursales.
+3. Enrolar/autenticar el dispositivo en su sucursal fija.
+4. Sincronizar y seleccionar al empleado mediante PIN en el POS.
 
-La asociación se ejecuta con una RPC admin-only. El navegador no recibe una clave privilegiada.
-
-Este flujo refleja la implementación actual, pero contradice D-004: el modelo objetivo debe permitir crear empleados POS internos sin Auth individual. No consolidar este workaround como arquitectura definitiva.
+El alta se ejecuta de forma transaccional con una RPC admin-only. El navegador no recibe una clave privilegiada y el empleado no necesita una cuenta Supabase Auth.
 
 ## Smoke test del piloto
 
@@ -38,7 +37,7 @@ Este flujo refleja la implementación actual, pero contradice D-004: el modelo o
 4. Registrar una recepción de 25 kg, con o sin proveedor, y comprobar el stock derivado.
 5. Registrar una merma de 1,2 kg con motivo y comprobar el historial.
 6. Informar un conteo físico distinto y comprobar el ajuste firmado.
-7. Asociar un usuario Auth como employee de Sucursal Centro.
+7. Crear un empleado POS interno con PIN, tarifa y acceso a Sucursal Centro.
 8. Iniciar sesión en el POS y comprobar que sólo ve Centro y el precio vigente.
 9. Completar una venta online y comprobarla en Ventas y Dashboard.
 10. Desconectar Internet, completar otra venta, reiniciar el POS y comprobar que sigue pendiente.

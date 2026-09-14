@@ -2,22 +2,6 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
-## P0 — Desacoplar Employee POS de Supabase Auth
-
-- Crear empleados internos desde Admin con nombre, PIN, tarifa, estado y sucursales.
-- Eliminar la dependencia obligatoria de una cuenta Auth individual para operadores normales.
-- Preservar IDs y referencias históricas de ventas, stock, turnos, tarifas y auditoría.
-- Mantener Auth para administradores y la autorización separada del dispositivo.
-- Migrar incrementalmente, sin hard-delete ni pérdida de outbox/offline.
-
-## P0/P1 — Múltiples sucursales por empleado
-
-- Adaptar RPC y Admin para administrar varias asignaciones activas sobre `branch_members`.
-- Mantener la sucursal operativa determinada por el dispositivo.
-- Verificar roster, grants, desactivación y branch isolation.
-
-Esta tarea puede resolverse junto con el desacople de Auth si la migración resultante sigue siendo acotada y segura.
-
 ## P1 — Performance Admin con evidencia de producción
 
 - Medir rutas autenticadas en Vercel con la instrumentación existente.

@@ -17,6 +17,13 @@ function optionalId(formData: FormData, key: string) {
   return text(formData, key) || null;
 }
 
+function ids(formData: FormData, key: string) {
+  return formData.getAll(key)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function decimal(value: string, label: string) {
   const parsed = Number(value.replace(",", "."));
   if (!Number.isFinite(parsed)) throw new Error(`${label} inválido`);
@@ -340,6 +347,32 @@ export async function manageMemberAction(formData: FormData) {
   revalidatePath("/admin/employees");
 }
 
+export async function createPosEmployeeAction(formData: FormData) {
+  const pin = text(formData, "pin");
+  if (!/^\d{4,6}$/.test(pin)) throw new Error("El PIN debe tener entre 4 y 6 dígitos");
+  await rpcOrThrow("create_pos_employee", {
+    p_display_name: text(formData, "display_name"),
+    p_pin: pin,
+    p_branch_ids: ids(formData, "branch_ids"),
+    p_rate_cents_per_hour: parsePesosToCents(text(formData, "rate")),
+    p_rate_valid_from_local: text(formData, "rate_valid_from"),
+    p_status: text(formData, "status") as "ACTIVE" | "DISABLED"
+  });
+  revalidatePath("/admin/employees");
+  revalidatePath("/admin/timekeeping");
+}
+
+export async function updatePosEmployeeAction(formData: FormData) {
+  await rpcOrThrow("update_pos_employee", {
+    p_employee_id: text(formData, "employee_id"),
+    p_display_name: text(formData, "display_name"),
+    p_branch_ids: ids(formData, "branch_ids"),
+    p_status: text(formData, "status") as "INVITED" | "ACTIVE" | "DISABLED"
+  });
+  revalidatePath("/admin/employees");
+  revalidatePath("/admin/timekeeping");
+}
+
 export async function setEmployeePinAction(formData: FormData) {
   const pin = text(formData, "pin");
   if (!/^\d{4,6}$/.test(pin)) throw new Error("El PIN debe tener entre 4 y 6 dígitos");
@@ -350,7 +383,7 @@ export async function setEmployeePinAction(formData: FormData) {
 export async function setHourlyRateAction(formData: FormData) {
   await rpcOrThrow("set_employee_hourly_rate", {
     p_employee_id: text(formData, "employee_id"),
-    p_rate_cents_per_hour: pesosToCents(text(formData, "rate")),
+    p_rate_cents_per_hour: parsePesosToCents(text(formData, "rate")),
     p_valid_from_local: text(formData, "valid_from")
   });
   revalidatePath("/admin/timekeeping");
