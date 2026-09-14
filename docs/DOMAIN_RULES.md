@@ -182,6 +182,7 @@ No asumir que “más vendido” = “más rentable”.
 ## Control horario
 
 - el empleado marca entrada/salida;
+- después del PIN, un empleado sin turno debe marcar entrada antes de operar normalmente;
 - no escribe horas manualmente;
 - online: hora autoritativa del servidor;
 - offline: registrar hora local + origen offline + posterior sync;
@@ -191,6 +192,9 @@ No asumir que “más vendido” = “más rentable”.
 - pasa a revisión;
 - Admin corrige salida con motivo;
 - corrección queda auditada.
+- salir del operador o cerrar normalmente la ventana con un turno abierto registra primero el clock-out en SQLite/outbox y no cierra la sesión Auth del dispositivo;
+- esa salida local es idempotente: repetir el cierre no crea dos clock-outs;
+- crash, kill forzado o corte eléctrico no garantizan ejecutar lógica de cierre y no autorizan a inventar una hora de salida.
 
 Limitación no prioritaria: si un clock-out offline excede el límite, es deseable conservar en el futuro el timestamp/intento como evidencia aunque el turno permanezca `REQUIRES_REVIEW`.
 

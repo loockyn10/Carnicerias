@@ -56,6 +56,15 @@ function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
 }
 
+function formatShiftTime(timestamp: string): string {
+  return new Date(timestamp).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatWorkedDuration(clockInAt: string, currentTime: number): string {
+  const totalMinutes = Math.max(0, Math.floor((currentTime - new Date(clockInAt).getTime()) / 60_000));
+  return `${String(Math.floor(totalMinutes / 60))} h ${String(totalMinutes % 60)} min`;
+}
+
 function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -120,7 +129,7 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void 
   );
 }
 
-function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => void }) {
+function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => Promise<void> }) {
   const [selected, setSelected] = useState(operators[0]?.profileId ?? ""); const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   useEffect(() => { if (!selected && operators[0]) setSelected(operators[0].profileId); }, [operators, selected]);
@@ -133,8 +142,8 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
         if (verifyError) throw verifyError;
         const verified = data as unknown as { ok: boolean; message?: string; profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string };
         if (!verified.ok) throw new Error(verified.message ?? "PIN incorrecto");
-        onAuthenticated(await localDatabase.cacheVerifiedOperator(verified, pin));
-      } else onAuthenticated(await localDatabase.verifyLocalOperator(selected, pin));
+        await onAuthenticated(await localDatabase.cacheVerifiedOperator(verified, pin));
+      } else await onAuthenticated(await localDatabase.verifyLocalOperator(selected, pin));
       setPin("");
     } catch (loginError) { setError(loginError instanceof Error ? loginError.message : "No se pudo validar el PIN"); }
     finally { setBusy(false); }
@@ -172,9 +181,13 @@ export default function App() {
   const [operators, setOperators] = useState<OperatorRosterRow[]>([]);
   const [operator, setOperator] = useState<LocalOperator | null>(null);
   const [shift, setShift] = useState<LocalShift | null>(null);
+  const [clockInRequired, setClockInRequired] = useState(false);
+  const [exitModalOpen, setExitModalOpen] = useState(false);
+  const [shiftNow, setShiftNow] = useState(() => Date.now());
   const shiftInFlight = useRef(false);
   const saleInFlight = useRef(false);
-  const syncInFlight = useRef(false);
+  const syncPromiseRef = useRef<Promise<void> | null>(null);
+  const closeInFlight = useRef(false);
   const syncRunnerRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>({
     state: navigator.onLine ? "online" : "offline",
@@ -225,9 +238,13 @@ export default function App() {
         const remote = data as unknown as Omit<LocalShift, "employeeId">;
         current = { ...remote, employeeId: active.profileId };
         await localDatabase.applyServerShift(current);
-      } else { await localDatabase.clearReconciledShift(active.profileId); current = null; }
+      } else {
+        await localDatabase.clearReconciledShift(active.profileId);
+        current = await localDatabase.currentShift(active.profileId);
+      }
     }
     setShift(current);
+    return current;
   }, [desktop, localRuntime?.deviceId, user?.offline]);
 
   useEffect(() => {
@@ -447,23 +464,28 @@ export default function App() {
   }, [branchId, desktop, localRuntime?.catalogCursor]);
 
   const runSync = useCallback(async () => {
-    if (!desktop || !user || user.offline || !localRuntime?.branchId || syncInFlight.current) return;
-    syncInFlight.current = true;
-    try {
-      const runtime = await synchronizeDesktop(user, setSyncStatus);
-      setLocalRuntime(runtime);
-      const config = await localDatabase.commercialConfig();
-      setCashDiscountBps(config.cashDiscountBps);
-      setDiscounts(config.discounts);
-      setAnnouncements(config.announcements);
-      setOutboxSummary(await localDatabase.outboxSummary());
-      setOperators(await localDatabase.operators());
-      if (operator) await loadShift(operator);
-    } catch (syncError) {
-      setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
-      setError(syncError instanceof Error ? syncError.message : String(syncError));
-    } finally {
-      syncInFlight.current = false;
+    if (!desktop || !user || user.offline || !localRuntime?.branchId) return;
+    if (syncPromiseRef.current) return syncPromiseRef.current;
+    const syncPromise = (async () => {
+      try {
+        const runtime = await synchronizeDesktop(user, setSyncStatus);
+        setLocalRuntime(runtime);
+        const config = await localDatabase.commercialConfig();
+        setCashDiscountBps(config.cashDiscountBps);
+        setDiscounts(config.discounts);
+        setAnnouncements(config.announcements);
+        setOutboxSummary(await localDatabase.outboxSummary());
+        setOperators(await localDatabase.operators());
+        if (operator) await loadShift(operator);
+      } catch (syncError) {
+        setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
+        setError(syncError instanceof Error ? syncError.message : String(syncError));
+      }
+    })();
+    syncPromiseRef.current = syncPromise;
+    try { await syncPromise; }
+    finally {
+      if (syncPromiseRef.current === syncPromise) syncPromiseRef.current = null;
     }
   }, [desktop, loadShift, localRuntime?.branchId, operator, user]);
 
@@ -508,6 +530,44 @@ export default function App() {
       window.removeEventListener("online", handleOnline);
     };
   }, [desktop, user?.id, user?.offline]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      const appWindow = getCurrentWindow();
+      const stopListening = await appWindow.onCloseRequested(async (event) => {
+        if (closeInFlight.current) return;
+        closeInFlight.current = true;
+        try {
+          await localDatabase.closeActiveOperatorShift();
+          if (navigator.onLine) {
+            await Promise.race([
+              syncRunnerRef.current(),
+              new Promise<void>((resolve) => window.setTimeout(resolve, 1_500))
+            ]);
+          }
+        } catch (closeError) {
+          event.preventDefault();
+          closeInFlight.current = false;
+          setError(closeError instanceof Error ? closeError.message : "No se pudo guardar la salida antes de cerrar");
+        }
+      });
+      if (disposed) stopListening();
+      else unlisten = stopListening;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [desktop]);
+
+  useEffect(() => {
+    if (!exitModalOpen || shift?.status !== "OPEN") return;
+    const interval = window.setInterval(() => setShiftNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [exitModalOpen, shift?.status]);
 
   async function bindDevice() {
     if (!desktop || !localRuntime || !user || user.offline || !branchId) return;
@@ -723,20 +783,53 @@ export default function App() {
   }
 
   async function selectOperator(active: LocalOperator) {
-    setOperator(active); setError(null);
-    try { await loadShift(active); } catch (shiftError) { setError(shiftError instanceof Error ? shiftError.message : "No se pudo recuperar el turno"); }
-  }
-
-  async function changeOperator() {
-    if (shift?.status === "OPEN") {
-      const finish = window.confirm("Este empleado tiene un turno activo. Aceptar marca salida; Cancelar cambia solamente de empleado.");
-      if (finish) await recordTime("CLOCK_OUT");
+    setError(null);
+    try {
+      const currentShift = await loadShift(active);
+      setOperator(active);
+      setClockInRequired(!currentShift);
+    } catch (shiftError) {
+      await localDatabase.clearActiveOperator().catch(() => undefined);
+      throw new Error(shiftError instanceof Error ? shiftError.message : "No se pudo recuperar el turno");
     }
-    await localDatabase.clearActiveOperator(); setOperator(null); setShift(null); setTicket([]);
   }
 
-  async function recordTime(action: "CLOCK_IN" | "CLOCK_OUT") {
-    if (!operator || !localRuntime || shiftInFlight.current) return;
+  async function finishOperatorSession() {
+    if (!operator || shiftInFlight.current) return;
+    shiftInFlight.current = true;
+    setError(null);
+    try {
+      const result = await localDatabase.closeActiveOperatorShift();
+      setExitModalOpen(false);
+      setClockInRequired(false);
+      setOperator(null);
+      setShift(null);
+      setTicket([]);
+      setLocalRuntime(await localDatabase.runtime());
+      if (result.clockOutCreated) {
+        setNotice("Salida registrada");
+        void runSync();
+      } else if (result.shift?.status === "REQUIRES_REVIEW") {
+        setNotice("El turno continúa pendiente de revisión administrativa");
+      }
+    } catch (exitError) {
+      setError(exitError instanceof Error ? exitError.message : "No se pudo finalizar la sesión del operador");
+    } finally {
+      shiftInFlight.current = false;
+    }
+  }
+
+  function requestOperatorExit() {
+    if (shift?.status === "OPEN") {
+      setShiftNow(Date.now());
+      setExitModalOpen(true);
+      return;
+    }
+    void finishOperatorSession();
+  }
+
+  async function recordTime(action: "CLOCK_IN" | "CLOCK_OUT"): Promise<LocalShift | null> {
+    if (!operator || !localRuntime || shiftInFlight.current) return null;
     shiftInFlight.current = true; setError(null);
     try {
       let updated: LocalShift;
@@ -748,9 +841,14 @@ export default function App() {
         await localDatabase.applyServerShift(updated);
       } else updated = await localDatabase.recordOfflineTimeEvent(action);
       setShift(updated.status === "CLOSED" ? null : updated);
+      if (action === "CLOCK_IN" && updated.status === "OPEN") setClockInRequired(false);
       setNotice(action === "CLOCK_IN" ? "Entrada registrada" : updated.status === "REQUIRES_REVIEW" ? "El turno requiere revisión administrativa" : "Salida registrada");
       if (!navigator.onLine) setLocalRuntime(await localDatabase.runtime());
-    } catch (timeError) { setError(timeError instanceof Error ? timeError.message : "No se pudo registrar el fichaje"); }
+      return updated;
+    } catch (timeError) {
+      setError(timeError instanceof Error ? timeError.message : "No se pudo registrar el fichaje");
+      return null;
+    }
     finally { shiftInFlight.current = false; }
   }
 
@@ -763,7 +861,7 @@ export default function App() {
   const activeBranch = branches.find((branch) => branch.id === branchId);
   const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";
   if (desktop && localRuntime?.deviceStatus === "ACTIVE" && localRuntime.branchId && !operator) {
-    return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={(active) => void selectOperator(active)} operators={operators} />;
+    return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={selectOperator} operators={operators} />;
   }
   const syncLabel = syncStatus.state === "syncing" && syncStatus.syncingTotal > 0
     ? `SINCRONIZANDO · ${String(syncStatus.syncingCurrent)} de ${String(syncStatus.syncingTotal)}`
@@ -783,7 +881,6 @@ export default function App() {
           <p className="text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
         </div>
         <div className="flex items-center gap-3">
-          {desktop && operator ? <><div className={`rounded-xl px-3 py-2 text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-200"}`}><strong>{operator.displayName}</strong><span className="ml-2">{shift?.status === "OPEN" ? `Entrada ${new Date(shift.clockInAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}` : shift?.status === "REQUIRES_REVIEW" ? "⚠ Turno a revisar" : "Sin turno"}</span><button className="ml-3 font-black text-rose-300" disabled={shiftInFlight.current || shift?.status === "REQUIRES_REVIEW"} onClick={() => void recordTime(shift?.status === "OPEN" ? "CLOCK_OUT" : "CLOCK_IN")}>{shift?.status === "OPEN" ? "Marcar salida" : "Marcar entrada"}</button></div><button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => void changeOperator()}>Cambiar empleado</button></> : null}
           <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}>Ventas recientes</button>
           {desktop ? (
             <button
@@ -806,14 +903,19 @@ export default function App() {
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           ) : null}
-          <div className="text-right text-xs text-stone-400">
-            <p className="font-semibold text-stone-200">{operator?.displayName ?? roleName}</p>
-            <p>{shift?.status === "OPEN" ? `Turno iniciado ${new Date(shift.clockInAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}` : shift?.status === "REQUIRES_REVIEW" ? "⚠ Turno pendiente de revisión" : operator ? "Sin turno activo" : user.email}</p>
-          </div>
-          {desktop && operator ? <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" disabled={shiftInFlight.current || shift?.status === "REQUIRES_REVIEW"} onClick={() => void recordTime(shift?.status === "OPEN" ? "CLOCK_OUT" : "CLOCK_IN")}>{shift?.status === "OPEN" ? "Marcar salida" : "Marcar entrada"}</button> : null}
-          {desktop && operator ? <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => void changeOperator()}>Cambiar empleado</button> : null}
-          <button className="rounded-xl border border-stone-700 px-3 py-2 font-semibold hover:bg-stone-800" onClick={() => void logout()}>Salir</button>
-          {desktop && operator ? <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-bold hover:bg-stone-800" onClick={() => void changeOperator()}>Cambiar empleado</button> : null}
+          {desktop && operator ? (
+            <div className={`min-w-32 rounded-xl px-3 py-2 text-right text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-300"}`}>
+              <p className="font-black text-stone-100">{operator.displayName}</p>
+              <p>{shift?.status === "OPEN" ? `Turno desde ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? "Turno a revisar" : "Sin turno"}</p>
+            </div>
+          ) : (
+            <div className="text-right text-xs text-stone-400"><p className="font-semibold text-stone-200">{roleName}</p><p>{user.email}</p></div>
+          )}
+          {desktop && operator ? (
+            <button className="rounded-xl border border-stone-700 px-4 py-2 text-xs font-black hover:bg-stone-800 disabled:opacity-50" disabled={shiftInFlight.current} onClick={requestOperatorExit}>Salir</button>
+          ) : !desktop || deviceNeedsBinding ? (
+            <button className="rounded-xl border border-stone-700 px-3 py-2 font-semibold hover:bg-stone-800" onClick={() => void logout()}>Cerrar sesión</button>
+          ) : null}
         </div>
       </header>
 
@@ -912,6 +1014,36 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      {clockInRequired && operator ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-in-title">
+          <section className="w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 text-center shadow-2xl">
+            <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Inicio de turno</p>
+            <h2 className="mt-2 text-3xl font-black" id="clock-in-title">Marcar entrada</h2>
+            <p className="mt-4 text-stone-300">Estás ingresando como <strong className="text-stone-100">{operator.displayName}</strong>.</p>
+            {error ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}
+            <button className="mt-6 w-full rounded-xl bg-rose-600 px-5 py-4 text-lg font-black hover:bg-rose-500 disabled:opacity-50" disabled={shiftInFlight.current} onClick={() => void recordTime("CLOCK_IN")}>MARCAR ENTRADA</button>
+          </section>
+        </div>
+      ) : null}
+
+      {exitModalOpen && operator && shift?.status === "OPEN" ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-out-title">
+          <section className="w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 shadow-2xl">
+            <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{operator.displayName}</p>
+            <h2 className="mt-2 text-3xl font-black" id="clock-out-title">Finalizar turno</h2>
+            <dl className="mt-6 grid gap-4 rounded-2xl bg-stone-950 p-5">
+              <div className="flex items-center justify-between gap-4"><dt className="text-stone-400">Entrada</dt><dd className="font-black tabular-nums">{formatShiftTime(shift.clockInAt)}</dd></div>
+              <div className="flex items-center justify-between gap-4"><dt className="text-stone-400">Tiempo trabajado</dt><dd className="font-black tabular-nums">{formatWorkedDuration(shift.clockInAt, shiftNow)}</dd></div>
+            </dl>
+            {error ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" disabled={shiftInFlight.current} onClick={() => setExitModalOpen(false)}>Cancelar</button>
+              <button className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500 disabled:opacity-50" disabled={shiftInFlight.current} onClick={() => void finishOperatorSession()}>Marcar salida y salir</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {diagnosticsOpen && localRuntime ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">

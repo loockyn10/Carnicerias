@@ -61,6 +61,7 @@ export interface OperatorRosterRow { profileId: string; displayName: string; rol
 export interface VerifiedOperatorInput { profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string }
 export interface LocalOperator extends OperatorRosterRow { operatorToken: string | null; validUntil: string | null }
 export interface LocalShift { shiftId: string; employeeId: string; clockInAt: string; clockOutAt: string | null; clockInSource: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; clockOutSource: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION" | null; status: "OPEN" | "CLOSED" | "REQUIRES_REVIEW" }
+export interface CloseActiveOperatorResult { clockOutCreated: boolean; shift: LocalShift | null }
 
 export const isDesktopRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
@@ -89,6 +90,7 @@ export const localDatabase = {
   clearReconciledShift: (employeeId: string) => desktopVoid("clear_reconciled_local_shift", { employeeId }),
   applyServerShift: (shift: LocalShift) => desktopVoid("apply_server_shift", { shift }),
   recordOfflineTimeEvent: (action: "CLOCK_IN" | "CLOCK_OUT") => desktopOnly<LocalShift>("record_offline_time_event", { action }),
+  closeActiveOperatorShift: () => desktopOnly<CloseActiveOperatorResult>("close_active_operator_shift"),
   commercialConfig: () => desktopOnly<LocalCommercialConfig>("get_local_commercial_config"),
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),

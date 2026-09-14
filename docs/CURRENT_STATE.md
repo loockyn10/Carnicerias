@@ -46,8 +46,14 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 - Corrección Admin con motivo obligatorio y auditoría.
 - Tarifas por hora con rangos históricos; el reporte divide períodos según la tarifa vigente.
 - El turno abierto persiste después de reiniciar y se recupera cuando el operador vuelve a autenticarse.
+- Después del PIN, si no existe turno se exige marcar entrada antes de usar el POS.
+- El header presenta una sola ficha del operador y `Salir` vuelve al selector sin cerrar Auth del dispositivo.
+- `Salir` y el cierre normal de la ventana persisten un clock-out local/outbox idempotente antes de intentar sincronizar; repetir el cierre no duplica el evento.
+- El auto-clock-out exige que el operador haya validado PIN en el proceso actual; una fila local residual después de un crash no genera una salida al cerrar antes de reautenticarse.
 
 Limitación conocida no prioritaria: un clock-out offline fuera de límite deja el turno en revisión, pero el intento/timestamp rechazado no se conserva como evidencia independiente.
+
+Limitación de plataforma: la versión TAO usada por Tauri no procesa actualmente `WM_QUERYENDSESSION` en Windows. El cierre normal de la ventana está cubierto, pero shutdown, kill forzado, crash o corte eléctrico no garantizan ejecutar el handler; esos turnos permanecen abiertos y siguen el flujo `REQUIRES_REVIEW` sin inventar una salida.
 
 ## Pricing, pagos y promociones
 
@@ -162,8 +168,8 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 
 - Admin typecheck/lint/build: OK.
 - POS typecheck/lint/build web: OK.
-- Vitest: 32 tests OK.
-- Rust: 3 tests OK.
+- Vitest: 36 tests OK.
+- Rust: 6 tests OK.
 - Tauri desktop completo: no ejecutado.
 - La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
 - SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.

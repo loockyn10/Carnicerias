@@ -230,3 +230,13 @@ Una venta offline que sincroniza después de confirmar una rendición no recalcu
 **Status:** Active
 
 En producción, la sucursal operativa proviene del enrolamiento del dispositivo. Un selector manual sólo puede existir como herramienta de desarrollo, setup o simulación.
+
+---
+
+## D-024 — Sesión de operador ligada al fichaje
+
+**Status:** Active / implementación confirmada
+
+Después del PIN, un operador sin turno debe marcar entrada antes de operar. `Salir` termina el turno activo mediante persistencia local/outbox y vuelve al selector, sin cerrar la sesión Auth del dispositivo.
+
+El cierre normal de la ventana aplica el mismo clock-out local idempotente antes de intentar sincronizar. Un cierre abrupto o un shutdown que la plataforma no entregue al proceso no permite inventar una hora de salida; el turno abierto conserva el tratamiento `REQUIRES_REVIEW`.

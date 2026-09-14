@@ -38,6 +38,8 @@ Debe poder:
 
 El empleado POS **no requiere una cuenta Supabase Auth individual** como modelo objetivo. La identidad operativa debe ser un empleado interno creado desde Admin con nombre, PIN, una o varias sucursales, tarifa histórica y estado.
 
+Después de validar el PIN, el POS recupera el turno vigente. Si no existe uno, exige marcar entrada antes de habilitar la operación normal. Salir termina el turno activo y vuelve al selector de operador; no cierra la sesión Supabase del dispositivo.
+
 ## Sucursal y dispositivo
 
 Decisión vigente:
@@ -75,6 +77,8 @@ Principios:
 - total, pago y confirmación permanecen visibles;
 - las cards de producto no deben estirarse para rellenar altura disponible;
 - operación pensada para pocos pasos.
+- el header muestra una sola identidad de operador y una única acción `Salir`;
+- el cierre normal de la ventana persiste primero un clock-out local idempotente y lo deja en outbox antes de finalizar.
 
 ## Alcance vigente
 
