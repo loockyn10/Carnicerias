@@ -9,6 +9,7 @@ Estado verificado contra el repositorio el 14 de septiembre de 2026. Las decisio
 - Catálogo, categorías, historial de precios, historial de costos y configuración comercial.
 - Ventas, ítems, pagos y stock ledger con operaciones transaccionales.
 - POS offline-first con SQLite incremental, outbox, pull/push, retry, restart e idempotencia.
+- Distribución Windows NSIS x64 habilitada; el instalador no incluye la SQLite local de desarrollo.
 - Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
 
 ## Contradicciones vigentes

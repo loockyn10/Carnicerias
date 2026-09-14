@@ -32,6 +32,8 @@ La configuración concreta de proyecto/región Vercel está fuera del repositori
 
 El dispositivo se enrola en una organización y sucursal inmutables. La sucursal operativa no cambia al cambiar empleado. El selector manual de sucursal sólo puede usarse para desarrollo, setup o simulación, no como flujo productivo normal.
 
+La distribución Windows se genera como instalador NSIS x64 mediante `pnpm build:pos:desktop`. El bundle contiene la aplicación y sus recursos estáticos, pero no el archivo SQLite: cada equipo crea y migra su base dentro de `appData` usando el identificador estable `com.carnicerias.pos`, separado del directorio reemplazado por futuras instalaciones.
+
 Una venta se confirma primero en una transacción SQLite que persiste venta, ítems, pago, movimientos y evento outbox con UUID generados por el cliente. El push posterior usa recibos e identificadores estables para garantizar idempotencia. Los estados del outbox son `PENDING`, `SYNCING`, `SYNCED` y `FAILED`, con recuperación tras reinicio y backoff exponencial.
 
 El pull de catálogo usa cursor monotónico y `removedProductIds`. Configuración comercial y roster se sincronizan como snapshots completos. Después de sincronizar, el POS conserva catálogo, promociones, avisos, descuento por pago, autorización y operación offline dentro de sus vigencias.
