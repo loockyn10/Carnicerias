@@ -36,6 +36,10 @@ Una venta se confirma primero en una transacción SQLite que persiste venta, ít
 
 El pull de catálogo usa cursor monotónico y `removedProductIds`. Configuración comercial y roster se sincronizan como snapshots completos. Después de sincronizar, el POS conserva catálogo, promociones, avisos, descuento por pago, autorización y operación offline dentro de sus vigencias.
 
+Supabase Auth es la identidad técnica usada para aprovisionar y sincronizar el dispositivo, no la identidad del operador. La sesión técnica persistida y la autorización cacheada en SQLite permiten iniciar en el selector local; si no existe una credencial válida, la vista normal sólo informa que la caja requiere configuración. El formulario de Auth queda detrás de una acción administrativa explícita para aprovisionamiento o recuperación.
+
+La sincronización se dispara al iniciar, después de mutaciones locales, al recuperar conexión y por retry/backoff. Un polling preventivo de 60 segundos actualiza catálogo, configuración y roster; el refresco visual de duración de turno tiene su propio timer de 60 segundos y no reinstala ni ejecuta el scheduler de sync.
+
 La sesión/autorización del dispositivo puede persistir. Después de reiniciar debe exigirse nuevamente selección de operador y PIN; no se restaura automáticamente el operador activo.
 
 Después del PIN se recupera el turno local/remoto y, si falta, el fichaje de entrada bloquea el uso normal. `Salir` y el cierre normal de la ventana usan una operación SQLite idempotente que cierra el turno, agrega el evento `SHIFT` al outbox y limpia el operador activo antes de intentar red. La sincronización puede ser best-effort durante el cierre; nunca es condición para terminar la aplicación.

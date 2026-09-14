@@ -159,18 +159,18 @@ describe("desktop synchronization status", () => {
     expect(mocks.rpc).toHaveBeenCalledTimes(3);
   });
 
-  it("runs once at startup and only on the intentional polling cadence during one idle minute", async () => {
+  it("runs once at startup and only once more after one idle minute", async () => {
     vi.useFakeTimers();
     const runSync = vi.fn(() => Promise.resolve());
     const stop = startBackgroundSyncPolling(runSync);
 
     expect(runSync).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(BACKGROUND_SYNC_INTERVAL_MS).toBe(10_000);
-    expect(runSync).toHaveBeenCalledTimes(7);
+    expect(BACKGROUND_SYNC_INTERVAL_MS).toBe(60_000);
+    expect(runSync).toHaveBeenCalledTimes(2);
 
     stop();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(runSync).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSync).toHaveBeenCalledTimes(2);
   });
 });

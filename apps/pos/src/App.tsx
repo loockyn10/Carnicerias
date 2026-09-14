@@ -52,6 +52,8 @@ const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: "OTHER", label: "Otro" }
 ];
 
+const SHIFT_DURATION_REFRESH_MS = 60_000;
+
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
 }
@@ -65,7 +67,7 @@ function formatWorkedDuration(clockInAt: string, currentTime: number): string {
   return `${String(Math.floor(totalMinutes / 60))} h ${String(totalMinutes % 60)} min`;
 }
 
-function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
+function DeviceProvisioningLogin({ onAuthenticated, onCancel }: { onAuthenticated: (user: AuthUser) => void; onCancel: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -89,9 +91,9 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void 
   return (
     <main className="grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
       <section className="w-full max-w-md rounded-3xl border border-stone-800 bg-stone-900 p-8 shadow-2xl">
-        <p className="text-sm font-bold uppercase tracking-[0.22em] text-rose-400">Carnicerías · POS</p>
-        <h1 className="mt-3 text-4xl font-black">Abrir caja</h1>
-        <p className="mt-3 text-stone-400">Ingresá con tu usuario autorizado de Supabase.</p>
+        <p className="text-sm font-bold uppercase tracking-[0.22em] text-rose-400">Configuración administrativa</p>
+        <h1 className="mt-3 text-4xl font-black">Autorizar esta caja</h1>
+        <p className="mt-3 text-stone-400">Acceso exclusivo para configurar la identidad técnica del dispositivo.</p>
         {error ? <p className="mt-5 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}
         <form className="mt-7 grid gap-5" onSubmit={(event) => void submit(event)}>
           <label className="grid gap-2 text-sm font-semibold text-stone-300">
@@ -121,9 +123,23 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void 
             disabled={loading}
             type="submit"
           >
-            {loading ? "Ingresando…" : "Ingresar al POS"}
+            {loading ? "Autorizando…" : "Autorizar dispositivo"}
           </button>
+          <button className="rounded-xl border border-stone-700 px-5 py-3 font-bold hover:bg-stone-800" onClick={onCancel} type="button">Volver</button>
         </form>
+      </section>
+    </main>
+  );
+}
+
+function DeviceSetupRequired({ onConfigure }: { onConfigure: () => void }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
+      <section className="w-full max-w-lg rounded-3xl border border-amber-800 bg-stone-900 p-8 text-center shadow-2xl">
+        <p className="text-sm font-bold uppercase tracking-[0.22em] text-amber-400">Caja no autorizada</p>
+        <h1 className="mt-3 text-3xl font-black">Esta caja necesita ser configurada.</h1>
+        <p className="mt-4 text-lg text-stone-300">Contactá al administrador.</p>
+        <button className="mt-8 rounded-xl border border-stone-700 px-5 py-3 text-sm font-bold text-stone-300 hover:bg-stone-800" onClick={onConfigure} type="button">Configuración administrativa</button>
       </section>
     </main>
   );
@@ -155,6 +171,7 @@ export default function App() {
   const desktop = isDesktopRuntime();
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [provisioningOpen, setProvisioningOpen] = useState(false);
   const [roleName, setRoleName] = useState("");
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
@@ -565,7 +582,7 @@ export default function App() {
 
   useEffect(() => {
     if (!exitModalOpen || shift?.status !== "OPEN") return;
-    const interval = window.setInterval(() => setShiftNow(Date.now()), 1_000);
+    const interval = window.setInterval(() => setShiftNow(Date.now()), SHIFT_DURATION_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [exitModalOpen, shift?.status]);
 
@@ -856,7 +873,20 @@ export default function App() {
     return <main className="grid min-h-screen place-items-center bg-stone-950 text-stone-300">Cargando sesión…</main>;
   }
 
-  if (!user) return <Login onAuthenticated={setUser} />;
+  if (!user) {
+    if (provisioningOpen) {
+      return (
+        <DeviceProvisioningLogin
+          onAuthenticated={(authenticatedUser) => {
+            setProvisioningOpen(false);
+            setUser(authenticatedUser);
+          }}
+          onCancel={() => setProvisioningOpen(false)}
+        />
+      );
+    }
+    return <DeviceSetupRequired onConfigure={() => setProvisioningOpen(true)} />;
+  }
 
   const activeBranch = branches.find((branch) => branch.id === branchId);
   const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";

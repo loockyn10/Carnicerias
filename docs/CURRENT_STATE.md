@@ -34,6 +34,7 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 - El roster, PIN, grants y branch isolation aceptan identidades internas usando el mismo `profileId`; SQLite y el outbox no requieren cambios.
 - Ventas y movimientos quedan atribuidos al operador seleccionado.
 - Después de reiniciar, la sesión/autorización del dispositivo puede persistir, pero debe seleccionarse operador e ingresar PIN nuevamente.
+- La pantalla diaria no solicita email ni contraseña: sin autorización técnica válida muestra el aviso de configuración y el formulario Supabase sólo se revela mediante la acción administrativa explícita.
 - No existe una operación explícita para eliminar/resetear el PIN sin reemplazarlo.
 
 ## Timekeeping
@@ -50,6 +51,7 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 - El header presenta una sola ficha del operador y `Salir` vuelve al selector sin cerrar Auth del dispositivo.
 - `Salir` y el cierre normal de la ventana persisten un clock-out local/outbox idempotente antes de intentar sincronizar; repetir el cierre no duplica el evento.
 - El auto-clock-out exige que el operador haya validado PIN en el proceso actual; una fila local residual después de un crash no genera una salida al cerrar antes de reautenticarse.
+- La duración visible usa precisión de minutos y un refresco aislado de 60 segundos; ese estado no participa de las dependencias del sync.
 
 Limitación conocida no prioritaria: un clock-out offline fuera de límite deja el turno en revisión, pero el intento/timestamp rechazado no se conserva como evidencia independiente.
 
@@ -103,6 +105,8 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - Pull incremental de catálogo con cursor y `removedProductIds`.
 - Configuración comercial y roster como snapshots completos, disponibles offline tras sincronizar.
 - Reconexión automática sin eliminar eventos pendientes.
+- Sync al iniciar, después de mutaciones locales, al reconectar y según retry/backoff; polling preventivo de catálogo/configuración/roster cada 60 segundos.
+- El estado `SINCRONIZANDO` sólo se publica cuando existe outbox vencido con trabajo real; un ciclo vacío permanece `SINCRONIZADO` y el badge reserva ancho estable.
 - Ticket fijo, footer visible, scroll interno de catálogo/ticket y cards compactas mediante filas de tamaño intrínseco.
 - Colores de categoría configurables, sincronizados a SQLite y con fallback.
 
@@ -170,6 +174,6 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 - POS typecheck/lint/build web: OK.
 - Vitest: 36 tests OK.
 - Rust: 6 tests OK.
-- Tauri desktop completo: no ejecutado.
+- Tauri desktop completo: OK.
 - La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
 - SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.

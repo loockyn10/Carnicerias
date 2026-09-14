@@ -16,7 +16,7 @@ interface SyncUser {
 
 type StatusListener = (status: SyncStatusSnapshot) => void;
 
-export const BACKGROUND_SYNC_INTERVAL_MS = 10_000;
+export const BACKGROUND_SYNC_INTERVAL_MS = 60_000;
 
 export function startBackgroundSyncPolling(runSync: () => Promise<void>): () => void {
   void runSync();
