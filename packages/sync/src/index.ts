@@ -60,6 +60,7 @@ export interface OfflineSalePayload {
   organizationId: string;
   branchId: string;
   profileId: string;
+  operatorToken?: string;
   deviceId: string;
   status: "COMPLETED";
   totalCents: string;
@@ -75,6 +76,7 @@ export interface CreateOfflineSaleInput {
   organizationId: string;
   branchId: string;
   profileId: string;
+  operatorToken?: string;
   deviceId: string;
   ticket: TicketLine[];
   paymentMethod: PaymentMethod;
@@ -82,12 +84,23 @@ export interface CreateOfflineSaleInput {
   createId?: () => string;
 }
 
+export interface OfflineTimeEventPayload {
+  schemaVersion: 1;
+  eventId: string;
+  shiftId: string;
+  employeeId: string;
+  deviceId: string;
+  operatorToken: string;
+  action: "CLOCK_IN" | "CLOCK_OUT";
+  occurredAt: string;
+}
+
 export interface OutboxRecord {
   id: string;
-  aggregateType: "SALE";
+  aggregateType: "SALE" | "SHIFT";
   aggregateId: string;
-  operation: "UPSERT";
-  payload: OfflineSalePayload;
+  operation: "UPSERT" | "EVENT";
+  payload: OfflineSalePayload | OfflineTimeEventPayload;
   status: OutboxStatus;
   attempts: number;
   createdAt: string;
@@ -166,6 +179,7 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     organizationId: input.organizationId,
     branchId: input.branchId,
     profileId: input.profileId,
+    ...(input.operatorToken ? { operatorToken: input.operatorToken } : {}),
     deviceId: input.deviceId,
     status: "COMPLETED",
     totalCents: totalCents.toString(),

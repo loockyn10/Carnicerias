@@ -15,6 +15,7 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/promotions": { title: "Promociones", description: "Descuentos y reglas comerciales." },
   "/admin/announcements": { title: "Avisos", description: "Comunicación con las sucursales." },
   "/admin/employees": { title: "Empleados", description: "Accesos y miembros de la organización." },
+  "/admin/timekeeping": { title: "Horas trabajadas", description: "Fichajes, revisiones y pago estimado por horas." },
   "/admin/devices": { title: "Dispositivos POS", description: "Terminales autorizadas para operar." },
   "/admin/audit": { title: "Auditoría", description: "Trazabilidad de los últimos eventos." },
   "/admin/attention": { title: "Centro de atención", description: "Problemas y movimientos relevantes por prioridad." }

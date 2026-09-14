@@ -1,6 +1,7 @@
 use std::{fs, sync::Mutex};
 
 use chrono::Utc;
+use argon2::Argon2;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
@@ -11,6 +12,7 @@ const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_confi
 const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_sale_snapshots.sql");
 const CASH_DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/004_cash_discount_snapshots.sql");
 const CATEGORY_COLORS_SCHEMA: &str = include_str!("../migrations/005_category_colors.sql");
+const POS_OPERATORS_TIMEKEEPING_SCHEMA: &str = include_str!("../migrations/006_pos_operators_timekeeping.sql");
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -149,6 +151,8 @@ struct OfflineSalePayload {
     organization_id: String,
     branch_id: String,
     profile_id: String,
+    #[serde(default)]
+    operator_token: Option<String>,
     device_id: String,
     status: String,
     total_cents: String,
@@ -191,7 +195,7 @@ struct OutboxRecord {
     aggregate_type: String,
     aggregate_id: String,
     operation: String,
-    payload: OfflineSalePayload,
+    payload: serde_json::Value,
     status: String,
     attempts: i64,
     created_at: String,
@@ -199,6 +203,26 @@ struct OutboxRecord {
     next_attempt_at: String,
     last_error: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorRosterRow { profile_id: String, display_name: String, role_name: String, has_pin: bool, has_shift_issue: bool }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifiedOperatorInput { profile_id: String, display_name: String, role_name: String, operator_token: String, valid_until: String }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalOperator { profile_id: String, display_name: String, role_name: String, has_pin: bool, has_shift_issue: bool, operator_token: Option<String>, valid_until: Option<String> }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalShift { shift_id: String, employee_id: String, clock_in_at: String, clock_out_at: Option<String>, clock_in_source: String, clock_out_source: Option<String>, status: String }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineTimeEvent { schema_version: i64, event_id: String, shift_id: String, employee_id: String, device_id: String, operator_token: String, action: String, occurred_at: String }
 
 fn now() -> String {
     Utc::now().to_rfc3339()
@@ -268,6 +292,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(CATEGORY_COLORS_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (5, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let timekeeping_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 6)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !timekeeping_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(POS_OPERATORS_TIMEKEEPING_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (6, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -486,6 +517,114 @@ fn set_metadata(transaction: &Transaction<'_>, key: &str, value: &str, timestamp
     Ok(())
 }
 
+fn verifier(pin: &str, salt: &str) -> Result<String, String> {
+    let mut output = [0_u8; 32];
+    Argon2::default().hash_password_into(pin.as_bytes(), salt.as_bytes(), &mut output).map_err(|error| error.to_string())?;
+    Ok(output.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[tauri::command]
+fn apply_operator_roster(state: State<'_, DatabaseState>, operators: Vec<OperatorRosterRow>, max_shift_hours: i64) -> Result<(), String> {
+    if !(1..=24).contains(&max_shift_hours) { return Err("Invalid maximum shift duration".into()); }
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    transaction.execute("update local_pos_operators set active=0,updated_at=?1", [now()]).map_err(|error| error.to_string())?;
+    for operator in operators {
+        transaction.execute(
+            "insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,updated_at) values(?1,?2,?3,?4,1,?5,?6)
+             on conflict(profile_id) do update set display_name=excluded.display_name,role_name=excluded.role_name,has_pin=excluded.has_pin,active=1,
+             has_shift_issue=excluded.has_shift_issue,pin_salt=case when excluded.has_pin=1 then local_pos_operators.pin_salt else null end,
+             pin_verifier=case when excluded.has_pin=1 then local_pos_operators.pin_verifier else null end,
+             operator_token=case when excluded.has_pin=1 then local_pos_operators.operator_token else null end,
+             grant_valid_until=case when excluded.has_pin=1 then local_pos_operators.grant_valid_until else null end,updated_at=excluded.updated_at",
+            params![operator.profile_id,operator.display_name,operator.role_name,if operator.has_pin {1} else {0},if operator.has_shift_issue {1} else {0},now()]
+        ).map_err(|error| error.to_string())?;
+    }
+    transaction.execute("delete from local_active_operator where profile_id in(select profile_id from local_pos_operators where active=0)", []).map_err(|error| error.to_string())?;
+    set_metadata(&transaction,"max_shift_hours",&max_shift_hours.to_string(),&now())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_local_operators(state: State<'_, DatabaseState>) -> Result<Vec<LocalOperator>, String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let mut statement=connection.prepare("select profile_id,display_name,role_name,has_pin,has_shift_issue,operator_token,grant_valid_until from local_pos_operators where active=1 order by display_name").map_err(|e|e.to_string())?;
+    let rows=statement.query_map([],|r|Ok(LocalOperator{profile_id:r.get(0)?,display_name:r.get(1)?,role_name:r.get(2)?,has_pin:r.get::<_,i64>(3)?==1,has_shift_issue:r.get::<_,i64>(4)?==1,operator_token:r.get(5)?,valid_until:r.get(6)?})).map_err(|e|e.to_string())?;
+    rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+}
+
+#[tauri::command]
+fn cache_verified_operator(state: State<'_, DatabaseState>, verification: VerifiedOperatorInput, pin: String) -> Result<LocalOperator, String> {
+    if !(4..=6).contains(&pin.len()) || !pin.chars().all(|character| character.is_ascii_digit()) { return Err("El PIN debe tener entre 4 y 6 dígitos".into()); }
+    let salt=Uuid::new_v4().to_string(); let hash=verifier(&pin,&salt)?; let timestamp=now();
+    let mut connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let transaction=connection.transaction().map_err(|e|e.to_string())?;
+    transaction.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,pin_salt,pin_verifier,operator_token,grant_valid_until,verified_at,failed_attempts,locked_until,updated_at) values(?1,?2,?3,1,1,0,?4,?5,?6,?7,?8,0,null,?8) on conflict(profile_id) do update set display_name=excluded.display_name,role_name=excluded.role_name,has_pin=1,active=1,pin_salt=excluded.pin_salt,pin_verifier=excluded.pin_verifier,operator_token=excluded.operator_token,grant_valid_until=excluded.grant_valid_until,verified_at=excluded.verified_at,failed_attempts=0,locked_until=null,updated_at=excluded.updated_at",params![verification.profile_id,verification.display_name,verification.role_name,salt,hash,verification.operator_token,verification.valid_until,timestamp]).map_err(|e|e.to_string())?;
+    transaction.execute("insert into local_active_operator(singleton,profile_id,selected_at) values(1,?1,?2) on conflict(singleton) do update set profile_id=excluded.profile_id,selected_at=excluded.selected_at",params![verification.profile_id,timestamp]).map_err(|e|e.to_string())?;
+    transaction.commit().map_err(|e|e.to_string())?;
+    Ok(LocalOperator{profile_id:verification.profile_id,display_name:verification.display_name,role_name:verification.role_name,has_pin:true,has_shift_issue:false,operator_token:Some(verification.operator_token),valid_until:Some(verification.valid_until)})
+}
+
+#[tauri::command]
+fn verify_local_operator(state: State<'_, DatabaseState>, profile_id: String, pin: String) -> Result<LocalOperator, String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let timestamp=now();
+    let row=connection.query_row("select display_name,role_name,has_pin,has_shift_issue,pin_salt,pin_verifier,operator_token,grant_valid_until,failed_attempts,locked_until from local_pos_operators where profile_id=?1 and active=1 and julianday(grant_valid_until)>julianday(?2)",params![profile_id,timestamp],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,i64>(8)?,r.get::<_,Option<String>>(9)?))).optional().map_err(|e|e.to_string())?.ok_or_else(||"Este empleado debe validar su PIN online nuevamente".to_string())?;
+    if row.9.as_ref().is_some_and(|until| connection.query_row("select julianday(?1)>julianday(?2)",params![until,timestamp],|r|r.get::<_,bool>(0)).unwrap_or(false)) { return Err("Demasiados intentos. Esperá unos minutos.".into()); }
+    let salt=row.4.ok_or_else(||"No hay un verificador offline para este empleado".to_string())?; let expected=row.5.ok_or_else(||"No hay un verificador offline para este empleado".to_string())?;
+    if verifier(&pin,&salt)? != expected { let failures=(row.8+1).min(20); connection.execute("update local_pos_operators set failed_attempts=?2,locked_until=case when ?2>=5 then datetime(?3,'+5 minutes') else null end,updated_at=?3 where profile_id=?1",params![profile_id,failures,timestamp]).map_err(|e|e.to_string())?; return Err(if failures>=5 {"Demasiados intentos. Esperá unos minutos."} else {"PIN incorrecto"}.into()); }
+    connection.execute("update local_pos_operators set failed_attempts=0,locked_until=null,updated_at=?2 where profile_id=?1",params![profile_id,timestamp]).map_err(|e|e.to_string())?;
+    connection.execute("insert into local_active_operator(singleton,profile_id,selected_at) values(1,?1,?2) on conflict(singleton) do update set profile_id=excluded.profile_id,selected_at=excluded.selected_at",params![profile_id,now()]).map_err(|e|e.to_string())?;
+    Ok(LocalOperator{profile_id,display_name:row.0,role_name:row.1,has_pin:row.2==1,has_shift_issue:row.3==1,operator_token:row.6,valid_until:row.7})
+}
+
+#[tauri::command]
+fn get_active_operator(state: State<'_, DatabaseState>) -> Result<Option<LocalOperator>, String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    connection.query_row("select o.profile_id,o.display_name,o.role_name,o.has_pin,o.has_shift_issue,o.operator_token,o.grant_valid_until from local_active_operator a join local_pos_operators o on o.profile_id=a.profile_id where a.singleton=1 and o.active=1",[],|r|Ok(LocalOperator{profile_id:r.get(0)?,display_name:r.get(1)?,role_name:r.get(2)?,has_pin:r.get::<_,i64>(3)?==1,has_shift_issue:r.get::<_,i64>(4)?==1,operator_token:r.get(5)?,valid_until:r.get(6)?})).optional().map_err(|e|e.to_string())
+}
+
+#[tauri::command]
+fn clear_active_operator(state: State<'_, DatabaseState>) -> Result<(), String> { let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?; connection.execute("delete from local_active_operator",[]).map_err(|e|e.to_string())?; Ok(()) }
+
+#[tauri::command]
+fn get_local_current_shift(state: State<'_, DatabaseState>, employee_id: String) -> Result<Option<LocalShift>, String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let max_hours=metadata(&connection,"max_shift_hours")?.and_then(|value|value.parse::<i64>().ok()).unwrap_or(12);
+    connection.execute("update local_employee_shifts set status='REQUIRES_REVIEW',updated_at=?2 where employee_id=?1 and clock_out_at is null and status='OPEN' and julianday(clock_in_at)+(cast(?3 as real)/24.0)<julianday(?2)",params![&employee_id,now(),max_hours]).map_err(|e|e.to_string())?;
+    connection.query_row("select id,employee_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status from local_employee_shifts where employee_id=?1 and clock_out_at is null order by clock_in_at desc limit 1",[employee_id],|r|Ok(LocalShift{shift_id:r.get(0)?,employee_id:r.get(1)?,clock_in_at:r.get(2)?,clock_out_at:r.get(3)?,clock_in_source:r.get(4)?,clock_out_source:r.get(5)?,status:r.get(6)?})).optional().map_err(|e|e.to_string())
+}
+
+#[tauri::command]
+fn clear_reconciled_local_shift(state: State<'_, DatabaseState>, employee_id: String) -> Result<(), String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    connection.execute("delete from local_employee_shifts where employee_id=?1 and clock_out_at is null and not exists(select 1 from sync_outbox o where o.aggregate_type='SHIFT' and o.aggregate_id=local_employee_shifts.id and o.status<>'SYNCED')",[employee_id]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn apply_server_shift(state: State<'_, DatabaseState>, shift: LocalShift) -> Result<(), String> {
+    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let runtime:(String,String)=connection.query_row("select branch_id,device_id from local_device where singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+    connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status,updated_at) values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) on conflict(id) do update set clock_out_at=excluded.clock_out_at,clock_out_source=excluded.clock_out_source,status=excluded.status,updated_at=excluded.updated_at",params![shift.shift_id,shift.employee_id,runtime.0,runtime.1,shift.clock_in_at,shift.clock_out_at,shift.clock_in_source,shift.clock_out_source,shift.status,now()]).map_err(|e|e.to_string())?; Ok(())
+}
+
+#[tauri::command]
+fn record_offline_time_event(state: State<'_, DatabaseState>, action: String) -> Result<LocalShift, String> {
+    if action!="CLOCK_IN" && action!="CLOCK_OUT" { return Err("Invalid time event action".into()); }
+    let mut connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?; let tx=connection.transaction().map_err(|e|e.to_string())?; let timestamp=now();
+    let (employee,token,branch,device):(String,String,String,String)=tx.query_row("select o.profile_id,o.operator_token,d.branch_id,d.device_id from local_active_operator a join local_pos_operators o on o.profile_id=a.profile_id join local_device d on d.singleton=1 where o.active=1 and julianday(o.grant_valid_until)>julianday(?1) and d.device_status='ACTIVE' and julianday(d.authorization_expires_at)>julianday(?1)",[&timestamp],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|"La autorización offline del empleado o dispositivo venció".to_string())?;
+    let existing:Option<LocalShift>=tx.query_row("select id,employee_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status from local_employee_shifts where employee_id=?1 and clock_out_at is null",[&employee],|r|Ok(LocalShift{shift_id:r.get(0)?,employee_id:r.get(1)?,clock_in_at:r.get(2)?,clock_out_at:r.get(3)?,clock_in_source:r.get(4)?,clock_out_source:r.get(5)?,status:r.get(6)?})).optional().map_err(|e|e.to_string())?;
+    let event_id=Uuid::new_v4().to_string();
+    let shift=if action=="CLOCK_IN" {
+        if let Some(open)=existing { if open.status=="REQUIRES_REVIEW" { return Err("Tenés un turno anterior pendiente de revisión".into()); } open }
+        else { let created=LocalShift{shift_id:Uuid::new_v4().to_string(),employee_id:employee.clone(),clock_in_at:timestamp.clone(),clock_out_at:None,clock_in_source:"OFFLINE".into(),clock_out_source:None,status:"OPEN".into()}; tx.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) values(?1,?2,?3,?4,?5,'OFFLINE','OPEN',?5)",params![created.shift_id,employee,branch,device,timestamp]).map_err(|e|e.to_string())?; created }
+    } else { let mut open=existing.ok_or_else(||"No hay un turno activo para marcar salida".to_string())?; let max_hours=metadata(&tx,"max_shift_hours")?.and_then(|v|v.parse::<i64>().ok()).unwrap_or(12); let started=chrono::DateTime::parse_from_rfc3339(&open.clock_in_at).map_err(|e|e.to_string())?; let current=chrono::DateTime::parse_from_rfc3339(&timestamp).map_err(|e|e.to_string())?; if current.signed_duration_since(started).num_hours()>=max_hours { tx.execute("update local_employee_shifts set status='REQUIRES_REVIEW',updated_at=?2 where id=?1",params![open.shift_id,timestamp]).map_err(|e|e.to_string())?; open.status="REQUIRES_REVIEW".into(); tx.commit().map_err(|e|e.to_string())?; return Ok(open); } tx.execute("update local_employee_shifts set clock_out_at=?2,clock_out_source='OFFLINE',status='CLOSED',updated_at=?2 where id=?1",params![open.shift_id,timestamp]).map_err(|e|e.to_string())?; open.clock_out_at=Some(timestamp.clone()); open.clock_out_source=Some("OFFLINE".into()); open.status="CLOSED".into(); open };
+    let payload=OfflineTimeEvent{schema_version:1,event_id:event_id.clone(),shift_id:shift.shift_id.clone(),employee_id:employee,device_id:device,operator_token:token,action,occurred_at:timestamp.clone()};
+    tx.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,attempts,created_at,next_attempt_at) values(?1,'SHIFT',?2,'EVENT',?3,'PENDING',0,?4,?4)",params![event_id,shift.shift_id,serde_json::to_string(&payload).map_err(|e|e.to_string())?,timestamp]).map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e|e.to_string())?; Ok(shift)
+}
+
 fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Result<(), String> {
     if sale.schema_version != 1 || sale.status != "COMPLETED" || sale.items.is_empty() || sale.items.len() > 100 {
         return Err("Unsupported or empty offline sale".to_string());
@@ -497,12 +636,14 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
     let authorized: bool = transaction
         .query_row(
             "select exists(
-               select 1 from local_device
-               where singleton = 1 and device_id = ?1 and organization_id = ?2 and branch_id = ?3
-                 and profile_id = ?4 and device_status = 'ACTIVE'
-                 and julianday(authorization_expires_at) > julianday(?5)
+               select 1 from local_device d
+               join local_pos_operators o on o.profile_id = ?4 and o.active = 1
+               where d.singleton = 1 and d.device_id = ?1 and d.organization_id = ?2 and d.branch_id = ?3
+                 and d.device_status = 'ACTIVE' and o.operator_token = ?6
+                 and julianday(d.authorization_expires_at) > julianday(?5)
+                 and julianday(o.grant_valid_until) > julianday(?5)
              )",
-            params![sale.device_id, sale.organization_id, sale.branch_id, sale.profile_id, now()],
+            params![sale.device_id, sale.organization_id, sale.branch_id, sale.profile_id, now(), sale.operator_token],
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
@@ -741,8 +882,8 @@ fn mark_outbox_syncing(state: State<'_, DatabaseState>, event_id: String, attemp
 fn mark_outbox_synced(state: State<'_, DatabaseState>, event_id: String, synced_at: String) -> Result<(), String> {
     let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
-    let sale_id: String = transaction
-        .query_row("select aggregate_id from sync_outbox where id = ?1", [&event_id], |row| row.get(0))
+    let (aggregate_type, aggregate_id): (String,String) = transaction
+        .query_row("select aggregate_type,aggregate_id from sync_outbox where id = ?1", [&event_id], |row| Ok((row.get(0)?,row.get(1)?)))
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
@@ -751,10 +892,10 @@ fn mark_outbox_synced(state: State<'_, DatabaseState>, event_id: String, synced_
             params![event_id, synced_at],
         )
         .map_err(|error| error.to_string())?;
-    transaction.execute("update local_sales set synced_at = ?2 where id = ?1", params![sale_id, synced_at])
-        .map_err(|error| error.to_string())?;
-    transaction.execute("update local_stock_movements set synced_at = ?2 where sale_id = ?1", params![sale_id, synced_at])
-        .map_err(|error| error.to_string())?;
+    if aggregate_type == "SALE" {
+        transaction.execute("update local_sales set synced_at = ?2 where id = ?1", params![aggregate_id, synced_at]).map_err(|error| error.to_string())?;
+        transaction.execute("update local_stock_movements set synced_at = ?2 where sale_id = ?1", params![aggregate_id, synced_at]).map_err(|error| error.to_string())?;
+    }
     set_metadata(&transaction, "last_successful_sync_at", &synced_at, &synced_at)?;
     set_metadata(&transaction, "last_sync_error", "", &synced_at)?;
     transaction.commit().map_err(|error| error.to_string())
@@ -816,8 +957,9 @@ fn force_last_outbox_retry(state: State<'_, DatabaseState>) -> Result<Option<Str
 
 #[tauri::command]
 fn clear_offline_authorization(state: State<'_, DatabaseState>) -> Result<(), String> {
-    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
-    connection
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let transaction=connection.transaction().map_err(|error|error.to_string())?;
+    transaction
         .execute(
             "update local_device set profile_id = null, user_email = null, role_name = null,
               authorization_validated_at = null, authorization_expires_at = null, updated_at = ?1
@@ -825,7 +967,8 @@ fn clear_offline_authorization(state: State<'_, DatabaseState>) -> Result<(), St
             [now()],
         )
         .map_err(|error| error.to_string())?;
-    Ok(())
+    transaction.execute("delete from local_active_operator",[]).map_err(|error|error.to_string())?;
+    transaction.commit().map_err(|error|error.to_string())
 }
 
 pub fn run() {
@@ -844,6 +987,16 @@ pub fn run() {
             apply_catalog_pull,
             apply_commercial_config,
             get_local_commercial_config,
+            apply_operator_roster,
+            get_local_operators,
+            cache_verified_operator,
+            verify_local_operator,
+            get_active_operator,
+            clear_active_operator,
+            get_local_current_shift,
+            clear_reconciled_local_shift,
+            apply_server_shift,
+            record_offline_time_event,
             confirm_local_sale,
             get_recent_local_sales,
             get_due_outbox,
@@ -872,7 +1025,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 5);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 6);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select color_hex from catalog_categories where id='color-category'", [], |row| row.get::<_,String>(0)).unwrap(), "#E99BAD");
@@ -888,13 +1041,14 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_connection(&mut connection).unwrap();
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         let sale = OfflineSalePayload {
             schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
-            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), device_id,
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
             status: "COMPLETED".into(), total_cents: "1235000".into(), total_weight_grams: "1000".into(),
             created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: 1000,
@@ -908,5 +1062,20 @@ mod tests {
         transaction.commit().unwrap();
         assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
         assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 65000);
+    }
+
+    #[test]
+    fn timekeeping_schema_preserves_shift_and_separates_two_events() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let first = verifier("1234", "device-one").unwrap();
+        assert_eq!(first, verifier("1234", "device-one").unwrap());
+        assert_ne!(first, verifier("1234", "device-two").unwrap());
+        connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) values('shift','employee','branch','device','2026-09-13T08:00:00Z','OFFLINE','OPEN','2026-09-13T08:00:00Z')", []).unwrap();
+        connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,created_at,next_attempt_at) values('in','SHIFT','shift','EVENT','{}','PENDING','2026-09-13T08:00:00Z','2026-09-13T08:00:00Z')", []).unwrap();
+        connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,created_at,next_attempt_at) values('out','SHIFT','shift','EVENT','{}','PENDING','2026-09-13T15:30:00Z','2026-09-13T15:30:00Z')", []).unwrap();
+        initialize_connection(&mut connection).unwrap();
+        assert_eq!(connection.query_row("select count(*) from local_employee_shifts where clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from sync_outbox where aggregate_type='SHIFT'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
     }
 }

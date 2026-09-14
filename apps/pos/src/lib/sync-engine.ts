@@ -2,6 +2,7 @@ import type { Json } from "@carnicerias/database";
 import {
   nextAttemptAt,
   type CatalogPullPayload,
+  type OfflineSalePayload,
   type SyncStatusSnapshot
 } from "@carnicerias/sync";
 
@@ -42,6 +43,10 @@ async function applyPull(runtime: LocalRuntime, user: SyncUser): Promise<Catalog
   const config = await supabase.rpc("get_pos_commercial_config", { p_branch_id: pull.branchId });
   if (config.error) throw config.error;
   await localDatabase.applyCommercialConfig(config.data);
+  const roster = await supabase.rpc("get_pos_operator_roster", { p_device_id: runtime.deviceId });
+  if (roster.error) throw roster.error;
+  const rosterPayload = roster.data as unknown as { operators: { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }[]; maxShiftHours: number };
+  await localDatabase.applyOperatorRoster(rosterPayload.operators, rosterPayload.maxShiftHours);
   return pull;
 }
 
@@ -61,6 +66,10 @@ export async function registerDesktopDevice(
   const config = await supabase.rpc("get_pos_commercial_config", { p_branch_id: pull.branchId });
   if (config.error) throw config.error;
   await localDatabase.applyCommercialConfig(config.data);
+  const roster = await supabase.rpc("get_pos_operator_roster", { p_device_id: runtime.deviceId });
+  if (roster.error) throw roster.error;
+  const rosterPayload = roster.data as unknown as { operators: { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }[]; maxShiftHours: number };
+  await localDatabase.applyOperatorRoster(rosterPayload.operators, rosterPayload.maxShiftHours);
   return pull;
 }
 
@@ -112,11 +121,20 @@ export async function synchronizeDesktop(
       });
       const attemptedAt = new Date().toISOString();
       await localDatabase.markSyncing(event.id, attemptedAt);
-      const { error } = await supabase.rpc("sync_offline_sale", {
-        p_device_id: runtime.deviceId,
-        p_event_id: event.id,
-        p_payload: event.payload as unknown as Json
-      });
+      const syncResult = event.aggregateType === "SHIFT"
+        ? await supabase.rpc("sync_offline_time_event", {
+            p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: event.payload as unknown as Json
+          })
+        : (() => {
+            const sale = event.payload as OfflineSalePayload;
+            return sale.operatorToken
+              ? supabase.rpc("sync_pos_operator_offline_sale", {
+                  p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json,
+                  p_operator_profile_id: sale.profileId, p_operator_token: sale.operatorToken
+                })
+              : supabase.rpc("sync_offline_sale", { p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json });
+          })();
+      const { error } = await syncResult;
       if (error) {
         const diagnostic = describePushError(error);
         await localDatabase.markFailed(

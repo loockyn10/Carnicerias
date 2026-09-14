@@ -340,6 +340,39 @@ export async function manageMemberAction(formData: FormData) {
   revalidatePath("/admin/employees");
 }
 
+export async function setEmployeePinAction(formData: FormData) {
+  const pin = text(formData, "pin");
+  if (!/^\d{4,6}$/.test(pin)) throw new Error("El PIN debe tener entre 4 y 6 dígitos");
+  await rpcOrThrow("set_employee_pos_pin", { p_profile_id: text(formData, "profile_id"), p_pin: pin });
+  revalidatePath("/admin/employees");
+}
+
+export async function setHourlyRateAction(formData: FormData) {
+  await rpcOrThrow("set_employee_hourly_rate", {
+    p_employee_id: text(formData, "employee_id"),
+    p_rate_cents_per_hour: pesosToCents(text(formData, "rate")),
+    p_valid_from_local: text(formData, "valid_from")
+  });
+  revalidatePath("/admin/timekeeping");
+  revalidatePath("/admin/employees");
+}
+
+export async function correctShiftAction(formData: FormData) {
+  await rpcOrThrow("correct_employee_shift", {
+    p_shift_id: text(formData, "shift_id"),
+    p_clock_out_local: text(formData, "clock_out_at"),
+    p_reason: text(formData, "reason")
+  });
+  revalidatePath("/admin/timekeeping");
+}
+
+export async function setMaxShiftHoursAction(formData: FormData) {
+  const hours = Number(text(formData, "hours"));
+  if (!Number.isInteger(hours) || hours < 1 || hours > 24) throw new Error("La duración debe estar entre 1 y 24 horas");
+  await rpcOrThrow("set_timekeeping_max_shift_hours", { p_hours: hours });
+  revalidatePath("/admin/timekeeping");
+}
+
 export async function setDeviceStatusAction(formData: FormData) {
   await rpcOrThrow("set_pos_device_status", {
     p_device_id: text(formData, "device_id"),

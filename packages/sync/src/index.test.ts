@@ -5,6 +5,16 @@ import { createOfflineSale, nextAttemptAt, retryDelayMs, shouldAttempt } from ".
 const ids = Array.from({ length: 10 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
 
 describe("offline sale envelope", () => {
+  it("keeps the verified operator grant with its immutable sale identity", () => {
+    const payload = createOfflineSale({
+      organizationId: "organization", branchId: "branch", profileId: "employee-laura", deviceId: "device",
+      operatorToken: "opaque-device-grant", paymentMethod: "CASH", now: new Date("2026-09-13T12:00:00Z"),
+      createId: (() => { let index = 0; return () => `id-${String(++index)}`; })(),
+      ticket: [{ id: "line", productId: "product", productName: "Asado", weightGrams: 1000, pricePerKgCents: 10000n, subtotalCents: 10000n }]
+    });
+    expect(payload.profileId).toBe("employee-laura");
+    expect(payload.operatorToken).toBe("opaque-device-grant");
+  });
   it("assigns stable client ids and freezes price snapshots", () => {
     let index = 0;
     const payload = createOfflineSale({

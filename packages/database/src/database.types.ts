@@ -23,6 +23,7 @@ export interface Database {
           currency: string;
           timezone: string;
           replenishment_target_days: number;
+          max_shift_hours: number;
           active: boolean;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -34,6 +35,7 @@ export interface Database {
           currency?: string;
           timezone?: string;
           replenishment_target_days?: number;
+          max_shift_hours?: number;
           active?: boolean;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -637,6 +639,42 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["stock_operation_items"]["Insert"]>;
         Relationships: [];
       };
+      employee_pos_pins: {
+        Row: { organization_id: string; profile_id: string; pin_hash: string; updated_by: string; created_at: Timestamp; updated_at: Timestamp };
+        Insert: { organization_id: string; profile_id: string; pin_hash: string; updated_by: string; created_at?: Timestamp; updated_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["employee_pos_pins"]["Insert"]>;
+        Relationships: [];
+      };
+      pos_pin_attempts: {
+        Row: { device_id: string; profile_id: string; failed_attempts: number; locked_until: Timestamp | null; updated_at: Timestamp };
+        Insert: { device_id: string; profile_id: string; failed_attempts?: number; locked_until?: Timestamp | null; updated_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["pos_pin_attempts"]["Insert"]>;
+        Relationships: [];
+      };
+      pos_operator_grants: {
+        Row: { id: string; organization_id: string; branch_id: string; device_id: string; operator_profile_id: string; issued_by: string; token_hash: string; issued_at: Timestamp; valid_until: Timestamp; revoked_at: Timestamp | null };
+        Insert: { id?: string; organization_id: string; branch_id: string; device_id: string; operator_profile_id: string; issued_by: string; token_hash: string; issued_at?: Timestamp; valid_until: Timestamp; revoked_at?: Timestamp | null };
+        Update: Partial<Database["public"]["Tables"]["pos_operator_grants"]["Insert"]>;
+        Relationships: [];
+      };
+      employee_shifts: {
+        Row: { id: string; organization_id: string; branch_id: string; employee_id: string; device_id: string; clock_in_at: Timestamp; clock_out_at: Timestamp | null; clock_in_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; clock_out_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION" | null; clock_in_received_at: Timestamp; clock_out_received_at: Timestamp | null; status: "OPEN" | "CLOSED" | "REQUIRES_REVIEW"; corrected_by: string | null; corrected_at: Timestamp | null; correction_reason: string | null; created_at: Timestamp; updated_at: Timestamp };
+        Insert: { id: string; organization_id: string; branch_id: string; employee_id: string; device_id: string; clock_in_at: Timestamp; clock_out_at?: Timestamp | null; clock_in_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; clock_out_source?: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION" | null; clock_in_received_at: Timestamp; clock_out_received_at?: Timestamp | null; status?: "OPEN" | "CLOSED" | "REQUIRES_REVIEW"; corrected_by?: string | null; corrected_at?: Timestamp | null; correction_reason?: string | null; created_at?: Timestamp; updated_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["employee_shifts"]["Insert"]>;
+        Relationships: [];
+      };
+      employee_time_events: {
+        Row: { event_id: string; shift_id: string; organization_id: string; branch_id: string; employee_id: string; device_id: string; action: "CLOCK_IN" | "CLOCK_OUT"; source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; occurred_at: Timestamp; received_at: Timestamp; created_at: Timestamp };
+        Insert: { event_id: string; shift_id: string; organization_id: string; branch_id: string; employee_id: string; device_id: string; action: "CLOCK_IN" | "CLOCK_OUT"; source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; occurred_at: Timestamp; received_at?: Timestamp; created_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["employee_time_events"]["Insert"]>;
+        Relationships: [];
+      };
+      employee_hourly_rates: {
+        Row: { id: string; organization_id: string; employee_id: string; rate_cents_per_hour: number; valid_from: Timestamp; valid_to: Timestamp | null; created_by: string; created_at: Timestamp };
+        Insert: { id?: string; organization_id: string; employee_id: string; rate_cents_per_hour: number; valid_from: Timestamp; valid_to?: Timestamp | null; created_by: string; created_at?: Timestamp };
+        Update: Partial<Database["public"]["Tables"]["employee_hourly_rates"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       stock_levels: {
@@ -711,6 +749,19 @@ export interface Database {
         Args: { p_device_id: string; p_event_id: string; p_payload: Json };
         Returns: Json;
       };
+      get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json };
+      verify_pos_operator_pin: { Args: { p_device_id: string; p_profile_id: string; p_pin: string }; Returns: Json };
+      set_employee_pos_pin: { Args: { p_profile_id: string; p_pin: string }; Returns: undefined };
+      get_employee_security_status: { Args: Record<never, never>; Returns: { profile_id: string; has_pin: boolean; current_rate_cents_per_hour: number | null; rate_valid_from: Timestamp | null }[] };
+      record_employee_time_event: { Args: { p_device_id: string; p_event_id: string; p_shift_id: string; p_employee_id: string; p_operator_token: string; p_action: "CLOCK_IN" | "CLOCK_OUT" }; Returns: Json };
+      sync_offline_time_event: { Args: { p_device_id: string; p_event_id: string; p_payload: Json }; Returns: Json };
+      get_current_employee_shift: { Args: { p_device_id: string; p_employee_id: string; p_operator_token: string }; Returns: Json };
+      sync_pos_operator_offline_sale: { Args: { p_device_id: string; p_event_id: string; p_payload: Json; p_operator_profile_id: string; p_operator_token: string }; Returns: Json };
+      complete_pos_operator_sale: { Args: { p_device_id: string; p_operator_profile_id: string; p_operator_token: string; p_branch_id: string; p_items: Json; p_payment_method: string }; Returns: { sale_id: string; total_cents: number; total_weight_grams: number; completed_at: Timestamp }[] };
+      set_employee_hourly_rate: { Args: { p_employee_id: string; p_rate_cents_per_hour: number; p_valid_from_local: string }; Returns: string };
+      correct_employee_shift: { Args: { p_shift_id: string; p_clock_out_local: string; p_reason: string }; Returns: undefined };
+      set_timekeeping_max_shift_hours: { Args: { p_hours: number }; Returns: undefined };
+      get_timekeeping_report: { Args: { p_from: string; p_to: string; p_employee_id?: string | null; p_branch_id?: string | null }; Returns: Json };
       sync_discounted_offline_sale: {
         Args: { p_device_id: string; p_event_id: string; p_payload: Json };
         Returns: Json;
@@ -840,6 +891,9 @@ export interface Database {
       stock_operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
       waste_reason: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER";
       weight_discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG";
+      employee_shift_status: "OPEN" | "CLOSED" | "REQUIRES_REVIEW";
+      time_event_action: "CLOCK_IN" | "CLOCK_OUT";
+      time_event_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION";
     };
     CompositeTypes: Record<never, never>;
   };

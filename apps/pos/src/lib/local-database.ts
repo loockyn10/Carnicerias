@@ -57,6 +57,10 @@ export interface RecentLocalSale {
   syncedAt: string | null;
 }
 export interface OutboxSummary { pending: number; syncing: number; failed: number; synced: number; lastError: string | null; }
+export interface OperatorRosterRow { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }
+export interface VerifiedOperatorInput { profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string }
+export interface LocalOperator extends OperatorRosterRow { operatorToken: string | null; validUntil: string | null }
+export interface LocalShift { shiftId: string; employeeId: string; clockInAt: string; clockOutAt: string | null; clockInSource: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"; clockOutSource: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION" | null; status: "OPEN" | "CLOSED" | "REQUIRES_REVIEW" }
 
 export const isDesktopRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
@@ -75,6 +79,16 @@ export const localDatabase = {
   applyPull: (pull: CatalogPullPayload, profileId: string, userEmail: string) =>
     desktopVoid("apply_catalog_pull", { pull, profileId, userEmail }),
   applyCommercialConfig: (config: unknown) => desktopVoid("apply_commercial_config", { config }),
+  applyOperatorRoster: (operators: OperatorRosterRow[], maxShiftHours: number) => desktopVoid("apply_operator_roster", { operators, maxShiftHours }),
+  operators: () => desktopOnly<LocalOperator[]>("get_local_operators"),
+  cacheVerifiedOperator: (verification: VerifiedOperatorInput, pin: string) => desktopOnly<LocalOperator>("cache_verified_operator", { verification, pin }),
+  verifyLocalOperator: (profileId: string, pin: string) => desktopOnly<LocalOperator>("verify_local_operator", { profileId, pin }),
+  activeOperator: () => desktopOnly<LocalOperator | null>("get_active_operator"),
+  clearActiveOperator: () => desktopVoid("clear_active_operator"),
+  currentShift: (employeeId: string) => desktopOnly<LocalShift | null>("get_local_current_shift", { employeeId }),
+  clearReconciledShift: (employeeId: string) => desktopVoid("clear_reconciled_local_shift", { employeeId }),
+  applyServerShift: (shift: LocalShift) => desktopVoid("apply_server_shift", { shift }),
+  recordOfflineTimeEvent: (action: "CLOCK_IN" | "CLOCK_OUT") => desktopOnly<LocalShift>("record_offline_time_event", { action }),
   commercialConfig: () => desktopOnly<LocalCommercialConfig>("get_local_commercial_config"),
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),
