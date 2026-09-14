@@ -16,6 +16,14 @@ interface SyncUser {
 
 type StatusListener = (status: SyncStatusSnapshot) => void;
 
+export const BACKGROUND_SYNC_INTERVAL_MS = 10_000;
+
+export function startBackgroundSyncPolling(runSync: () => Promise<void>): () => void {
+  void runSync();
+  const interval = globalThis.setInterval(() => void runSync(), BACKGROUND_SYNC_INTERVAL_MS);
+  return () => globalThis.clearInterval(interval);
+}
+
 function describePushError(error: { message: string; code?: string; details?: string | null; hint?: string | null }): string {
   return [error.code ? `[${error.code}]` : null, error.message, error.details, error.hint ? `Hint: ${error.hint}` : null]
     .filter((part): part is string => Boolean(part))
@@ -93,15 +101,6 @@ export async function synchronizeDesktop(
   let runtime = await localDatabase.runtime();
   if (!runtime.branchId || runtime.deviceStatus !== "ACTIVE") return runtime;
 
-  listener({
-    state: "syncing",
-    pendingCount: runtime.pendingCount,
-    syncingCurrent: 0,
-    syncingTotal: runtime.pendingCount,
-    lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
-    lastError: null
-  });
-
   let pullReceived = 0;
   let pushSucceeded = 0;
   let pushFailed = 0;
@@ -110,6 +109,16 @@ export async function synchronizeDesktop(
     const pull = await applyPull(runtime, user);
     pullReceived = pull.catalog.length;
     const due = await localDatabase.dueOutbox(new Date().toISOString());
+    if (due.length > 0) {
+      listener({
+        state: "syncing",
+        pendingCount: runtime.pendingCount,
+        syncingCurrent: 0,
+        syncingTotal: due.length,
+        lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
+        lastError: null
+      });
+    }
     for (const [index, event] of due.entries()) {
       listener({
         state: "syncing",

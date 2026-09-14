@@ -13,7 +13,7 @@ import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
 import { supabase } from "./lib/supabase";
-import { registerDesktopDevice, synchronizeDesktop } from "./lib/sync-engine";
+import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 
 interface AuthUser {
   id: string;
@@ -174,6 +174,8 @@ export default function App() {
   const [shift, setShift] = useState<LocalShift | null>(null);
   const shiftInFlight = useRef(false);
   const saleInFlight = useRef(false);
+  const syncInFlight = useRef(false);
+  const syncRunnerRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>({
     state: navigator.onLine ? "online" : "offline",
     pendingCount: 0,
@@ -213,10 +215,11 @@ export default function App() {
   }, [desktop, localRuntime?.branchId]);
 
   const loadShift = useCallback(async (active: LocalOperator) => {
-    if (!desktop || !localRuntime) return;
+    const deviceId = localRuntime?.deviceId;
+    if (!desktop || !deviceId) return;
     let current = await localDatabase.currentShift(active.profileId);
     if (navigator.onLine && !user?.offline && active.operatorToken) {
-      const { data, error: shiftError } = await supabase.rpc("get_current_employee_shift", { p_device_id: localRuntime.deviceId, p_employee_id: active.profileId, p_operator_token: active.operatorToken });
+      const { data, error: shiftError } = await supabase.rpc("get_current_employee_shift", { p_device_id: deviceId, p_employee_id: active.profileId, p_operator_token: active.operatorToken });
       if (shiftError) throw shiftError;
       if (data) {
         const remote = data as unknown as Omit<LocalShift, "employeeId">;
@@ -225,7 +228,7 @@ export default function App() {
       } else { await localDatabase.clearReconciledShift(active.profileId); current = null; }
     }
     setShift(current);
-  }, [desktop, localRuntime, user?.offline]);
+  }, [desktop, localRuntime?.deviceId, user?.offline]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -355,7 +358,7 @@ export default function App() {
     return () => {
       controller.abort();
     };
-  }, [desktop, localRuntime, user]);
+  }, [desktop, localRuntime?.branchId, localRuntime?.branchName, localRuntime?.organizationId, localRuntime?.roleName, user]);
 
   useEffect(() => {
     if (!branchId) return;
@@ -444,7 +447,8 @@ export default function App() {
   }, [branchId, desktop, localRuntime?.catalogCursor]);
 
   const runSync = useCallback(async () => {
-    if (!desktop || !user || user.offline || !localRuntime?.branchId) return;
+    if (!desktop || !user || user.offline || !localRuntime?.branchId || syncInFlight.current) return;
+    syncInFlight.current = true;
     try {
       const runtime = await synchronizeDesktop(user, setSyncStatus);
       setLocalRuntime(runtime);
@@ -458,19 +462,26 @@ export default function App() {
     } catch (syncError) {
       setOutboxSummary(await localDatabase.outboxSummary().catch(() => null));
       setError(syncError instanceof Error ? syncError.message : String(syncError));
+    } finally {
+      syncInFlight.current = false;
     }
   }, [desktop, loadShift, localRuntime?.branchId, operator, user]);
+
+  useEffect(() => {
+    syncRunnerRef.current = runSync;
+  }, [runSync]);
 
   useEffect(() => { void loadOperators().catch(() => setOperators([])); }, [loadOperators, localRuntime?.catalogCursor]);
 
   useEffect(() => {
-    if (!desktop || !user) return;
+    if (!desktop || !user?.id) return;
+    const userOffline = user.offline;
 
     const handleOffline = () => {
       setSyncStatus((current) => ({ ...current, state: "offline" }));
     };
     const handleOnline = () => {
-      if (user.offline) {
+      if (userOffline) {
         void supabase.auth.getUser().then(({ data, error: authError }) => {
           if (!authError) {
             setUser({
@@ -481,23 +492,22 @@ export default function App() {
           }
         });
       } else {
-        void runSync();
+        void syncRunnerRef.current();
       }
     };
 
     window.addEventListener("offline", handleOffline);
     window.addEventListener("online", handleOnline);
-    if (!user.offline) void runSync();
-    const interval = window.setInterval(() => {
-      if (!user.offline) void runSync();
-    }, 10_000);
+    const stopBackgroundSync = userOffline
+      ? () => undefined
+      : startBackgroundSyncPolling(() => syncRunnerRef.current());
 
     return () => {
-      window.clearInterval(interval);
+      stopBackgroundSync();
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
     };
-  }, [desktop, runSync, user]);
+  }, [desktop, user?.id, user?.offline]);
 
   async function bindDevice() {
     if (!desktop || !localRuntime || !user || user.offline || !branchId) return;
@@ -755,7 +765,7 @@ export default function App() {
   if (desktop && localRuntime?.deviceStatus === "ACTIVE" && localRuntime.branchId && !operator) {
     return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={(active) => void selectOperator(active)} operators={operators} />;
   }
-  const syncLabel = syncStatus.state === "syncing"
+  const syncLabel = syncStatus.state === "syncing" && syncStatus.syncingTotal > 0
     ? `SINCRONIZANDO · ${String(syncStatus.syncingCurrent)} de ${String(syncStatus.syncingTotal)}`
     : syncStatus.state === "offline"
       ? `OFFLINE · ${String(syncStatus.pendingCount)} evento${syncStatus.pendingCount === 1 ? "" : "s"} pendiente${syncStatus.pendingCount === 1 ? "" : "s"}`
@@ -763,7 +773,7 @@ export default function App() {
         ? "ERROR DE SINCRONIZACIÓN"
         : syncStatus.pendingCount > 0
           ? `ONLINE · ${String(syncStatus.pendingCount)} pendientes`
-          : "ONLINE · Todo sincronizado";
+          : "SINCRONIZADO";
 
   return (
     <main className="min-h-screen bg-stone-950 text-stone-100 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
@@ -777,7 +787,7 @@ export default function App() {
           <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}>Ventas recientes</button>
           {desktop ? (
             <button
-              className={`rounded-xl border px-3 py-2 text-xs font-black ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
+              className={`w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
               onClick={() => setDiagnosticsOpen(true)}
             >
               {syncLabel}
