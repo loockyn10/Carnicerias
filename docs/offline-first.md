@@ -23,10 +23,12 @@ Los triggers de catálogo escriben un cursor monotónico. `pull_pos_state` entre
 - Corte durante push o respuesta 500: el evento permanece y se reintenta.
 - Cierre con pendientes: SQLite conserva venta y outbox; el arranque recupera intentos incompletos.
 
-## Dispositivo y autorización offline
+## Dispositivo, operador y autorización offline
 
-El primer login es Supabase Auth normal y requiere Internet. El servidor vincula el `device_id` persistente a una sola organización y sucursal; todas las RPC vuelven a comprobar esa asociación, por lo que editar el cliente no permite subir ventas a otra sucursal.
+La autenticación/enrolamiento inicial del dispositivo usa Supabase Auth y requiere Internet. El servidor vincula el `device_id` persistente a una sola organización y sucursal; todas las RPC vuelven a comprobar esa asociación, por lo que editar el cliente no permite subir ventas a otra sucursal.
 
-Después de un pull correcto se cachean usuario, sucursal, rol y vencimiento de autorización por 24 horas. No se guarda la contraseña. Sin una validación previa no existe acceso offline. Si se revoca usuario, sucursal o dispositivo mientras está desconectado, el POS puede operar solo hasta vencer la autorización; al reconectar, el servidor rechaza la operación, invalida el acceso local y conserva los eventos para resolución administrativa.
+La operación diaria separa esa sesión persistente del operador activo: el roster se sincroniza por sucursal y el empleado se identifica mediante PIN. Después de reiniciar debe volver a seleccionar operador e ingresar PIN; cambiar operador nunca cambia la sucursal del dispositivo.
+
+Después de un pull correcto se cachean dispositivo, sucursal y vencimiento de autorización por 24 horas, además del roster/verifier necesario para PIN offline. No se guarda contraseña ni PIN plaintext. Sin validación previa no existe acceso offline. Si se revoca empleado, sucursal o dispositivo mientras está desconectado, el POS puede operar sólo hasta vencer la autorización/grant aplicable; al reconectar, el servidor rechaza lo inválido y conserva los eventos para diagnóstico.
 
 La pantalla de diagnóstico muestra Internet, Supabase, SQLite, última sincronización, pendientes, último error, identidad de dispositivo y sucursal. “Reenviar último evento” permite comprobar manualmente la deduplicación del servidor.

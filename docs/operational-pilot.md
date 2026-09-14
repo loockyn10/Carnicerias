@@ -2,31 +2,33 @@
 
 ## Aplicación remota
 
-La migración `202609100007_operational_pilot.sql` debe aplicarse antes de desplegar el Admin actualizado. Desde la raíz:
+Antes del piloto, verificar todas las migraciones incrementales pendientes; no asumir que el remoto termina en 007. Desde la raíz:
 
 ```powershell
 pnpm exec supabase login
-pnpm exec supabase migration list
+pnpm exec supabase migration list --linked
 pnpm exec supabase db push --dry-run
 pnpm exec supabase db lint --linked --level warning --fail-on error
 pnpm exec supabase db push
-pnpm exec supabase migration list
+pnpm exec supabase migration list --linked
 pnpm exec supabase db lint --linked --level warning --fail-on error
 pnpm exec supabase test db --linked supabase/tests/operational_pilot.test.sql
 pnpm exec supabase test db --linked supabase/tests/online_pos.test.sql
 pnpm exec supabase test db --linked supabase/tests/offline_sync.test.sql
 ```
 
-Después, desplegar el Admin con las mismas variables públicas ya usadas por Fase 1A. Esta fase no agrega secretos ni requiere `service_role`.
+Los comandos `--linked` requieren autenticación Supabase. Después, desplegar el Admin con sus variables públicas. No usar `service_role`.
 
-## Alta de empleados
+## Alta de empleados: limitación actual
 
 1. Crear y confirmar el usuario en Supabase Dashboard → Authentication → Users.
 2. Entrar al Admin con un administrador.
 3. Abrir **Empleados** y asociar el email exacto, nombre, rol, estado y sucursal.
-4. Iniciar sesión en el POS con ese usuario.
+4. Enrolar/autenticar el dispositivo y seleccionar al empleado mediante PIN en el POS.
 
-La asociación se ejecuta con una RPC admin-only. El navegador no consulta ni modifica `auth.users` y nunca recibe una clave privilegiada.
+La asociación se ejecuta con una RPC admin-only. El navegador no recibe una clave privilegiada.
+
+Este flujo refleja la implementación actual, pero contradice D-004: el modelo objetivo debe permitir crear empleados POS internos sin Auth individual. No consolidar este workaround como arquitectura definitiva.
 
 ## Smoke test del piloto
 

@@ -1,85 +1,97 @@
-# Arquitectura base
+# Architecture
 
-## Objetivo de esta fase
-
-Fase 1A establece límites estables sin anticipar implementaciones que todavía requieren decisiones de hardware u operación. Las únicas entidades persistidas son identidad, tenencia, autorización, catálogo y precios.
-
-## Capas
+## Vista general
 
 ```text
-apps/admin ─┬─> packages/ui
-            ├─> packages/business-logic
-            ├─> packages/types
-            └─> packages/database ─> Supabase/PostgreSQL
-
-apps/pos ───┬─> packages/ui
-            ├─> packages/business-logic
-            ├─> packages/types
-            ├─> packages/database (servidor remoto)
-            └─> packages/sync (contrato; implementación posterior)
+Admin Web (Next.js 15 / React 19)
+  ↓ cliente Supabase sujeto a RLS
+Supabase Auth + PostgreSQL
+  ↕ pull/push idempotente
+POS Windows (Tauri 2 + React/Vite)
+  ↕ comandos Rust tipados
+SQLite local
 ```
 
-- Las apps componen flujos y presentación; no alojan reglas centrales.
-- `business-logic` no depende de React, Supabase, SQLite ni Tauri.
-- `database` contiene contratos de infraestructura remota, nunca service-role credentials.
-- En la fase offline se agregará un adaptador SQLite separado bajo POS y `sync` coordinará pull/outbox sin contaminar el dominio.
-- Hardware será una frontera propia del POS/Tauri, detrás de `ScaleAdapter`; no pertenece a React ni a `business-logic`.
+El monorepo pnpm contiene `apps/admin`, `apps/pos` y los paquetes compartidos `business-logic`, `database`, `sync`, `types` y `ui`.
 
-## Tenencia y sucursales
+- Las apps componen flujos y presentación.
+- `business-logic` contiene reglas puras y no depende de React, Supabase, SQLite ni Tauri.
+- `database` contiene cliente RLS-bound y tipos del esquema; no contiene credenciales `service_role`.
+- `sync` define contratos y transformación del intercambio POS.
+- La persistencia SQLite vive detrás de comandos Rust en el POS.
 
-`organizations` es la raíz de tenencia. Las entidades de negocio llevan `organization_id` aunque hoy exista una sola empresa. Las claves foráneas compuestas impiden asociar una categoría, producto, precio o sucursal de otra organización.
+## Admin
 
-Un usuario tiene:
+El Admin es Next.js/TypeScript, online-first y se despliega como web. Usa Supabase Auth, memberships, roles, permisos y RLS. No introducir SQLite administrativo ni `service_role` en el cliente.
 
-1. una identidad en `auth.users`;
-2. un perfil global en `profiles`;
-3. una membresía y rol en `organization_members`;
-4. cero o más asignaciones operativas en `branch_members`.
+Las rutas autenticadas son dinámicas por el uso de cookies. Existe instrumentación de tiempos, `getAdminContext` se deduplica por request y varias cargas fueron paralelizadas. Falta un baseline autenticado de producción antes de optimizar nuevamente.
 
-Esto permite que un empleado cubra varias sucursales sin duplicar usuarios y que futuros roles organizacionales se agreguen sin modificar un enum.
+La configuración concreta de proyecto/región Vercel está fuera del repositorio. La referencia Supabase vinculada apunta a `sa-east-1`; toda comparación de regiones requiere consultar el dashboard de Vercel.
 
-## Autorización
+## POS offline-first
 
-Los roles son filas (`roles`), los permisos son capacidades estables (`permissions`) y `role_permissions` los relaciona. Los roles de sistema iniciales son `admin` y `employee`; el modelo admite roles personalizados por organización.
+El dispositivo se enrola en una organización y sucursal inmutables. La sucursal operativa no cambia al cambiar empleado. El selector manual de sucursal sólo puede usarse para desarrollo, setup o simulación, no como flujo productivo normal.
 
-Las funciones de autorización dentro de `app_private` son pequeñas, `STABLE`, `SECURITY DEFINER`, tienen `search_path` vacío y no exponen datos. Se usan para evitar recursión entre policies de membresías.
+Una venta se confirma primero en una transacción SQLite que persiste venta, ítems, pago, movimientos y evento outbox con UUID generados por el cliente. El push posterior usa recibos e identificadores estables para garantizar idempotencia. Los estados del outbox son `PENDING`, `SYNCING`, `SYNCED` y `FAILED`, con recuperación tras reinicio y backoff exponencial.
 
-Resumen de RLS:
+El pull de catálogo usa cursor monotónico y `removedProductIds`. Configuración comercial y roster se sincronizan como snapshots completos. Después de sincronizar, el POS conserva catálogo, promociones, avisos, descuento por pago, autorización y operación offline dentro de sus vigencias.
 
-| Recurso | Admin | Employee |
-|---|---|---|
-| Organización | lee y edita la propia | lee la propia |
-| Sucursales | todas; administra | solo las asignadas |
-| Miembros | lee y administra | solo su membresía |
-| Categorías/productos | lee y administra | lee catálogo de su organización |
-| Precios | todas las sucursales; crea/cierra | globales y de sus sucursales |
-| Roles/permisos | lee los aplicables | lee los aplicables |
+La sesión/autorización del dispositivo puede persistir. Después de reiniciar debe exigirse nuevamente selección de operador y PIN; no se restaura automáticamente el operador activo.
 
-No hay políticas de creación de organizaciones ni de edición de roles desde clientes. El bootstrap y futuros flujos privilegiados deben ejecutarse en servidor confiable.
+## Identidad de operador: objetivo y estado actual
 
-## Historial de precios
+Arquitectura objetivo:
 
-`product_prices` guarda centavos enteros, un rango `[valid_from, valid_to)` y una sucursal opcional. `branch_id = null` significa precio general. Una exclusión GiST impide rangos solapados para el mismo producto y alcance. Una trigger hace inmutables producto, sucursal, importe y comienzo; un cambio correcto cierra la fila vigente e inserta otra.
+1. dispositivo autorizado;
+2. empleado interno autorizado para una o varias sucursales;
+3. operador activo autenticado con PIN.
 
-La futura venta guardará snapshots de nombre, precio, gramos y subtotal. Nunca dependerá del precio actual para reconstruir historia.
+El empleado POS normal no debe requerir cuenta Supabase Auth individual. El Admin web continúa usando Supabase Auth.
 
-## Decisiones diferidas conscientemente
+**Contradicción actual:** el esquema representa al empleado con `profiles` + `organization_members` + `branch_members`, y `profiles.id` depende obligatoriamente de `auth.users.id`. Además, aunque `branch_members` admite múltiples sucursales, la RPC y el formulario Admin actuales conservan sólo una asignación activa. Resolver ambas diferencias es trabajo prioritario, sin romper referencias históricas.
 
-- SQLite y migraciones locales.
-- Outbox, pull cursors, backoff e idempotencia.
-- Ventas, pagos, ledger de stock, auditoría y dispositivos.
-- Auth offline y almacenamiento seguro por plataforma.
-- Tauri/Rust y protocolos de balanza.
-- Consultas agregadas para dashboards.
+## Seguridad del operador
 
-Estas omisiones son límites de fase, no sustitutos temporales ni mocks.
+- PIN servidor: bcrypt mediante `pgcrypto`.
+- Verifier offline: Argon2 con salt; no se persiste PIN plaintext.
+- Rate limit: cinco fallos y bloqueo temporal de cinco minutos.
+- Grants ligados a dispositivo, sucursal y empleado, con hash servidor y vencimiento.
+- Desactivar un empleado lo retira del roster y revoca grants activos.
+- Ventas, stock y turnos conservan la identidad del operador.
 
-## Reglas para continuar
+## Tenencia y autorización
 
-- Cada migración es aditiva y versionada; no editar una ya desplegada.
-- Regenerar `packages/database/src/database.types.ts` después de migrar.
-- Toda tabla expuesta debe habilitar RLS y declarar policies antes de usarse.
-- Todo identificador sincronizable se genera como UUID en el cliente.
-- No importar APIs de infraestructura desde componentes visuales.
-- Mantener cálculos monetarios y de peso con enteros.
+`organizations` es la raíz de tenencia. Las entidades operativas llevan `organization_id`, y las relaciones relevantes impiden asociaciones cruzadas entre organizaciones.
 
+Los roles son filas, los permisos son capacidades y `role_permissions` los vincula. Los helpers internos de RLS usan funciones pequeñas `STABLE SECURITY DEFINER` con `search_path` controlado para evitar recursión. RLS, tenant filtering y permisos backend son obligatorios; no se reemplazan con controles visuales.
+
+## Precio e historia
+
+- `product_costs`: historial de costo.
+- `product_pricing_settings`: historial de markup.
+- `organization_cash_discounts`: historial de descuento por medio elegible.
+- `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal.
+
+Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso usan cents y gramos enteros; porcentajes usan basis points y redondeo half-up. Los ítems de venta guardan snapshots suficientes de lista, costo, markup, descuento por pago, promoción y subtotal final.
+
+Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo/markup. El dominio, pricing y analytics contemplan `UNIT`, pero la venta POS completa actualmente sólo soporta `WEIGHT`.
+
+## Stock, reposición, rendiciones y analítica
+
+- `stock_movements` es la fuente de verdad del stock teórico.
+- Reposición combina stock, mínimo manual, ventas recientes y cobertura mediante `get_replenishment_plan`.
+- Rendiciones son snapshots históricos inmutables; una venta offline tardía genera advertencia, no recálculo silencioso.
+- Rentabilidad usa revenue final y costo snapshot; presenta ganancia bruta, no neta.
+- Timekeeping conserva turnos y tarifas históricas, usa timestamp servidor online y outbox offline.
+
+## Migraciones
+
+PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
+
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–021 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
+
+## PWA y balanza
+
+La PWA Admin no está implementada. La dirección vigente es mantener Admin web, agregar manifest/installability/service worker conservador y no cachear agresivamente ventas o stock.
+
+No existen todavía `ScaleAdapter`, adaptadores manual/simulado/serial ni integración Kretz. La futura frontera de hardware debe quedar detrás de un adapter del POS/Tauri y no acoplarse a componentes React ni a un modelo específico.

@@ -1,116 +1,67 @@
 # Plataforma de gestión para carnicerías
 
-Sistema multi-sucursal y multiempresa. La **Fase 1C** convierte el POS React/Vite en una aplicación Tauri offline-first con SQLite, outbox e intercambio incremental con Supabase.
+Monorepo multiempresa y multisucursal con dos aplicaciones:
+
+- Admin web: Next.js + Supabase.
+- POS Windows: React/Vite + Tauri + SQLite, offline-first.
+
+La fuente canónica de contexto, reglas, arquitectura y estado está en [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md), [`docs/DOMAIN_RULES.md`](docs/DOMAIN_RULES.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) y [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
 
 ## Requisitos
 
-- Node.js 22 o superior
-- pnpm 11
-- Docker Desktop (para Supabase local)
-- Supabase CLI 2.x disponible como `supabase`
-- Rust stable MSVC, Microsoft C++ Build Tools y WebView2 para compilar el POS de escritorio
+- Node.js 22 o superior.
+- pnpm 11.19.0.
+- Docker Desktop para Supabase local.
+- Rust stable MSVC, C++ Build Tools y WebView2 para POS desktop.
 
-## Puesta en marcha
+## Inicio rápido
 
 ```bash
-pnpm install
-cp .env.example .env.local
-supabase start
-supabase db reset
+pnpm install --frozen-lockfile
+pnpm db:start
+pnpm db:reset
+pnpm dev:admin
 ```
 
-Para Admin, copiá `apps/admin/.env.example` a `apps/admin/.env.local`. Para POS, copiá `apps/pos/.env.example` a `apps/pos/.env.local`. En ambos casos completá la URL y la misma publishable key del proyecto. No copies una secret key ni la `service_role key` a variables `NEXT_PUBLIC_*` o `VITE_*`.
-
-En dos terminales separadas:
+En otra terminal, para POS desktop:
 
 ```bash
-pnpm dev:admin
 pnpm dev:pos:desktop
 ```
 
-- Admin: <http://localhost:3000>
-- POS de escritorio: ventana Tauri; Vite usa internamente <http://localhost:1420>
-- Supabase Studio: <http://localhost:54323>
+Crear las variables a partir de:
 
-El POS requiere una membresía `ACTIVE`. Los empleados deben tener además una fila activa en `branch_members`; los administradores pueden vincular el equipo a una sucursal autorizada. El primer ingreso y vinculación requieren Internet. Luego puede vender offline durante 24 horas desde la última validación.
+- `apps/admin/.env.example` → `apps/admin/.env.local`;
+- `apps/pos/.env.example` → `apps/pos/.env.local`.
 
-## Crear el primer administrador local
+Usar únicamente URL y publishable key. Nunca exponer `service_role` o secret keys.
 
-1. Creá un usuario desde Authentication > Users en Supabase Dashboard.
-2. La trigger de Auth crea automáticamente su fila en `profiles`.
-3. En el SQL Editor local, concedé la membresía inicial:
-
-```sql
-insert into public.organization_members (
-  organization_id,
-  profile_id,
-  role_id,
-  status
-)
-select
-  '20000000-0000-4000-8000-000000000001',
-  id,
-  '10000000-0000-4000-8000-000000000001',
-  'ACTIVE'
-from auth.users
-where lower(email) = lower('admin@example.com')
-on conflict (organization_id, profile_id) do update
-set role_id = excluded.role_id,
-    status = excluded.status;
-```
-
-Este bootstrap se realiza en un entorno servidor confiable. Un usuario recién registrado nunca se asigna a sí mismo una organización o un rol.
-
-Para asignar un empleado, usá el rol `10000000-0000-4000-8000-000000000002` y agregá luego una fila en `branch_members` con el mismo `organization_id`, su `profile_id` y la sucursal autorizada.
-
-## Verificación
+## Validación
 
 ```bash
 pnpm check
 pnpm build
 pnpm build:pos:desktop
-supabase db lint --local
 pnpm db:test
 ```
 
-`supabase db reset` aplica todas las migraciones desde cero y carga el catálogo de demostración. Los tipos TypeScript se pueden regenerar con la base local levantada:
-
-```bash
-pnpm db:types
-```
+Para comandos detallados, Supabase vinculado, variables, deploy y smoke POS, consultar [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Estructura
 
 ```text
-apps/
-  admin/             Next.js, responsive, despliegue futuro en Vercel
-  pos/               POS React/Vite/Tauri con SQLite local
-packages/
-  business-logic/    reglas puras, dinero y peso
-  database/          cliente Supabase RLS-bound y tipos generados
-  sync/              contratos, outbox, backoff y transformación de ventas
-  types/             contratos de dominio sin dependencias de UI
-  ui/                tokens y futuros componentes compartidos
-supabase/
-  migrations/        esquema PostgreSQL versionado y RLS
-  seed.sql            organización, sucursales, productos y precios demo
-docs/
-  architecture.md    decisiones y límites técnicos
-  phase-plan.md      secuencia continuable de implementación
+apps/admin              Admin Next.js
+apps/pos                POS React/Vite/Tauri
+packages/business-logic Reglas puras de dominio
+packages/database       Cliente Supabase y tipos
+packages/sync           Contratos de sincronización
+packages/types          Tipos compartidos
+packages/ui             UI compartida
+supabase/migrations     Esquema PostgreSQL incremental
+supabase/tests          Pruebas SQL/pgTAP
+docs                    Fuente de verdad documental
 ```
 
-## Datos de demostración
+## Estado importante
 
-La organización `Carnicerías Demo` contiene `Sucursal Centro`, `Sucursal Norte`, tres categorías, ocho productos y precios globales en centavos de ARS. No se crean usuarios, contraseñas ni ventas simuladas. Las ventas reales se completan exclusivamente mediante la RPC transaccional `complete_sale`.
-
-## Convenciones importantes
-
-- Dinero persistido como centavos enteros (`bigint` en PostgreSQL, `bigint` en dominio TypeScript).
-- Peso persistido como gramos enteros.
-- Timestamps en UTC; presentación en `America/Argentina/Buenos_Aires`.
-- Los precios son históricos: se cierra `valid_to` y se inserta una nueva fila; no se reescribe el importe anterior.
-- El cliente usa solo la anon key y depende de RLS. La service-role key es exclusivamente servidor.
-
-Consultá [la arquitectura](docs/architecture.md) antes de iniciar la siguiente fase.
-Consultá [el diseño offline-first](docs/offline-first.md) para seguridad, conflictos y recuperación.
-Para comprobar la Fase 1A contra el proyecto vinculado, seguí [la validación remota](docs/remote-validation.md).
+El POS ya opera offline con ventas, stock, pricing, promociones, outbox y control horario. Existe una contradicción pendiente: el empleado POS objetivo no debe necesitar Auth individual, pero la implementación actual todavía depende de `auth.users`. No crear una interpretación alternativa; seguir [`docs/TASKS.md`](docs/TASKS.md).

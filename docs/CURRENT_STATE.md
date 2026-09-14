@@ -1,0 +1,177 @@
+# Current State
+
+Estado verificado contra el repositorio el 14 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
+
+## Núcleo confirmado
+
+- Monorepo pnpm con Admin Next.js, POS React/Vite/Tauri y paquetes compartidos.
+- Supabase Auth/PostgreSQL con organizaciones, sucursales, perfiles, memberships, roles, permisos y RLS.
+- Catálogo, categorías, historial de precios, historial de costos y configuración comercial.
+- Ventas, ítems, pagos y stock ledger con operaciones transaccionales.
+- POS offline-first con SQLite incremental, outbox, pull/push, retry, restart e idempotencia.
+- Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
+
+## Contradicciones vigentes
+
+### 1. Empleado POS depende de Supabase Auth
+
+La decisión vigente define un empleado interno creado desde Admin, sin cuenta Supabase Auth individual.
+
+La implementación actual usa `profiles` + `organization_members` + `branch_members`, y `profiles.id` es una FK obligatoria a `auth.users.id`. Para crear un empleado, el Admin todavía exige crear y confirmar primero el usuario Auth y asociarlo por email.
+
+Estado: **contradicción confirmada; P0**.
+
+### 2. Admin single-branch frente a DB many-to-many
+
+`branch_members` permite varias sucursales por perfil. Sin embargo, `manage_existing_member` y el formulario Admin reciben una sola sucursal y desactivan las demás asignaciones.
+
+Estado: **contradicción confirmada; P0/P1**.
+
+### 3. Soporte `UNIT` incompleto en POS
+
+El dominio, pricing, snapshots y analytics contemplan `UNIT`. El catálogo operativo del POS y los RPC de venta actualmente trabajan sólo con `WEIGHT`, gramos y precio/kg.
+
+Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**.
+
+## Empleados, operador y sucursal
+
+- El dispositivo POS queda ligado a una organización y sucursal; cambiar operador no cambia sucursal.
+- El roster incluye perfiles y memberships activos autorizados para esa sucursal.
+- PIN servidor con bcrypt mediante `pgcrypto`.
+- Verifier offline Argon2 con salt; no existe PIN plaintext persistido.
+- Cinco fallos generan bloqueo de cinco minutos.
+- Los grants se ligan a dispositivo, sucursal y empleado, tienen vencimiento y se revocan al desactivar al empleado.
+- La desactivación conserva ventas, turnos y auditoría; no existe hard-delete en Admin.
+- Ventas y movimientos quedan atribuidos al operador seleccionado.
+- Después de reiniciar, la sesión/autorización del dispositivo puede persistir, pero debe seleccionarse operador e ingresar PIN nuevamente.
+- No existe una operación explícita para eliminar/resetear el PIN sin reemplazarlo.
+
+## Timekeeping
+
+- Clock-in/out online con timestamp autoritativo del servidor.
+- Registro offline mediante SQLite y outbox `SHIFT`.
+- Un solo turno abierto por organización/empleado, protegido también por lock transaccional.
+- Turnos vencidos no se autocorrigen: pasan a `REQUIRES_REVIEW`.
+- Máximo organizacional configurable, default 12 horas.
+- Corrección Admin con motivo obligatorio y auditoría.
+- Tarifas por hora con rangos históricos; el reporte divide períodos según la tarifa vigente.
+- El turno abierto persiste después de reiniciar y se recupera cuando el operador vuelve a autenticarse.
+
+Limitación conocida no prioritaria: un clock-out offline fuera de límite deja el turno en revisión, pero el intento/timestamp rechazado no se conserva como evidencia independiente.
+
+## Pricing, pagos y promociones
+
+- Costos, markup, descuento organizacional y precios de lista conservan vigencias históricas.
+- Cálculos con cents enteros, basis points y redondeo half-up.
+- Gross-up verificado: costo $10.000 + 30% y descuento 10% produce lista $14.444,44 y efectivo $13.000.
+- Elegibilidad consistente en backend/POS/sync: `CASH`, `TRANSFER`, `OTHER` aplican; `DEBIT`, `CREDIT` no.
+- Promociones `PERCENTAGE` y `FIXED_PRICE_PER_KG` se aplican después del descuento por pago.
+- Los ítems guardan snapshots separados de lista, costo, markup, descuento por pago, promoción y subtotal final.
+- Productos legacy con precio vigente continúan vendiéndose sin inventar costo histórico.
+
+## Stock y reposición
+
+- `stock_movements` es la fuente de verdad del stock teórico.
+- Recepciones, mermas, ajustes, ventas y devoluciones quedan en el ledger.
+- Las cancelaciones compensan con `RETURN`; no eliminan historia.
+- `get_replenishment_plan` usa ventas completadas de una ventana de 7 días, stock actual, mínimo/objetivo manual y cobertura objetivo organizacional, default 3 días.
+- Prioridad crítica: stock <= 0 o cobertura <1 día.
+- Prioridad alta: cobertura <2 días o stock debajo del mínimo.
+- La vista “Carga de hoy” y “Registrar ingreso” reutilizan el flujo de stock existente.
+
+Limitación pendiente de evidencia real: productos con sólo 1–2 días de historia se dividen por los 7 días completos y pueden subestimar demanda.
+
+## Rendiciones
+
+- Ruta y modelo implementados con períodos `[inicio, fin)`, snapshots, desglose por pago, empleados y dispositivos.
+- Efectivo esperado = pagos `CASH` exclusivamente.
+- Se conserva efectivo recibido, diferencia, historial y auditoría.
+- Sólo la rendición más reciente puede anularse.
+- Una venta offline tardía no recalcula una rendición confirmada; se muestra una advertencia de movimientos posteriores. Este comportamiento queda aceptado como vigente.
+
+## Analítica y rentabilidad
+
+- Revenue = subtotal final de ventas completadas.
+- Costos siempre desde snapshot histórico, nunca desde costo actual.
+- Ganancia bruta = revenue - costo; rentabilidad calculada sobre costo.
+- Ganancia por kg o unidad, rankings, filtros, períodos y comparación con período anterior.
+- Ventas legacy sin costo participan en facturación, pero se excluyen de rentabilidad y reducen la cobertura informada.
+- La UI usa “Ganancia bruta”, no “Ganancia neta”.
+
+## POS offline y UX
+
+- UUID cliente para venta, ítems, pagos, movimientos y eventos.
+- Persistencia local atómica antes de cualquier red.
+- Outbox `PENDING → SYNCING → SYNCED/FAILED`, reintentos y recuperación tras restart.
+- Idempotencia remota mediante recibos e IDs estables; repetir el mismo evento no duplica ventas.
+- Pull incremental de catálogo con cursor y `removedProductIds`.
+- Configuración comercial y roster como snapshots completos, disponibles offline tras sincronizar.
+- Reconexión automática sin eliminar eventos pendientes.
+- Ticket fijo, footer visible, scroll interno de catálogo/ticket y cards compactas mediante filas de tamaño intrínseco.
+- Colores de categoría configurables, sincronizados a SQLite y con fallback.
+
+## Performance Admin
+
+Ya existen:
+
+- instrumentación de tiempos por ruta;
+- cache por request de `getAdminContext`;
+- paralelización de varias consultas;
+- reducción de `select("*")`;
+- selecciones de columnas más acotadas.
+
+Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía transfieren conjuntos amplios y agregan en JavaScript, y el sidebar desactiva prefetch. Falta un baseline autenticado real de producción y la región de Vercel no está versionada en el repositorio. No agregar índices ni caché larga sin medición.
+
+## No implementado
+
+- PWA Admin: sin manifest, iconos, service worker ni installability formal.
+- Balanza: sin `ScaleAdapter`, adaptadores manual/simulado/serial ni integración Kretz.
+- Venta POS completa de productos `UNIT`.
+
+## Migraciones locales confirmadas
+
+### Supabase/PostgreSQL
+
+1. `202609100001_initial_identity_catalog.sql`
+2. `202609100002_grant_authenticated_table_access.sql`
+3. `202609100003_online_pos_sales_stock.sql`
+4. `202609100004_fix_branch_price_precedence.sql`
+5. `202609100005_offline_pos_sync.sql`
+6. `202609100006_remove_sync_function_shadow.sql`
+7. `202609100007_operational_pilot.sql`
+8. `202609100008_commercial_configuration.sql`
+9. `202609100009_grant_catalog_write_to_admin.sql`
+10. `202609100010_sync_discounted_offline_sales.sql`
+11. `202609110011_restore_sale_sync_compatibility.sql`
+12. `202609130012_price_formation_cash_discount.sql`
+13. `202609130013_fix_function_lint_errors.sql`
+14. `202609130014_payment_discount_category_colors.sql`
+15. `202609130015_smart_replenishment.sql`
+16. `202609130016_weekly_settlements.sql`
+17. `202609130017_profitability_analytics.sql`
+18. `202609130018_pos_operator_timekeeping.sql`
+19. `202609130019_harden_pos_operator_authorization.sql`
+20. `202609130020_audit_employee_deactivation.sql`
+21. `202609130021_review_stale_offline_clockins.sql`
+
+### SQLite POS
+
+1. `001_offline_core.sql`
+2. `002_commercial_config.sql`
+3. `003_discount_sale_snapshots.sql`
+4. `004_cash_discount_snapshots.sql`
+5. `005_category_colors.sql`
+6. `006_pos_operators_timekeeping.sql`
+
+### Estado remoto
+
+`REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero la auditoría no tuvo un token disponible para ejecutar `migration list --linked` o el lint remoto. No afirmar que 001–021 están aplicadas hasta comprobarlo autenticadamente.
+
+## Validación de auditoría
+
+- Admin typecheck/lint/build: OK.
+- POS typecheck/lint/build web: OK.
+- Vitest: 32 tests OK.
+- Rust: 3 tests OK.
+- Tauri desktop completo: no ejecutado en la auditoría.
+- pgTAP/SQL remoto: no ejecutado.
