@@ -24,9 +24,30 @@ antes desde un pendrive/mirror local.
 
 La netbook **no** necesita Node, pnpm, Rust, Cargo, ni el código fuente.
 
-## Cómo generar el `.deb`
+## Cómo generar el `.deb` (método recomendado: GitHub Actions)
 
-El build corre en la máquina de desarrollo (o CI), no en la netbook:
+No hace falta instalar Docker Desktop ni tener espacio libre en la PC de
+desarrollo para generar el paquete Linux. El workflow
+`.github/workflows/build-pos-linux-i386.yml` corre el mismo pipeline (frontend
+en un runner moderno + compilación Rust/Tauri dentro de un contenedor Debian
+12 **i386 nativo**) en la infraestructura de GitHub:
+
+1. En GitHub: **Actions → Build POS Linux i386 → Run workflow** (rama `main`).
+2. Esperar a que termine (compila desde cero la primera vez; ~15–25 min, las
+   corridas siguientes son más rápidas por caché de Docker/Cargo).
+3. Abrir la ejecución terminada → sección **Artifacts** → descargar
+   `carnicerias-pos-linux-i386` (contiene el `.deb`).
+4. Copiar ese `.deb` a la netbook (ver más abajo).
+
+El workflow no hace push ni crea releases; sólo deja el artifact descargable
+manualmente, y falla explícitamente si no se llegó a generar ningún `.deb`
+(no reporta éxito falso).
+
+### Alternativa opcional: build local con Docker
+
+Para quien sí tenga Docker con soporte `linux/386` instalado (Docker Desktop
+lo trae; en Linux puro instalar `qemu-user-static`/`binfmt-support`) y quiera
+generar el paquete sin pasar por GitHub:
 
 ```bash
 pnpm build:pos:linux:i386
@@ -38,15 +59,21 @@ Esto ejecuta `scripts/build-pos-linux-i386.sh`, que:
    i386 trae Node 18 por defecto y Vite 7 exige Node ≥20.19/≥22.12, así que el
    frontend nunca se compila dentro del contenedor ni en la netbook.
 2. Construye una imagen Docker Debian 12 **i386 nativa** (`--platform
-   linux/386`, emulada con QEMU si la máquina de build es x86_64) con Rust,
-   Tauri CLI y las libs de desarrollo de WebKitGTK/GTK3.
+   linux/386`) con Rust, Tauri CLI y las libs de desarrollo de
+   WebKitGTK/GTK3, usando `apps/pos/src-tauri/linux/Dockerfile` — el mismo
+   Dockerfile que usa el workflow de GitHub Actions.
 3. Corre `cargo tauri build --target i686-unknown-linux-gnu --bundles deb`
    dentro de ese contenedor.
 
-Requiere Docker con soporte `linux/386` (Docker Desktop lo trae; en Linux
-puro instalar `qemu-user-static`/`binfmt-support`).
+Este camino queda como opción de desarrollador; el recomendado para generar
+el `.deb` que se instala en las netbooks es GitHub Actions.
 
 ## Dónde queda el artefacto
+
+Vía GitHub Actions: dentro del `.zip` del artifact `carnicerias-pos-linux-i386`
+descargado desde la ejecución del workflow.
+
+Vía build local (`pnpm build:pos:linux:i386`):
 
 ```text
 apps/pos/src-tauri/target/i686-unknown-linux-gnu/release/bundle/deb/carnicerias-pos_0.1.0_i386.deb
@@ -124,8 +151,11 @@ normal y el POS se abre como una ventana más.
 
 ## Procedimiento de prueba (build)
 
-1. `pnpm build:pos:linux:i386` en la máquina de desarrollo.
-2. Confirmar que aparece el `.deb` en la ruta de arriba.
+1. Lanzar **Actions → Build POS Linux i386 → Run workflow** (o
+   `pnpm build:pos:linux:i386` si se prueba el camino local con Docker).
+2. Confirmar que el workflow termina en verde y que el artifact
+   `carnicerias-pos-linux-i386` contiene un `.deb` (o que aparece en la ruta
+   local de arriba).
 3. `apt install` el `.deb` en una VM/contenedor Debian 12 i386 limpio y
    confirmar que abre sin errores de librerías faltantes.
 

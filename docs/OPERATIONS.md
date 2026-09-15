@@ -69,13 +69,12 @@ pnpm build:pos:desktop
 
 El script raíz ejecuta `@carnicerias/pos build:desktop`. Si el ejecutable está bloqueado en Windows, cerrarlo antes del build. No borrar SQLite para actualizar.
 
-POS Linux (Debian 12 i386):
-
-```bash
-pnpm build:pos:linux:i386
-```
-
-Genera el `.deb` en un contenedor Debian 12 i386 nativo, no en la netbook de destino. Ver `docs/LINUX_POS.md` para requisitos, artefacto resultante e instalación.
+POS Linux (Debian 12 i386): método recomendado es GitHub Actions (**Actions →
+Build POS Linux i386 → Run workflow**, artifact `carnicerias-pos-linux-i386`),
+sin requerir Docker local. `pnpm build:pos:linux:i386` queda como alternativa
+de desarrollador con Docker instalado. En ambos casos el `.deb` se genera en
+un contenedor Debian 12 i386 nativo, nunca en la netbook de destino. Ver
+`docs/LINUX_POS.md` para requisitos, artefacto resultante e instalación.
 
 ## Supabase local
 

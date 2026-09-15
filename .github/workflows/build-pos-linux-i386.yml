@@ -1,0 +1,105 @@
+name: Build POS Linux i386
+
+# Manual, on-demand build of the Debian 12 i386 .deb for Carnicerías POS.
+# Reuses the same two-stage pipeline as scripts/build-pos-linux-i386.sh:
+#   1) frontend built on this (modern) runner with Node/pnpm;
+#   2) Rust/Tauri compiled and packaged natively inside the Debian 12
+#      linux/386 image defined at apps/pos/src-tauri/linux/Dockerfile.
+# This exists so nobody needs Docker Desktop / disk space on their own
+# Windows machine just to produce the Linux package. No push, no release:
+# only a downloadable workflow artifact.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build carnicerias-pos .deb (Debian 12 i386)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the POS frontend (Vite 7 needs Node >=22, not the i386 container's)
+        run: pnpm --filter @carnicerias/pos build:web
+
+      # i386 executes natively on the runner's amd64 CPU/kernel (32-bit x86
+      # compat), so this is mostly a safety net rather than a hard
+      # requirement the way QEMU is for arm/riscv — cheap to keep, and it
+      # protects against a runner image where 386 exec isn't pre-registered.
+      - name: Set up QEMU (linux/386)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/386
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the Debian 12 i386 build image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/pos/src-tauri/linux
+          file: apps/pos/src-tauri/linux/Dockerfile
+          platforms: linux/386
+          tags: carnicerias-pos-i386-builder:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Restore Cargo cache for the i386 target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-cache/cargo-registry
+            .ci-cache/cargo-git
+          key: pos-linux-i386-cargo-${{ hashFiles('apps/pos/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            pos-linux-i386-cargo-
+
+      - name: Compile Rust/Tauri and package the .deb (inside the Debian 12 i386 container)
+        run: |
+          mkdir -p .ci-cache/cargo-registry .ci-cache/cargo-git
+          docker run --rm \
+            --platform linux/386 \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/.ci-cache/cargo-registry:/root/.cargo/registry" \
+            -v "${{ github.workspace }}/.ci-cache/cargo-git:/root/.cargo/git" \
+            -w /workspace/apps/pos/src-tauri \
+            carnicerias-pos-i386-builder:ci \
+            cargo tauri build --target i686-unknown-linux-gnu --bundles deb
+
+      - name: Verify a .deb was actually produced
+        run: |
+          set -euo pipefail
+          DEB_DIR="apps/pos/src-tauri/target/i686-unknown-linux-gnu/release/bundle/deb"
+          shopt -s nullglob
+          debs=("$DEB_DIR"/*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::No .deb file was produced under $DEB_DIR — failing instead of reporting a false success."
+            exit 1
+          fi
+          echo "Found $(echo "${#debs[@]}") package(s):"
+          printf '  %s\n' "${debs[@]}"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carnicerias-pos-linux-i386
+          path: apps/pos/src-tauri/target/i686-unknown-linux-gnu/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 14
