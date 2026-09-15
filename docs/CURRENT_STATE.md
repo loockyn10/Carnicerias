@@ -12,6 +12,7 @@ Estado verificado contra el repositorio el 15 de septiembre de 2026. Las decisio
 - Distribución Windows NSIS x64 habilitada; el instalador no incluye la SQLite local de desarrollo.
 - Distribución Debian 12 i386 (`.deb`) implementada mediante `pnpm build:pos:linux:i386` (ver `docs/LINUX_POS.md`); pipeline reproducible, `REQUIERE VERIFICACIÓN EN HARDWARE REAL` antes de considerarla validada.
 - Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
+- Admin `/admin/branch-stock` ("Stock por sucursal"): matriz de consulta producto × sucursal, búsqueda por nombre/SKU tolerante a acentos, filtro por categoría, sin escribir stock (sólo lectura). Reutiliza `get_replenishment_plan` (no crea RPC ni fuente de stock nueva); no incluye la Central (ver D-011).
 
 ## Contradicciones vigentes
 
@@ -20,6 +21,10 @@ Estado verificado contra el repositorio el 15 de septiembre de 2026. Las decisio
 El dominio, pricing, snapshots y analytics contemplan `UNIT`. El catálogo operativo del POS y los RPC de venta actualmente trabajan sólo con `WEIGHT`, gramos y precio/kg.
 
 Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**.
+
+### Bug preexistente en `/admin/stock` (Operaciones de stock)
+
+La tabla de esa pantalla compara `row.stock_status === "CRITICAL" | "LOW"`, pero la vista `branch_stock_status` devuelve `'DISCONTINUED' | 'OUT_OF_STOCK' | 'LOW_STOCK' | 'AVAILABLE'` desde `202609100008_commercial_configuration.sql`. Resultado: la columna "Estado" de esa tabla siempre muestra "NORMAL", incluso sin stock. Es un bug técnico, no una decisión de producto; no se corrigió en este sprint por estar fuera de alcance (la nueva pantalla `/admin/branch-stock` no reutiliza esa comparación, usa `stockPriority` de `lib/multibranch.ts`).
 
 ## Empleados, operador y sucursal
 
@@ -173,12 +178,13 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 
 ## Validación actual
 
-- Admin typecheck/lint/build: OK.
+- Admin typecheck/lint/build: OK (incluye `/admin/branch-stock`, ruta nueva compilada y prerenderizada).
 - POS typecheck/lint/build web: OK.
-- Vitest: 36 tests OK.
+- Vitest: 56 tests OK (20 nuevos de `branch-stock.test.ts`: agregación producto×sucursal, WEIGHT/UNIT, búsqueda/filtro).
 - Rust: 6 tests OK.
 - Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK.
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.
 - POS Linux i386: pipeline (`pnpm build:pos:linux:i386`, contenedor Debian 12 i386) implementado; **no se pudo ejecutar** en esta sesión porque el motor de Docker Desktop no llegó a estar operativo (API respondía 500 tras varios minutos). `REQUIERE VERIFICACIÓN`: generar el `.deb` real y el smoke test de `docs/LINUX_POS.md` en un entorno con Docker/CI Linux funcional y, después, en hardware Atom real.
 - La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
 - SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.
+- `/admin/branch-stock`: validado por typecheck/lint/build/tests unitarios; **no verificado visualmente contra datos Supabase reales** en esta sesión (sin credenciales de organización de prueba). `REQUIERE VERIFICACIÓN`: smoke manual con sesión admin real, varias sucursales y productos WEIGHT/UNIT.

@@ -119,7 +119,9 @@ No introducir fuentes paralelas sin decisión explícita.
 
 No modelar actualmente el inventario del negocio/depósito principal del dueño.
 
-**Motivo:** ya se controla por otro sistema y duplicaría trabajo.
+**Motivo:** ya se controla por otro sistema y duplicaría trabajo; el dueño no tiene hoy tiempo de registrar ventas/movimientos ahí de forma sistemática, y preferimos una solución parcialmente automatizada pero confiable antes que una conceptualmente completa que nadie mantenga.
+
+La vista "Stock por sucursal" (`/admin/branch-stock`) compara el stock conocido por el sistema entre sucursales operativas reales; no incluye la Central. Podrá incorporarse como sucursal/ubicación real en el futuro si empieza a mantener stock dentro del sistema.
 
 ---
 

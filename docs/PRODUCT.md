@@ -10,6 +10,7 @@ Necesita una visión rápida del negocio y acceso a:
 - Sucursales.
 - Ventas.
 - Stock.
+- Stock por sucursal (consulta rápida de un producto entre sucursales).
 - Reposición.
 - Productos y categorías.
 - Formación de precios.
