@@ -32,7 +32,7 @@ La configuración concreta de proyecto/región Vercel está fuera del repositori
 
 El dispositivo se enrola en una organización y sucursal inmutables. La sucursal operativa no cambia al cambiar empleado. El selector manual de sucursal sólo puede usarse para desarrollo, setup o simulación, no como flujo productivo normal.
 
-La distribución Windows se genera como instalador NSIS x64 mediante `pnpm build:pos:desktop`. El bundle contiene la aplicación y sus recursos estáticos, pero no el archivo SQLite: cada equipo crea y migra su base dentro de `appData` usando el identificador estable `com.carnicerias.pos`, separado del directorio reemplazado por futuras instalaciones.
+La distribución Windows se genera como instalador NSIS x64 mediante `pnpm build:pos:desktop`. Debian 12 i386 se distribuye como `.deb` mediante `pnpm build:pos:linux:i386` (detalle en `docs/LINUX_POS.md`); mismo código, mismo identificador `com.carnicerias.pos`, sólo cambia target de compilación y empaquetado. El bundle contiene la aplicación y sus recursos estáticos, pero no el archivo SQLite: cada equipo crea y migra su base dentro del directorio de datos de la plataforma (`appData` en Windows, XDG data dir en Linux) usando el identificador estable `com.carnicerias.pos`, separado del directorio reemplazado por futuras instalaciones.
 
 Una venta se confirma primero en una transacción SQLite que persiste venta, ítems, pago, movimientos y evento outbox con UUID generados por el cliente. El push posterior usa recibos e identificadores estables para garantizar idempotencia. Los estados del outbox son `PENDING`, `SYNCING`, `SYNCED` y `FAILED`, con recuperación tras reinicio y backoff exponencial.
 

@@ -6,7 +6,7 @@ Carnicerías es una plataforma de operación y administración para una cadena d
 
 El producto tiene dos superficies principales:
 
-- **POS de sucursal**: aplicación de escritorio Windows, offline-first, usada por empleados para vender y operar aun sin Internet.
+- **POS de sucursal**: aplicación de escritorio offline-first (Windows moderno; Debian 12 i386 como plataforma adicional de bajo recurso), usada por empleados para vender y operar aun sin Internet.
 - **Admin**: aplicación web para el dueño/administradores, usada para controlar ventas, stock, reposición, precios, rentabilidad, rendiciones, personal y dispositivos.
 
 ## Problema que resuelve

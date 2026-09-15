@@ -1,6 +1,6 @@
 # Current State
 
-Estado verificado contra el repositorio el 14 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
+Estado verificado contra el repositorio el 15 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
 ## Núcleo confirmado
 
@@ -10,6 +10,7 @@ Estado verificado contra el repositorio el 14 de septiembre de 2026. Las decisio
 - Ventas, ítems, pagos y stock ledger con operaciones transaccionales.
 - POS offline-first con SQLite incremental, outbox, pull/push, retry, restart e idempotencia.
 - Distribución Windows NSIS x64 habilitada; el instalador no incluye la SQLite local de desarrollo.
+- Distribución Debian 12 i386 (`.deb`) implementada mediante `pnpm build:pos:linux:i386` (ver `docs/LINUX_POS.md`); pipeline reproducible, `REQUIERE VERIFICACIÓN EN HARDWARE REAL` antes de considerarla validada.
 - Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
 
 ## Contradicciones vigentes
@@ -176,7 +177,8 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 - POS typecheck/lint/build web: OK.
 - Vitest: 36 tests OK.
 - Rust: 6 tests OK.
-- Tauri desktop completo: OK.
+- Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK.
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.
+- POS Linux i386: pipeline (`pnpm build:pos:linux:i386`, contenedor Debian 12 i386) implementado; **no se pudo ejecutar** en esta sesión porque el motor de Docker Desktop no llegó a estar operativo (API respondía 500 tras varios minutos). `REQUIERE VERIFICACIÓN`: generar el `.deb` real y el smoke test de `docs/LINUX_POS.md` en un entorno con Docker/CI Linux funcional y, después, en hardware Atom real.
 - La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
 - SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.

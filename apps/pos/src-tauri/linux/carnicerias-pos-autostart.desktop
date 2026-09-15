@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Carnicerías POS
+Comment=Inicia el POS automáticamente al iniciar sesión (XDG autostart, XFCE)
+Exec=/usr/bin/carnicerias-pos
+Terminal=false
+X-GNOME-Autostart-enabled=true

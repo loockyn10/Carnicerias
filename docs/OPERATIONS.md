@@ -4,7 +4,8 @@
 
 - Node.js 22 o superior.
 - pnpm 11.19.0, según `packageManager`.
-- Rust stable MSVC, C++ Build Tools y WebView2 para POS desktop.
+- Rust stable MSVC, C++ Build Tools y WebView2 para POS desktop Windows.
+- Docker con soporte `linux/386` (QEMU) para empaquetar POS Linux i386; ver `docs/LINUX_POS.md`.
 - Docker Desktop para Supabase local/pgTAP.
 - Sesión válida de Supabase CLI para operaciones `--linked`.
 
@@ -67,6 +68,14 @@ pnpm build:pos:desktop
 ```
 
 El script raíz ejecuta `@carnicerias/pos build:desktop`. Si el ejecutable está bloqueado en Windows, cerrarlo antes del build. No borrar SQLite para actualizar.
+
+POS Linux (Debian 12 i386):
+
+```bash
+pnpm build:pos:linux:i386
+```
+
+Genera el `.deb` en un contenedor Debian 12 i386 nativo, no en la netbook de destino. Ver `docs/LINUX_POS.md` para requisitos, artefacto resultante e instalación.
 
 ## Supabase local
 

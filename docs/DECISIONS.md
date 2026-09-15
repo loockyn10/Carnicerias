@@ -258,3 +258,19 @@ El polling preventivo de estado remoto usa una cadencia de 60 segundos. El conta
 **Status:** Abandoned
 
 Windows 7 Legacy support was evaluated and abandoned. The project will not support Windows 7. El POS sólo distribuye el build moderno Windows x64 (`pnpm build:pos:desktop`).
+
+---
+
+## D-027 — Debian 12 i386 como plataforma adicional de bajo recurso
+
+**Status:** Active / implementación preparada; smoke real pendiente
+
+Carnicerías POS soporta Windows moderno y se incorpora Debian 12 i386 como
+plataforma Legacy para cajas de bajo recurso (netbooks tipo Atom N270, 2 GB
+RAM). Windows 7 no está soportado (ver D-026).
+
+Es el mismo código Tauri/React/Rust/SQLite, sin fork: sólo cambia el target
+de compilación (`i686-unknown-linux-gnu`) y el empaquetado (`.deb` en vez de
+NSIS). El frontend se compila en la máquina de desarrollo; el binario/paquete
+Linux se genera de forma nativa dentro de un contenedor Debian 12 i386, no
+por cross-compilación desde otra arquitectura. Detalle en `docs/LINUX_POS.md`.
