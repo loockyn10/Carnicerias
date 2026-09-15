@@ -89,8 +89,8 @@ function DeviceProvisioningLogin({ onAuthenticated, onCancel }: { onAuthenticate
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
-      <section className="w-full max-w-md rounded-3xl border border-stone-800 bg-stone-900 p-8 shadow-2xl">
+    <main className="pos-auth-screen grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
+      <section className="pos-modal-panel w-full max-w-md rounded-3xl border border-stone-800 bg-stone-900 p-8 shadow-2xl">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-rose-400">Configuración administrativa</p>
         <h1 className="mt-3 text-4xl font-black">Autorizar esta caja</h1>
         <p className="mt-3 text-stone-400">Acceso exclusivo para configurar la identidad técnica del dispositivo.</p>
@@ -134,8 +134,8 @@ function DeviceProvisioningLogin({ onAuthenticated, onCancel }: { onAuthenticate
 
 function DeviceSetupRequired({ onConfigure }: { onConfigure: () => void }) {
   return (
-    <main className="grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
-      <section className="w-full max-w-lg rounded-3xl border border-amber-800 bg-stone-900 p-8 text-center shadow-2xl">
+    <main className="pos-auth-screen grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
+      <section className="pos-modal-panel w-full max-w-lg rounded-3xl border border-amber-800 bg-stone-900 p-8 text-center shadow-2xl">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-amber-400">Caja no autorizada</p>
         <h1 className="mt-3 text-3xl font-black">Esta caja necesita ser configurada.</h1>
         <p className="mt-4 text-lg text-stone-300">Contactá al administrador.</p>
@@ -146,8 +146,10 @@ function DeviceSetupRequired({ onConfigure }: { onConfigure: () => void }) {
 }
 
 function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => Promise<void> }) {
-  const [selected, setSelected] = useState(operators[0]?.profileId ?? ""); const [pin, setPin] = useState("");
-  const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState(operators[0]?.profileId ?? "");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => { if (!selected && operators[0]) setSelected(operators[0].profileId); }, [operators, selected]);
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(null);
@@ -164,7 +166,31 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
     } catch (loginError) { setError(loginError instanceof Error ? loginError.message : "No se pudo validar el PIN"); }
     finally { setBusy(false); }
   }
-  return <main className="grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100"><section className="w-full max-w-lg rounded-3xl border border-stone-800 bg-stone-900 p-7 shadow-2xl"><p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">Dispositivo autorizado</p><h1 className="mt-2 text-3xl font-black">¿Quién está usando la caja?</h1><div className="mt-5 grid grid-cols-2 gap-2">{operators.map((item) => <button className={`rounded-xl border p-3 text-left ${selected === item.profileId ? "border-rose-500 bg-rose-950" : "border-stone-700 bg-stone-950"}`} key={item.profileId} onClick={() => { setSelected(item.profileId); setPin(""); }} type="button"><strong>{item.displayName}</strong><span className="block text-xs text-stone-400">{item.roleName}{!item.hasPin ? " · sin PIN" : ""}</span></button>)}</div>{!operators.length ? <p className="mt-5 rounded-xl bg-amber-950 p-4 text-amber-100">No hay empleados con acceso a esta sucursal. Configurá sus PIN desde Admin.</p> : <form className="mt-5 grid gap-3" onSubmit={(event) => void submit(event)}><input autoFocus className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-4 text-center text-2xl tracking-[0.5em]" inputMode="numeric" maxLength={6} name="pin" onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))} placeholder="••••" type="password" value={pin} /><button className="rounded-xl bg-rose-600 px-4 py-3 font-black disabled:opacity-50" disabled={busy || !selected || !operators.find((item) => item.profileId === selected)?.hasPin}>{busy ? "Validando…" : online ? "Entrar" : "Entrar offline"}</button></form>}{error ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}</section></main>;
+  return (
+    <main className="pos-auth-screen grid min-h-screen place-items-center bg-stone-950 p-6 text-stone-100">
+      <section className="pos-modal-panel w-full max-w-lg rounded-3xl border border-stone-800 bg-stone-900 p-7 shadow-2xl">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">Dispositivo autorizado</p>
+        <h1 className="mt-2 text-3xl font-black">¿Quién está usando la caja?</h1>
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          {operators.map((item) => (
+            <button className={`rounded-xl border p-3 text-left ${selected === item.profileId ? "border-rose-500 bg-rose-950" : "border-stone-700 bg-stone-950"}`} key={item.profileId} onClick={() => { setSelected(item.profileId); setPin(""); }} type="button">
+              <strong>{item.displayName}</strong>
+              <span className="block text-xs text-stone-400">{item.roleName}{!item.hasPin ? " · sin PIN" : ""}</span>
+            </button>
+          ))}
+        </div>
+        {!operators.length ? (
+          <p className="mt-5 rounded-xl bg-amber-950 p-4 text-amber-100">No hay empleados con acceso a esta sucursal. Configurá sus PIN desde Admin.</p>
+        ) : (
+          <form className="mt-5 grid gap-3" onSubmit={(event) => void submit(event)}>
+            <input autoFocus className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-4 text-center text-2xl tracking-[0.5em]" inputMode="numeric" maxLength={6} name="pin" onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))} placeholder="••••" type="password" value={pin} />
+            <button className="rounded-xl bg-rose-600 px-4 py-3 font-black disabled:opacity-50" disabled={busy || !selected || !operators.find((item) => item.profileId === selected)?.hasPin}>{busy ? "Validando…" : online ? "Entrar" : "Entrar offline"}</button>
+          </form>
+        )}
+        {error ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}
+      </section>
+    </main>
+  );
 }
 
 export default function App() {
@@ -904,17 +930,17 @@ export default function App() {
           : "SINCRONIZADO";
 
   return (
-    <main className="min-h-screen bg-stone-950 text-stone-100 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
-      <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-stone-800 bg-stone-900 px-5 py-3">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-400">{desktop ? "POS offline-first" : "POS online"}</p>
-          <p className="text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
+    <main className="pos-shell min-h-screen bg-stone-950 text-stone-100 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
+      <header className="pos-header flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-stone-800 bg-stone-900 px-5 py-3">
+        <div className="pos-brand min-w-0">
+          <p className="pos-brand-eyebrow text-xs font-bold uppercase tracking-[0.2em] text-rose-400">{desktop ? "POS offline-first" : "POS online"}</p>
+          <p className="truncate text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}>Ventas recientes</button>
+        <div className="pos-header-actions flex items-center gap-3">
+          <button className="pos-recent-sales rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}><span className="pos-label-full">Ventas recientes</span><span className="pos-label-compact">Ventas</span></button>
           {desktop ? (
             <button
-              className={`w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
+              className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
               onClick={() => setDiagnosticsOpen(true)}
             >
               {syncLabel}
@@ -934,9 +960,9 @@ export default function App() {
             </select>
           ) : null}
           {desktop && operator ? (
-            <div className={`min-w-32 rounded-xl px-3 py-2 text-right text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-300"}`}>
-              <p className="font-black text-stone-100">{operator.displayName}</p>
-              <p>{shift?.status === "OPEN" ? `Turno desde ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? "Turno a revisar" : "Sin turno"}</p>
+            <div className={`pos-operator min-w-32 rounded-xl px-3 py-2 text-right text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-300"}`}>
+              <span className="font-black text-stone-100">{operator.displayName}</span>
+              <span className="pos-operator-shift">{shift?.status === "OPEN" ? ` · ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? " · A revisar" : " · Sin turno"}</span>
             </div>
           ) : (
             <div className="text-right text-xs text-stone-400"><p className="font-semibold text-stone-200">{roleName}</p><p>{user.email}</p></div>
@@ -966,30 +992,30 @@ export default function App() {
       {notice ? <div className="mx-4 mt-4 rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-emerald-100">{notice}</div> : null}
       {announcements.length ? <div className="mx-4 mt-4 grid gap-2 md:grid-cols-2">{announcements.map((announcement) => <div key={announcement.id} className="rounded-xl border border-amber-700 bg-amber-950 px-4 py-3 text-sm text-amber-100"><strong>{announcement.title}</strong><p>{announcement.message}</p></div>)}</div> : null}
 
-      <div className="grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
-        <section className="min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
-          <div className="flex flex-wrap gap-2">
+      <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
+        <section className="pos-catalog min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
+          <div className="pos-categories flex flex-wrap gap-2">
             <button className={`rounded-xl px-4 py-3 font-bold ${categoryId === "ALL" ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId("ALL")}>Todos</button>
             {categories.map((category) => (
               <button key={category.id} className={`flex items-center gap-2 rounded-xl px-4 py-3 font-bold ${categoryId === category.id ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId(category.id)}><span className="h-2.5 w-2.5 rounded-full bg-stone-500" style={{ backgroundColor: categoryAccent(category.color) }} />{category.name}</button>
             ))}
           </div>
           <input
-            className="mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-4 py-3 text-lg outline-none focus:border-rose-500"
+            className="pos-search mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-4 py-3 text-lg outline-none focus:border-rose-500"
             placeholder="Buscar producto o SKU…"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
+          <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
             {filteredProducts.map((product) => (
               <button
                 key={product.productId}
-                className="min-h-32 rounded-2xl border border-l-4 border-stone-700 bg-stone-900 p-4 text-left shadow-lg transition hover:-translate-y-0.5 hover:bg-stone-800"
+                className="pos-product-card min-h-32 rounded-2xl border border-l-4 border-stone-700 bg-stone-900 p-4 text-left shadow-lg transition hover:-translate-y-0.5 hover:bg-stone-800"
                 onClick={() => openWeight(product)}
                 style={{ borderLeftColor: categoryAccent(product.categoryColorHex) }}
               >
                 <span className="block text-lg font-black">{product.productName}</span>
-                <span className="mt-2 block text-sm text-stone-400">{product.categoryName}</span>
+                <span className="pos-product-category mt-2 block text-sm text-stone-400">{product.categoryName}</span>
                 <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / kg</small></span>
                 {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{rule.discountType === "PERCENTAGE" ? `${String(Number(rule.discountValue) / 100)}% OFF` : `${formatCurrency(BigInt(rule.discountValue))}/kg`} desde {formatWeight(rule.minimumGrams)}</span>)}
               </button>
@@ -998,17 +1024,17 @@ export default function App() {
           {!loading && filteredProducts.length === 0 ? <p className="mt-10 text-center text-stone-500">No hay productos disponibles.</p> : null}
         </section>
 
-        <aside className="flex min-h-[520px] flex-col bg-stone-900 p-4 lg:min-h-0 lg:overflow-hidden lg:p-5">
+        <aside className="pos-ticket flex min-h-[520px] flex-col bg-stone-900 p-4 lg:min-h-0 lg:overflow-hidden lg:p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-black">Ticket actual</h2>
             {ticket.length ? <button className="text-sm font-bold text-red-400 hover:text-red-300" onClick={() => window.confirm("¿Cancelar todo el ticket?") && setTicket([])}>Cancelar</button> : null}
           </div>
-          <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <div className="pos-ticket-items mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto">
             {ticket.length === 0 ? <div className="grid h-44 place-items-center rounded-2xl border border-dashed border-stone-700 text-center text-stone-500">Seleccioná un producto<br />para comenzar</div> : null}
             {ticket.map((line) => {
               const product = catalog.find((candidate) => candidate.productId === line.productId);
               return (
-                <article key={line.id} className="rounded-2xl border border-stone-700 bg-stone-950 p-4">
+                <article key={line.id} className="pos-ticket-item rounded-2xl border border-stone-700 bg-stone-950 p-4">
                   <div className="flex justify-between gap-3">
                     <div>
                       <h3 className="font-black">{line.productName}</h3>
@@ -1026,14 +1052,14 @@ export default function App() {
             })}
           </div>
 
-          <div className="mt-4 shrink-0 border-t border-stone-700 pt-4">
+          <div className="pos-ticket-footer mt-4 shrink-0 border-t border-stone-700 pt-4">
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
             <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
             {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
             {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
             <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
-            <label className="mt-5 grid gap-2 text-sm font-bold text-stone-300">
-              Método de pago
+            <label className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
+              <span>Método de pago</span>
               <select className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-3 text-lg" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
                 {PAYMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
@@ -1046,8 +1072,8 @@ export default function App() {
       </div>
 
       {clockInRequired && operator ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-in-title">
-          <section className="w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 text-center shadow-2xl">
+        <div className="pos-modal-backdrop fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-in-title">
+          <section className="pos-modal-panel w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 text-center shadow-2xl">
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Inicio de turno</p>
             <h2 className="mt-2 text-3xl font-black" id="clock-in-title">Marcar entrada</h2>
             <p className="mt-4 text-stone-300">Estás ingresando como <strong className="text-stone-100">{operator.displayName}</strong>.</p>
@@ -1058,8 +1084,8 @@ export default function App() {
       ) : null}
 
       {exitModalOpen && operator && shift?.status === "OPEN" ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-out-title">
-          <section className="w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 shadow-2xl">
+        <div className="pos-modal-backdrop fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-labelledby="clock-out-title">
+          <section className="pos-modal-panel w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 shadow-2xl">
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{operator.displayName}</p>
             <h2 className="mt-2 text-3xl font-black" id="clock-out-title">Finalizar turno</h2>
             <dl className="mt-6 grid gap-4 rounded-2xl bg-stone-950 p-5">
@@ -1076,8 +1102,8 @@ export default function App() {
       ) : null}
 
       {diagnosticsOpen && localRuntime ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
-          <section className="w-full max-w-xl rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
+        <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
+          <section className="pos-modal-panel w-full max-w-xl rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Diagnóstico</p>
@@ -1109,17 +1135,17 @@ export default function App() {
       ) : null}
 
       {recentSalesOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
-          <section className="w-full max-w-xl rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
+        <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
+          <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 space-y-3">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
       ) : null}
 
       {selectedProduct ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
-          <form className="w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
+        <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
+          <form className="pos-modal-panel w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{editingLineId ? "Modificar línea" : "Agregar al ticket"}</p>
             <h2 className="mt-2 text-3xl font-black">{selectedProduct.productName}</h2>
             <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p>

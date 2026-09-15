@@ -110,6 +110,7 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - El estado `SINCRONIZANDO` sólo se publica cuando existe outbox vencido con trabajo real; un ciclo vacío permanece `SINCRONIZADO` y el badge reserva ancho estable.
 - Ticket fijo, footer visible, scroll interno de catálogo/ticket y cards compactas mediante filas de tamaño intrínseco.
 - Colores de categoría configurables, sincronizados a SQLite y con fallback.
+- Layout operativo compacto para baja altura: header de una línea, catálogo/ticket horizontal desde 900 px, proporción fluida, footer del ticket fijo y modales con scroll interno. Objetivo de validación: 1024×600; también 1366×768 y 1920×1080.
 
 ## Performance Admin
 
@@ -176,5 +177,6 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 - Vitest: 36 tests OK.
 - Rust: 6 tests OK.
 - Tauri desktop completo: OK.
+- Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.
 - La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
 - SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.

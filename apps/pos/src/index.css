@@ -10,6 +10,7 @@
 body {
   margin: 0;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 button,
@@ -20,4 +21,239 @@ select {
 
 button {
   cursor: pointer;
+}
+
+.pos-label-compact {
+  display: none;
+}
+
+.pos-modal-backdrop {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pos-modal-panel {
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+@media (min-width: 900px) and (max-height: 700px) {
+  .pos-shell {
+    display: flex;
+    height: 100dvh;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .pos-header {
+    min-height: 48px;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    padding: 0.375rem 0.75rem;
+  }
+
+  .pos-brand {
+    flex: 1 1 auto;
+  }
+
+  .pos-brand-eyebrow,
+  .pos-label-full {
+    display: none;
+  }
+
+  .pos-label-compact {
+    display: inline;
+  }
+
+  .pos-header-actions {
+    flex: 0 0 auto;
+    gap: 0.375rem;
+  }
+
+  .pos-header-actions > button,
+  .pos-header-actions > select,
+  .pos-operator {
+    border-radius: 0.5rem;
+    padding: 0.375rem 0.625rem;
+  }
+
+  .pos-sync {
+    width: 11.5rem;
+  }
+
+  .pos-operator {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .pos-workspace {
+    display: grid;
+    min-height: 0;
+    flex: 1 1 0%;
+    grid-template-columns: minmax(0, 1fr) clamp(330px, 34vw, 380px);
+  }
+
+  .pos-catalog {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border-right-width: 1px;
+    padding: 0.75rem;
+  }
+
+  .pos-categories {
+    flex-wrap: nowrap;
+    gap: 0.375rem;
+    overflow-x: auto;
+    padding-bottom: 0.125rem;
+  }
+
+  .pos-categories > button {
+    flex: 0 0 auto;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .pos-search {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    line-height: 1.5rem;
+  }
+
+  .pos-product-grid {
+    min-height: 0;
+    flex: 1 1 0%;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    overflow-y: auto;
+  }
+
+  .pos-product-card {
+    min-height: 0;
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    box-shadow: none;
+  }
+
+  .pos-product-card > span:first-child {
+    font-size: 1rem;
+    line-height: 1.25rem;
+  }
+
+  .pos-product-category {
+    display: none;
+  }
+
+  .pos-product-card > span:nth-of-type(3) {
+    margin-top: 0.5rem;
+    font-size: 1.125rem;
+    line-height: 1.5rem;
+  }
+
+  .pos-ticket {
+    min-height: 0;
+    overflow: hidden;
+    padding: 0.75rem;
+  }
+
+  .pos-ticket h2 {
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+  }
+
+  .pos-ticket-items {
+    margin-top: 0.5rem;
+  }
+
+  .pos-ticket-item {
+    border-radius: 0.75rem;
+    padding: 0.625rem;
+  }
+
+  .pos-ticket-item > div:last-child {
+    margin-top: 0.375rem;
+  }
+
+  .pos-ticket-footer {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+
+  .pos-ticket-footer > div {
+    margin-top: 0.25rem;
+  }
+
+  .pos-ticket-footer strong.text-4xl {
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+  }
+
+  .pos-payment {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .pos-payment > span {
+    flex: 0 0 auto;
+  }
+
+  .pos-payment > select {
+    min-width: 0;
+    flex: 1 1 auto;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    line-height: 1.5rem;
+  }
+
+  .pos-ticket-footer > button {
+    margin-top: 0.5rem;
+    border-radius: 0.75rem;
+    padding-top: 0.625rem;
+    padding-bottom: 0.625rem;
+    font-size: 1.125rem;
+    line-height: 1.75rem;
+  }
+
+  .pos-auth-screen {
+    padding: 0.75rem;
+  }
+
+  .pos-modal-panel {
+    max-height: calc(100dvh - 1.5rem);
+    border-radius: 1rem;
+    padding: 1rem;
+  }
+
+  .pos-modal-panel h1,
+  .pos-modal-panel h2 {
+    font-size: 1.5rem;
+    line-height: 2rem;
+  }
+
+  .pos-modal-panel .mt-6 {
+    margin-top: 1rem;
+  }
+
+  .pos-modal-panel .mt-5 {
+    margin-top: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
