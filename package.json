@@ -12,7 +12,7 @@
     "dev:pos": "pnpm --filter @carnicerias/pos dev",
     "dev:pos:desktop": "pnpm --filter @carnicerias/pos dev:desktop",
     "build:pos:desktop": "pnpm --filter @carnicerias/pos build:desktop",
-    "build:pos:linux:i386": "bash scripts/build-pos-linux-i386.sh",
+    "build:pos:linux:i386": "node scripts/run-bash.mjs scripts/build-pos-linux-i386.sh",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",

@@ -28,8 +28,33 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 POS_DIR="$ROOT_DIR/apps/pos"
 TAURI_DIR="$POS_DIR/src-tauri"
 DOCKERFILE="$TAURI_DIR/linux/Dockerfile"
+BUILD_CONTEXT="$TAURI_DIR/linux"
 IMAGE_TAG="carnicerias-pos-i386-builder"
 RUST_TARGET="i686-unknown-linux-gnu"
+
+# Under Git Bash/MSYS on Windows, the shell auto-converts POSIX-looking
+# arguments to native Windows paths before handing them to a non-MSYS
+# executable like docker.exe. That conversion is exactly what we want for
+# HOST paths (so docker.exe can open them) but it also mangles the
+# CONTAINER-side path "/workspace" — which isn't a real path on this
+# machine, so MSYS's fallback heuristic rewrites it into something like
+# "C:/Program Files/Git/workspace", breaking -w and the -v destination.
+#
+# Fix: on MSYS only (detected via `cygpath`, which doesn't exist on real
+# Linux/macOS or in CI), convert the host paths ourselves with `cygpath -w`
+# and then disable MSYS's automatic conversion for the docker invocation
+# with MSYS_NO_PATHCONV, so the container-side "/workspace" passes through
+# untouched. Elsewhere this block is skipped entirely and nothing changes.
+if command -v cygpath >/dev/null 2>&1; then
+  DOCKER_ROOT_DIR="$(cygpath -w "$ROOT_DIR")"
+  DOCKER_DOCKERFILE="$(cygpath -w "$DOCKERFILE")"
+  DOCKER_BUILD_CONTEXT="$(cygpath -w "$BUILD_CONTEXT")"
+  export MSYS_NO_PATHCONV=1
+else
+  DOCKER_ROOT_DIR="$ROOT_DIR"
+  DOCKER_DOCKERFILE="$DOCKERFILE"
+  DOCKER_BUILD_CONTEXT="$BUILD_CONTEXT"
+fi
 
 echo "==> [1/3] Building the POS frontend on the host (Node/pnpm)"
 pnpm --filter @carnicerias/pos build:web
@@ -37,14 +62,14 @@ pnpm --filter @carnicerias/pos build:web
 echo "==> [2/3] Building the Debian 12 i386 build image (cached after first run)"
 docker build \
   --platform linux/386 \
-  -f "$DOCKERFILE" \
+  -f "$DOCKER_DOCKERFILE" \
   -t "$IMAGE_TAG" \
-  "$TAURI_DIR/linux"
+  "$DOCKER_BUILD_CONTEXT"
 
 echo "==> [3/3] Compiling the Rust/Tauri binary and packaging the .deb inside the container"
 docker run --rm \
   --platform linux/386 \
-  -v "$ROOT_DIR:/workspace" \
+  -v "$DOCKER_ROOT_DIR:/workspace" \
   -v "carnicerias-pos-cargo-registry:/root/.cargo/registry" \
   -v "carnicerias-pos-cargo-git:/root/.cargo/git" \
   -w /workspace/apps/pos/src-tauri \
