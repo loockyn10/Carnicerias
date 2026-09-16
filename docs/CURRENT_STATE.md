@@ -122,13 +122,31 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 
 Ya existen:
 
-- instrumentación de tiempos por ruta;
-- cache por request de `getAdminContext`;
+- instrumentación de tiempos por ruta (ahora también en `/admin/products` y `/admin/employees`);
+- cache por request de `getAdminContext`, y desde el sprint 2026-09-16 resuelto en **una sola query** (embedded select `organization_members → roles/organizations`) en vez de auth + membership + role/org secuenciales;
 - paralelización de varias consultas;
 - reducción de `select("*")`;
 - selecciones de columnas más acotadas.
 
-Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía transfieren conjuntos amplios y agregan en JavaScript, y el sidebar desactiva prefetch. Falta un baseline autenticado real de producción y la región de Vercel no está versionada en el repositorio. No agregar índices ni caché larga sin medición.
+Las rutas siguen siendo dinámicas por cookies/sesión (Next 15 sin `staleTimes` configurado: cada navegación re-ejecuta el layout y vuelve a resolver `getAdminContext`). El sidebar desactiva prefetch. El bundle no muestra librerías pesadas (charts/iconos) que justifiquen `dynamic import`; el First Load JS de todas las rutas ronda 103–110 kB.
+
+### Cuello de botella `branch_stock_status` / RLS por fila — resuelto 2026-09-16
+
+Medido localmente (Supabase local, ~60 días de ventas sintéticas, 2 sucursales, ~2.050–2.080 filas en `stock_movements`): la vista `branch_stock_status` (usada sin RPC en `/admin`, `/admin/branches` y `/admin/stock`) tardaba **1.1–2.2 s** por request. `EXPLAIN ANALYZE` mostró que el costo era casi todo `Filter` sobre un `Seq Scan` de `stock_movements`, evaluando `app_private.can_access_branch(...)` **una vez por fila del ledger completo** (≈2.050 evaluaciones) antes del `GROUP BY`.
+
+Se agregó `public.get_branch_stock_status(p_branch_id uuid default null)` (migración `202609160023_get_branch_stock_status.sql`), RPC `SECURITY DEFINER` que sigue el mismo patrón que `get_replenishment_plan`: valida `app_private.require_permission('stock.read')` una vez, agrega directamente sobre `stock_movements`/`stock_levels` (la función es dueña `postgres`, con `BYPASSRLS`, igual que el resto de las RPC administrativas) y aplica `app_private.can_access_branch(...)` sólo contra `branches` (2 filas en el caso medido, no miles). Confirmado con `EXPLAIN ANALYZE` equivalente: la evaluación de autorización pasó de ~2.050 llamadas a 2. Tiempo de query medido: **1.485 s → 2.8 ms** (consulta SQL directa) y **8.3 ms** vía la función completa.
+
+`/admin`, `/admin/branches` y `/admin/stock` migraron a la RPC. `branch_stock_status` (la vista) **no se eliminó**: `/admin/attention`, `/admin/branches/compare` y `components/branch-detail.tsx` (usado por `/admin/branches/[id]` y su modal) siguen leyéndola directamente y quedaron fuera de este cambio.
+
+`stock_movements` sigue siendo la única fuente de verdad remota del stock; no se creó balance materializado ni tabla de stock corriente. RLS de las tablas base no cambió — la RPC reemplaza la evaluación por-fila por una validación explícita equivalente (documentada en el comentario de la migración): sólo el rol `admin` (que tiene todos los permisos, incluido `branches.read_all`) llega hoy a estas pantallas, así que el resultado es idéntico al de la vista para el único consumidor real; para un rol futuro más restringido la RPC es más estricta que la vista, no más débil (la vista nunca exigió `stock.read` en su propio chequeo de `branches`, sólo en `stock_movements`).
+
+Tests: `supabase/tests/branch_stock_status_rpc.test.sql` (28 tests pgTAP: hardening de la función, stock positivo/cero/negativo sin clamping, producto sin movimientos, UNIT excluido, aislamiento entre organizaciones incluso pasando el `branch_id` de otra org, empleado sin acceso a una sucursal, sucursal inexistente, usuario sin membership, anónimo, y equivalencia byte-a-byte contra la vista vieja).
+
+**Hallazgo colateral (no corregido, fuera de alcance):** al tipar el retorno de la RPC con el union real de `stock_status`, TypeScript marcó como comparación imposible el bug ya documentado de `/admin/stock` (compara contra `"CRITICAL"`/`"LOW"`, que nunca ocurren). Se mantuvo el tipo de retorno como `string` (igual que la vista) para no forzar ese fix fuera de alcance dentro de este sprint; la columna "Estado" de esa tabla sigue mostrando "NORMAL" siempre, sin cambios de comportamiento.
+
+**Hallazgo colateral (no corregido, fuera de alcance):** al validar con `pnpm db:reset && pnpm db:test` (primera ejecución real del suite pgTAP contra Postgres — antes no se pudo correr por falta de Docker) aparecieron fallos preexistentes no relacionados: `internal_pos_employees.test.sql` aborta por `permission denied for table users`; `online_pos.test.sql` y `operational_pilot.test.sql` fallan en tests que esperan que `authenticated` NO pueda insertar directamente en `sales`/`sale_items`/`payments`/`stock_movements`, y en un error `40001: Product price changed` dentro de `complete_discounted_sale`. Se confirmó que reproducen idénticos con y sin la migración de este sprint (probado quitando y volviendo a poner el archivo nuevo). Quedan fuera de alcance de este sprint de performance; task de seguimiento creada.
+
+Falta además un baseline autenticado real de producción (Vercel) y la región de Vercel no está versionada en el repositorio. No agregar índices ni caché larga sin medición.
 
 ## No implementado
 
@@ -162,6 +180,7 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 20. `202609130020_audit_employee_deactivation.sql`
 21. `202609130021_review_stale_offline_clockins.sql`
 22. `202609140022_internal_pos_employees.sql`
+23. `202609160023_get_branch_stock_status.sql`
 
 ### SQLite POS
 
@@ -174,7 +193,7 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 
 ### Estado remoto
 
-`REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero no se ejecutó `migration list --linked` ni se aplicó la migración 022 al remoto. No afirmar que 001–022 están aplicadas hasta comprobarlo autenticadamente.
+`REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero no se ejecutó `migration list --linked` ni se aplicaron las migraciones 022–023 al remoto. No afirmar que 001–023 están aplicadas hasta comprobarlo autenticadamente.
 
 ## Validación actual
 
@@ -185,6 +204,6 @@ Las rutas siguen siendo dinámicas por cookies/sesión. Algunos loaders todavía
 - Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK.
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.
 - POS Linux i386: pipeline (`pnpm build:pos:linux:i386`, contenedor Debian 12 i386) implementado; **no se pudo ejecutar** en esta sesión porque el motor de Docker Desktop no llegó a estar operativo (API respondía 500 tras varios minutos). `REQUIERE VERIFICACIÓN`: generar el `.deb` real y el smoke test de `docs/LINUX_POS.md` en un entorno con Docker/CI Linux funcional y, después, en hardware Atom real.
-- La suite pgTAP para identidades internas está agregada, pero no se ejecutó porque Docker Desktop no estaba disponible.
-- SQL remoto: no ejecutado; migración 022 pendiente de dry-run/push autenticado.
-- `/admin/branch-stock`: validado por typecheck/lint/build/tests unitarios; **no verificado visualmente contra datos Supabase reales** en esta sesión (sin credenciales de organización de prueba). `REQUIERE VERIFICACIÓN`: smoke manual con sesión admin real, varias sucursales y productos WEIGHT/UNIT.
+- La suite pgTAP se ejecutó por primera vez el 2026-09-16 (Docker disponible): `branch_stock_status_rpc.test.sql` (nuevo, 28/28 OK), `initial_schema`, `offline_sync`, `price_formation`, `profitability_analytics`, `settlements` OK. `internal_pos_employees`, `online_pos` y `operational_pilot` tienen fallos preexistentes no relacionados con este sprint (reproducidos con y sin la migración nueva, contra `pnpm db:reset` limpio) — ver "Performance Admin" arriba y la tarea de seguimiento creada.
+- SQL remoto: no ejecutado; migraciones 022–023 pendientes de dry-run/push autenticado.
+- `/admin/branch-stock`: validado por typecheck/lint/build/tests unitarios; **no verificado visualmente contra datos Supabase reales de producción** (sí contra Supabase local con datos sintéticos, sesión 2026-09-16). `REQUIERE VERIFICACIÓN`: smoke manual con sesión admin real de producción, varias sucursales y productos WEIGHT/UNIT.

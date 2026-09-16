@@ -1,6 +1,7 @@
 import { formatCurrency } from "@carnicerias/business-logic";
 
 import { requireAdminContext } from "../../../lib/admin";
+import { createPerfLogger } from "../../../lib/perf";
 import { toOrganizationLocalInput } from "../../../lib/settlements";
 import { createClient } from "../../../lib/supabase/server";
 import {
@@ -14,13 +15,17 @@ import {
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
 export default async function EmployeesPage() {
+  const perf = createPerfLogger("/admin/employees");
+  const contextStartedAt = performance.now();
   const context = await requireAdminContext();
+  perf.mark("adminContext", contextStartedAt);
   const supabase = await createClient();
   const [{ data: members, error }, { data: branches, error: branchesError }, { data: security, error: securityError }] = await Promise.all([
-    supabase.rpc("list_organization_members", {}),
-    supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
-    supabase.rpc("get_employee_security_status", {})
+    perf.measure("members", supabase.rpc("list_organization_members", {})),
+    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("securityStatus", supabase.rpc("get_employee_security_status", {}))
   ]);
+  perf.flush();
   const pageError = error ?? branchesError ?? securityError;
   const securityByProfile = new Map((security ?? []).map((row) => [row.profile_id, row]));
   const employees = (members ?? []).filter((member) => member.role_key === "employee");

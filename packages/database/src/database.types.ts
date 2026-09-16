@@ -801,6 +801,20 @@ export interface Database {
         Args: { p_branch_id: string; p_operation_type: string; p_items: Json; p_supplier?: string | null; p_waste_reason?: string | null; p_note?: string | null; p_occurred_at?: string };
         Returns: string;
       };
+      get_branch_stock_status: {
+        Args: { p_branch_id?: string | null };
+        Returns: {
+          branch_id: string;
+          branch_name: string;
+          product_id: string;
+          product_name: string;
+          current_stock_grams: number;
+          minimum_stock_grams: number;
+          target_stock_grams: number;
+          suggested_replenishment_grams: number;
+          stock_status: string;
+        }[];
+      };
       get_replenishment_plan: {
         Args: { p_days?: number };
         Returns: {

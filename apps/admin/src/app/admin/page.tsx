@@ -19,7 +19,7 @@ export default async function DashboardPage() {
   const [branchesResult, salesResult, stockResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
-    perf.measure("stock", supabase.from("branch_stock_status").select("branch_id, branch_name, product_name, current_stock_grams, minimum_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId))
+    perf.measure("stock", supabase.rpc("get_branch_stock_status"))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error].find(Boolean);
   if (error) { perf.flush(); return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el resumen: {error.message}</main>; }
@@ -29,12 +29,12 @@ export default async function DashboardPage() {
   const byId = new Map(branches.map((branch) => [branch.id, branch]));
   for (const sale of salesResult.data ?? []) { const branch = byId.get(sale.branch_id); if (!branch) continue; if ((sale.completed_at ?? "") >= todayStart) { branch.revenue += sale.total_cents; branch.grams += sale.total_weight_grams; branch.tickets += 1; } else branch.previousRevenue += sale.total_cents; }
   const alerts = (stockResult.data ?? []).flatMap((row) => {
-    const branch = row.branch_id ? byId.get(row.branch_id) : undefined;
+    const branch = byId.get(row.branch_id);
     if (!branch) return [];
-    const current = row.current_stock_grams ?? 0; const minimum = row.minimum_stock_grams ?? 0;
+    const current = row.current_stock_grams; const minimum = row.minimum_stock_grams;
     const priority = stockPriority(row.stock_status, current, minimum);
     if (priority.rank === 0) branch.out += 1; else if (priority.rank === 1) branch.low += 1;
-    return priority.rank < 2 ? [{ branchId: branch.id, branchName: branch.name, productName: row.product_name ?? "Producto", current, suggested: row.suggested_replenishment_grams ?? 0, priority }] : [];
+    return priority.rank < 2 ? [{ branchId: branch.id, branchName: branch.name, productName: row.product_name, current, suggested: row.suggested_replenishment_grams, priority }] : [];
   }).sort((a, b) => a.priority.rank - b.priority.rank || a.current - b.current);
   const total = branches.reduce((sum, branch) => ({ revenue: sum.revenue + branch.revenue, grams: sum.grams + branch.grams, tickets: sum.tickets + branch.tickets }), { revenue: 0, grams: 0, tickets: 0 });
   perf.mark("transform", transformStartedAt); perf.flush();

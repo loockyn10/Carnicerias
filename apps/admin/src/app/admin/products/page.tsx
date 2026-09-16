@@ -6,6 +6,7 @@ import { PricingSettingsModal } from "../../../components/pricing-settings-modal
 import { StatusBadge } from "../../../components/admin-ui";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
+import { createPerfLogger } from "../../../lib/perf";
 import { saveCategoryAction } from "../actions";
 
 interface Discount { id: string; product_id: string; branch_id: string | null; minimum_grams: number; discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discount_value: number; active: boolean; valid_from: string; valid_until: string | null }
@@ -14,7 +15,10 @@ interface CommercialClient { from: (table: string) => { select: (columns: string
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
 export default async function ProductsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const perf = createPerfLogger("/admin/products");
+  const contextStartedAt = performance.now();
   const context = await requireAdminContext();
+  perf.mark("adminContext", contextStartedAt);
   const params = await searchParams;
   const value = (key: string) => typeof params[key] === "string" ? params[key] : "";
   const q = value("q").toLocaleLowerCase("es");
@@ -23,14 +27,15 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const supabase = await createClient();
   const commercial = supabase as unknown as CommercialClient;
   const [categoriesResult, productsResult, pricesResult, discountsResult, costsResult, pricingResult, cashResult] = await Promise.all([
-    supabase.from("categories").select("id, name, slug, color_hex, sort_order, active").eq("organization_id", context.organizationId).order("sort_order"),
-    supabase.from("products").select("id, category_id, name, slug, sku, unit_type, active").eq("organization_id", context.organizationId).order("name"),
-    supabase.from("product_prices").select("id, product_id, branch_id, price_cents, valid_from, valid_to").eq("organization_id", context.organizationId).order("valid_from", { ascending: false }).limit(200),
-    commercial.from("product_weight_discounts").select("id, product_id, branch_id, minimum_grams, discount_type, discount_value, active, valid_from, valid_until").eq("organization_id", context.organizationId).order("valid_from", { ascending: false }),
-    supabase.from("product_costs").select("product_id, cost_cents, valid_from, valid_to").eq("organization_id", context.organizationId).is("valid_to", null),
-    supabase.from("product_pricing_settings").select("product_id, profit_markup_bps, valid_from, valid_to").eq("organization_id", context.organizationId).is("valid_to", null),
-    supabase.from("organization_cash_discounts").select("cash_discount_bps, valid_from").eq("organization_id", context.organizationId).is("valid_to", null).order("valid_from", { ascending: false }).limit(1).maybeSingle()
+    perf.measure("categories", supabase.from("categories").select("id, name, slug, color_hex, sort_order, active").eq("organization_id", context.organizationId).order("sort_order")),
+    perf.measure("products", supabase.from("products").select("id, category_id, name, slug, sku, unit_type, active").eq("organization_id", context.organizationId).order("name")),
+    perf.measure("prices", supabase.from("product_prices").select("id, product_id, branch_id, price_cents, valid_from, valid_to").eq("organization_id", context.organizationId).order("valid_from", { ascending: false }).limit(200)),
+    perf.measure("discounts", commercial.from("product_weight_discounts").select("id, product_id, branch_id, minimum_grams, discount_type, discount_value, active, valid_from, valid_until").eq("organization_id", context.organizationId).order("valid_from", { ascending: false })),
+    perf.measure("costs", supabase.from("product_costs").select("product_id, cost_cents, valid_from, valid_to").eq("organization_id", context.organizationId).is("valid_to", null)),
+    perf.measure("pricingSettings", supabase.from("product_pricing_settings").select("product_id, profit_markup_bps, valid_from, valid_to").eq("organization_id", context.organizationId).is("valid_to", null)),
+    perf.measure("cashDiscount", supabase.from("organization_cash_discounts").select("cash_discount_bps, valid_from").eq("organization_id", context.organizationId).is("valid_to", null).order("valid_from", { ascending: false }).limit(1).maybeSingle())
   ]);
+  perf.flush();
 
   const error = [categoriesResult.error, productsResult.error, pricesResult.error, discountsResult.error, costsResult.error, pricingResult.error, cashResult.error].find(Boolean);
   const categories = categoriesResult.data ?? [];

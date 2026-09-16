@@ -25,7 +25,7 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const [branchesResult, salesResult, stockResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
-    perf.measure("stock", supabase.from("branch_stock_status").select("branch_id, current_stock_grams, minimum_stock_grams, stock_status").eq("organization_id", context.organizationId))
+    perf.measure("stock", supabase.rpc("get_branch_stock_status"))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error].find(Boolean);
   if (error) { perf.flush(); return <main className="mx-auto max-w-6xl p-8 text-red-800">No se pudieron cargar las sucursales: {error.message}</main>; }
@@ -38,9 +38,9 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
     if ((sale.completed_at ?? "") >= today) { row.revenue += sale.total_cents; row.grams += sale.total_weight_grams; row.tickets += 1; } else row.previous += sale.total_cents;
   }
   for (const stock of stockResult.data ?? []) {
-    const row = rows.get(stock.branch_id ?? "");
+    const row = rows.get(stock.branch_id);
     if (!row) continue;
-    const priority = stockPriority(stock.stock_status, stock.current_stock_grams ?? 0, stock.minimum_stock_grams ?? 0);
+    const priority = stockPriority(stock.stock_status, stock.current_stock_grams, stock.minimum_stock_grams);
     if (priority.rank === 0) row.out += 1; else if (priority.rank === 1) row.low += 1;
   }
   const visible = [...rows.values()]

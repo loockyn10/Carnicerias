@@ -4,12 +4,22 @@ Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
 ## P1 — Performance Admin con evidencia de producción
 
-- Medir rutas autenticadas en Vercel con la instrumentación existente.
+Hecho en el sprint 2026-09-16 (local, ver `CURRENT_STATE.md`):
+
+- `getAdminContext` pasó de auth + membership + role/org (3 pasos) a auth + 1 query embebida.
+- Instrumentación agregada a `/admin/products` y `/admin/employees`.
+- `branch_stock_status` (el cuello de mayor impacto: 1.1–2.2 s por RLS evaluada fila a fila sobre `stock_movements`) resuelto con la RPC `get_branch_stock_status` (migración `202609160023`), siguiendo el mismo patrón que `get_replenishment_plan`. `/admin`, `/admin/branches` y `/admin/stock` migradas; medido **1.1–2.2 s → 130–240 ms**. `stock_movements` sigue siendo la única fuente de verdad; no se creó balance materializado. 28 tests pgTAP nuevos (`branch_stock_status_rpc.test.sql`).
+- Confirmado que el bundle no tiene librerías pesadas que justifiquen `dynamic import`.
+
+Pendiente:
+
+- Migrar `/admin/attention`, `/admin/branches/compare` y `components/branch-detail.tsx` a `get_branch_stock_status` si en el futuro se mide que también son lentas (quedaron en la vista `branch_stock_status`, fuera de alcance de este sprint).
+- Medir rutas autenticadas en Vercel con la instrumentación existente (baseline de producción sigue pendiente; lo hecho en este sprint es local/reproducible, no producción).
 - Confirmar región/runtime Vercel frente a Supabase `sa-east-1`.
-- Optimizar sólo consultas, payloads o agregaciones demostradas como cuello.
-- Evaluar prefetch e índices únicamente con medición/planes.
+- Evaluar prefetch e índices únicamente con medición/planes adicionales.
 - No usar caché larga para ventas o stock.
-- Buscar navegación caliente cercana o inferior a 700 ms cuando sea técnicamente razonable.
+- Navegación caliente cercana o inferior a 700 ms: alcanzado localmente en `/admin`, `/admin/branches`, `/admin/stock` (130–240 ms); falta confirmar contra Vercel + Supabase `sa-east-1` reales.
+- Investigar los fallos preexistentes del suite pgTAP hallados al correrlo por primera vez (`internal_pos_employees`, `online_pos`, `operational_pilot`) — no relacionados con este sprint, task de seguimiento ya creada.
 
 ## P2 — PWA Admin
 
