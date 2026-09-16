@@ -151,8 +151,49 @@ Falta además un baseline autenticado real de producción (Vercel) y la región 
 ## No implementado
 
 - PWA Admin: sin manifest, iconos, service worker ni installability formal.
-- Balanza: sin `ScaleAdapter`, adaptadores manual/simulado/serial ni integración Kretz.
 - Venta POS completa de productos `UNIT`.
+
+## Balanza (KRETZ Novel Eco 2) — implementada 2026-09-16, smoke físico pendiente
+
+`apps/pos/src-tauri/src/scale/` (Rust/Tauri, no Web Serial API): `parser.rs`
+reensambla y parsea el protocolo documentado (STX + peso ASCII en kg + CR,
+transmisión continua) a gramos enteros, puro y testeado sin hardware.
+`mod.rs` mantiene `ScaleRuntimeState` con ciclo de vida
+`DISCONNECTED → CONNECTING → CONNECTED/ERROR`, lee el puerto en un thread
+dedicado (timeout 300 ms, nunca bloquea Tauri/React) y emite `scale://update`
+al frontend (~2/s, igual que la transmisión real). `ScaleConfig.kind`
+(`MANUAL` | `SIMULATED` | `KRETZ_NOVEL_ECO_2`) es la frontera de extensión:
+agregar otro modelo es un nuevo `match` arm ahí, no un rediseño del flujo de
+venta.
+
+Crate elegida: `serialport = { version = "4", default-features = false }`
+(Windows COM* + Linux `/dev/ttyUSB*`/`/dev/ttyS*`, incluye
+`i686-unknown-linux-gnu`). `default-features = false` evita el backend
+`libudev` de Linux; sin él, la enumeración de puertos usa el fallback de
+`serialport` que recorre `/sys/class/tty` sin depender de `libudev-dev`
+(no está en `apps/pos/src-tauri/linux/Dockerfile` y no se agregó). Detalle
+completo, incluidos parámetros RS232 fijos del Kretz (9600 8N2), permisos
+`dialout` en Linux y pasos de smoke test en `docs/SCALE_INTEGRATION.md`.
+
+Configuración persistida sin migración/tabla nueva: JSON en la clave
+`scale_config` de la tabla genérica `sync_metadata` (ya existente desde
+`001_offline_core.sql`).
+
+Integración con la venta: dentro del modal existente de ingreso de peso, si
+hay una balanza no-manual configurada y con lectura vigente (TTL 4 s,
+`isScaleReadingFresh` en `packages/business-logic/src/scale.ts`), aparece un
+botón "Usar este peso" que copia el peso a gramos enteros al campo manual
+existente; el empleado sigue confirmando la línea explícitamente (ninguna
+pesada agrega sola una línea). El ingreso manual sigue disponible siempre;
+desconectar la balanza no interrumpe la venta. Modo `SIMULATED` es una
+herramienta de prueba dentro del modal de diagnóstico (fijar peso, simular
+desconexión), no un modo operativo normal.
+
+**REQUIERE VERIFICACIÓN**: no se conectó una Novel Eco 2 real ni se
+compiló contra `i686-unknown-linux-gnu` en esta sesión (sin Docker/CI Linux
+disponible). Validado sin hardware: 20 tests Rust nuevos (parser + estado,
+ver "Validación actual"), 9 tests `vitest` de frescura de lectura, build
+Windows NSIS x64 completo con el nuevo crate.
 
 ## Migraciones locales confirmadas
 
@@ -198,12 +239,12 @@ Falta además un baseline autenticado real de producción (Vercel) y la región 
 ## Validación actual
 
 - Admin typecheck/lint/build: OK (incluye `/admin/branch-stock`, ruta nueva compilada y prerenderizada).
-- POS typecheck/lint/build web: OK.
-- Vitest: 56 tests OK (20 nuevos de `branch-stock.test.ts`: agregación producto×sucursal, WEIGHT/UNIT, búsqueda/filtro).
-- Rust: 6 tests OK.
-- Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK.
+- POS typecheck/lint/build web: OK (incluye la UI de balanza).
+- Vitest: 56 tests OK (20 de `branch-stock.test.ts`) + 9 nuevos de `packages/business-logic/src/scale.test.ts` (frescura de lectura: fresca, en el borde del TTL, vencida, desconectada/error/conectando, sin lectura, timestamp inválido, no revivir lectura previa tras reconectar).
+- Rust: 26 tests OK (6 preexistentes + 14 de `scale/parser.rs` — frame completo/dividido/concatenado, basura previa, CR incompleto, frame sobredimensionado, 0 g, 500 g, 1.250 kg, 12.345 kg, caracteres inválidos, sin punto decimal, frame vacío — + 6 de `scale/mod.rs` — desconexión limpia, generación obsoleta no sobrescribe lectura, config sobrevive guardado/recarga, config corrupta cae a `MANUAL`).
+- Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK; reconfirmado 2026-09-16 con la dependencia `serialport` agregada (mismo instalador `Carnicerías POS_0.1.0_x64-setup.exe`).
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.
-- POS Linux i386: pipeline (`pnpm build:pos:linux:i386`, contenedor Debian 12 i386) implementado; **no se pudo ejecutar** en esta sesión porque el motor de Docker Desktop no llegó a estar operativo (API respondía 500 tras varios minutos). `REQUIERE VERIFICACIÓN`: generar el `.deb` real y el smoke test de `docs/LINUX_POS.md` en un entorno con Docker/CI Linux funcional y, después, en hardware Atom real.
+- POS Linux i386: pipeline (`pnpm build:pos:linux:i386`, contenedor Debian 12 i386) implementado; **no se pudo ejecutar** en esta sesión porque el motor de Docker Desktop no llegó a estar operativo (API respondía 500 tras varios minutos). `REQUIERE VERIFICACIÓN`: generar el `.deb` real y el smoke test de `docs/LINUX_POS.md` en un entorno con Docker/CI Linux funcional y, después, en hardware Atom real. Ahora incluye además el crate `serialport` (balanza): sin Docker/CI Linux disponibles en esta sesión, no se corrió `cargo check --target i686-unknown-linux-gnu` dentro del contenedor; la elección de `default-features = false` para evitar `libudev-dev` se validó por análisis de la crate (ver `docs/SCALE_INTEGRATION.md`), no por una compilación real i386.
 - La suite pgTAP se ejecutó por primera vez el 2026-09-16 (Docker disponible): `branch_stock_status_rpc.test.sql` (nuevo, 28/28 OK), `initial_schema`, `offline_sync`, `price_formation`, `profitability_analytics`, `settlements` OK. `internal_pos_employees`, `online_pos` y `operational_pilot` tienen fallos preexistentes no relacionados con este sprint (reproducidos con y sin la migración nueva, contra `pnpm db:reset` limpio) — ver "Performance Admin" arriba y la tarea de seguimiento creada.
 - SQL remoto: no ejecutado; migraciones 022–023 pendientes de dry-run/push autenticado.
 - `/admin/branch-stock`: validado por typecheck/lint/build/tests unitarios; **no verificado visualmente contra datos Supabase reales de producción** (sí contra Supabase local con datos sintéticos, sesión 2026-09-16). `REQUIERE VERIFICACIÓN`: smoke manual con sesión admin real de producción, varias sucursales y productos WEIGHT/UNIT.

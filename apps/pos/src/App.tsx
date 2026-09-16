@@ -6,12 +6,15 @@ import {
   parseWeightToGrams,
   priceForWeight,
   calculateSalePricing,
-  sumMoney
+  isScaleReadingFresh,
+  sumMoney,
+  type ScaleKind
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
+import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 
@@ -195,6 +198,11 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
 
 export default function App() {
   const desktop = isDesktopRuntime();
+  const scale = useScaleSnapshot(desktop);
+  const [scalePorts, setScalePorts] = useState<string[]>([]);
+  const [scaleBusy, setScaleBusy] = useState(false);
+  const [simulatedWeightInput, setSimulatedWeightInput] = useState("");
+  const [scaleModalNow, setScaleModalNow] = useState(() => Date.now());
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [provisioningOpen, setProvisioningOpen] = useState(false);
@@ -612,6 +620,18 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [exitModalOpen, shift?.status]);
 
+  useEffect(() => {
+    if (!selectedProduct || scale.config.kind === "MANUAL") return;
+    setScaleModalNow(Date.now());
+    const interval = window.setInterval(() => setScaleModalNow(Date.now()), 500);
+    return () => window.clearInterval(interval);
+  }, [selectedProduct, scale.config.kind]);
+
+  useEffect(() => {
+    if (!diagnosticsOpen || !desktop) return;
+    void scaleBridge.listPorts().then(setScalePorts).catch(() => setScalePorts([]));
+  }, [diagnosticsOpen, desktop]);
+
   async function bindDevice() {
     if (!desktop || !localRuntime || !user || user.offline || !branchId) return;
     setBinding(true);
@@ -626,6 +646,25 @@ export default function App() {
       setError(bindingError instanceof Error ? bindingError.message : "No se pudo vincular el dispositivo");
     } finally {
       setBinding(false);
+    }
+  }
+
+  async function updateScaleConfig(patch: Partial<{ kind: ScaleKind; port: string | null; autoconnect: boolean }>) {
+    try {
+      await scaleBridge.setConfig({ ...scale.config, ...patch });
+    } catch (scaleConfigError) {
+      setError(scaleConfigError instanceof Error ? scaleConfigError.message : "No se pudo guardar la configuración de la balanza");
+    }
+  }
+
+  async function connectScaleNow() {
+    setScaleBusy(true);
+    try {
+      await scaleBridge.connect();
+    } catch (connectError) {
+      setError(connectError instanceof Error ? connectError.message : "No se pudo conectar la balanza");
+    } finally {
+      setScaleBusy(false);
     }
   }
 
@@ -915,6 +954,7 @@ export default function App() {
   }
 
   const activeBranch = branches.find((branch) => branch.id === branchId);
+  const freshScaleReading = isScaleReadingFresh(scale.connectionState, scale.reading, scaleModalNow) ? scale.reading : null;
   const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";
   if (desktop && localRuntime?.deviceStatus === "ACTIVE" && localRuntime.branchId && !operator) {
     return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={selectOperator} operators={operators} />;
@@ -945,6 +985,17 @@ export default function App() {
             >
               {syncLabel}
             </button>
+          ) : null}
+          {desktop && scale.config.kind !== "MANUAL" ? (
+            <span className={`pos-scale-indicator shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-black ${scale.connectionState === "CONNECTED" ? "border-emerald-700 bg-emerald-950 text-emerald-200" : scale.connectionState === "ERROR" ? "border-red-700 bg-red-950 text-red-200" : "border-stone-700 bg-stone-800 text-stone-300"}`}>
+              {scale.connectionState === "CONNECTED"
+                ? `● Balanza · ${formatWeight(scale.reading?.grams ?? 0)}`
+                : scale.connectionState === "CONNECTING"
+                  ? "○ Conectando balanza…"
+                  : scale.connectionState === "ERROR"
+                    ? "○ Error de balanza"
+                    : "○ Balanza desconectada"}
+            </span>
           ) : null}
           {branches.length > 1 ? (
             <select
@@ -1130,6 +1181,62 @@ export default function App() {
               <button className="rounded-xl bg-emerald-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void runSync()}>Sincronizar ahora</button>
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void retryLastEvent()}>Reenviar último evento</button>
             </div>
+
+            <div className="mt-6 border-t border-stone-700 pt-5">
+              <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Balanza</p>
+              <div className="mt-3 grid gap-3">
+                <label className="grid gap-1 text-sm font-bold text-stone-300">
+                  Tipo
+                  <select
+                    className="rounded-xl border border-stone-700 bg-stone-950 px-3 py-2"
+                    value={scale.config.kind}
+                    onChange={(event) => void updateScaleConfig({ kind: event.target.value as ScaleKind, port: event.target.value === "KRETZ_NOVEL_ECO_2" ? scale.config.port : null })}
+                  >
+                    <option value="MANUAL">Manual (sin balanza)</option>
+                    <option value="SIMULATED">Simulada (pruebas)</option>
+                    <option value="KRETZ_NOVEL_ECO_2">KRETZ Novel Eco 2 (RS232)</option>
+                  </select>
+                </label>
+                {scale.config.kind === "KRETZ_NOVEL_ECO_2" ? (
+                  <label className="grid gap-1 text-sm font-bold text-stone-300">
+                    Puerto
+                    <div className="flex gap-2">
+                      <select
+                        className="flex-1 rounded-xl border border-stone-700 bg-stone-950 px-3 py-2"
+                        value={scale.config.port ?? ""}
+                        onChange={(event) => void updateScaleConfig({ port: event.target.value || null })}
+                      >
+                        <option value="">Elegí un puerto…</option>
+                        {scalePorts.map((port) => <option key={port} value={port}>{port}</option>)}
+                      </select>
+                      <button type="button" className="rounded-xl border border-stone-600 px-3 py-2 text-xs font-bold hover:bg-stone-800" onClick={() => void scaleBridge.listPorts().then(setScalePorts).catch(() => setScalePorts([]))}>Actualizar</button>
+                    </div>
+                    {!scalePorts.length ? <span className="font-normal text-amber-300">No se detectaron puertos serie.</span> : null}
+                  </label>
+                ) : null}
+                <label className="flex items-center gap-2 text-sm font-bold text-stone-300">
+                  <input type="checkbox" checked={scale.config.autoconnect} onChange={(event) => void updateScaleConfig({ autoconnect: event.target.checked })} />
+                  Conectar automáticamente al iniciar
+                </label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button type="button" className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-black disabled:opacity-40" disabled={scaleBusy || scale.config.kind === "MANUAL"} onClick={() => void connectScaleNow()}>Conectar</button>
+                  <button type="button" className="rounded-xl border border-stone-600 px-4 py-2 text-sm font-black disabled:opacity-40" disabled={scaleBusy || scale.connectionState === "DISCONNECTED"} onClick={() => void scaleBridge.disconnect()}>Desconectar</button>
+                  <span className="text-xs text-stone-400">Estado: {scale.connectionState}{scale.lastError ? ` · ${scale.lastError}` : ""}</span>
+                </div>
+                {scale.config.kind === "SIMULATED" ? (
+                  <div className="rounded-xl border border-dashed border-stone-700 p-3">
+                    <p className="text-xs font-bold uppercase text-stone-500">Herramienta de prueba (sólo para configuración/desarrollo)</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button type="button" className="rounded-lg bg-stone-800 px-3 py-2 text-xs font-bold hover:bg-stone-700" onClick={() => void scaleBridge.setSimulatedWeight(500)}>500 g</button>
+                      <button type="button" className="rounded-lg bg-stone-800 px-3 py-2 text-xs font-bold hover:bg-stone-700" onClick={() => void scaleBridge.setSimulatedWeight(1_250)}>1,250 kg</button>
+                      <input className="w-24 rounded-lg border border-stone-700 bg-stone-950 px-2 py-2 text-xs" placeholder="gramos" inputMode="numeric" value={simulatedWeightInput} onChange={(event) => setSimulatedWeightInput(event.target.value.replace(/\D/g, ""))} />
+                      <button type="button" className="rounded-lg border border-stone-600 px-3 py-2 text-xs font-bold hover:bg-stone-800 disabled:opacity-40" disabled={!simulatedWeightInput} onClick={() => { void scaleBridge.setSimulatedWeight(Number(simulatedWeightInput)); setSimulatedWeightInput(""); }}>Fijar peso</button>
+                      <button type="button" className="rounded-lg border border-amber-700 px-3 py-2 text-xs font-bold text-amber-300 hover:bg-amber-950" onClick={() => void scaleBridge.simulateDisconnect()}>Simular desconexión</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </section>
         </div>
       ) : null}
@@ -1149,6 +1256,27 @@ export default function App() {
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{editingLineId ? "Modificar línea" : "Agregar al ticket"}</p>
             <h2 className="mt-2 text-3xl font-black">{selectedProduct.productName}</h2>
             <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p>
+            {desktop && scale.config.kind !== "MANUAL" ? (
+              <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
+                <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
+                  {scale.connectionState === "CONNECTED" ? "● Balanza conectada" : scale.connectionState === "CONNECTING" ? "○ Conectando…" : "○ Balanza desconectada"}
+                </p>
+                {freshScaleReading ? (
+                  <button
+                    type="button"
+                    className="mt-2 flex w-full items-center justify-between rounded-xl bg-stone-800 px-4 py-3 text-left hover:bg-stone-700"
+                    onClick={() => setWeightInput((freshScaleReading.grams / 1_000).toFixed(3).replace(".", ","))}
+                  >
+                    <span className="font-black text-stone-100">{formatWeight(freshScaleReading.grams)}</span>
+                    <span className="text-xs font-bold text-rose-300">Usar este peso</span>
+                  </button>
+                ) : (
+                  <p className="mt-2 text-sm text-stone-500">
+                    {scale.connectionState === "CONNECTED" ? "Esperando una lectura estable…" : "Ingresá el peso manualmente."}
+                  </p>
+                )}
+              </div>
+            ) : null}
             <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">
               Peso manual en kg
               <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />

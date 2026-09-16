@@ -6,6 +6,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@carnicerias/admin", "dev"],
       "port": 3000
+    },
+    {
+      "name": "pos",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@carnicerias/pos", "dev"],
+      "port": 1420
     }
   ]
 }

@@ -95,7 +95,7 @@ Principios:
 - historial local relevante;
 - identidad de operador;
 - fichaje entrada/salida;
-- futura integración de balanza.
+- integración de balanza KRETZ Novel Eco 2 (RS232, peso únicamente; ver `docs/SCALE_INTEGRATION.md`), con smoke test en hardware real pendiente.
 
 ### Admin
 

@@ -27,10 +27,23 @@ Pendiente:
 - Service worker conservador; Admin continúa online-first.
 - Ejecutar después de estabilización y performance.
 
+## P1 — Smoke test físico de balanza KRETZ Novel Eco 2
+
+Implementado en el sprint 2026-09-16 (ver `docs/CURRENT_STATE.md` y
+`docs/SCALE_INTEGRATION.md`): parser, adaptadores manual/simulado/serial,
+persistencia local, integración con el modal de peso existente, tests sin
+hardware, build Windows.
+
+Pendiente:
+
+- Conectar una Novel Eco 2 real y seguir el checklist de smoke test de
+  `docs/SCALE_INTEGRATION.md` (Windows y Linux).
+- Confirmar `cargo check`/build contra `i686-unknown-linux-gnu` con el
+  crate `serialport` agregado (requiere Docker o GitHub Actions).
+
 ## P2/P3 — Capacidades opcionales según negocio
 
 - Completar venta POS `UNIT` si se vuelve necesaria comercialmente.
-- Incorporar frontera `ScaleAdapter` e integración Kretz cuando exista hardware para validar.
 - Conservar como evidencia el timestamp/intento de clock-out offline anómalo, manteniendo el turno en `REQUIRES_REVIEW`.
 
 No priorizar actualmente detección avanzada de inconsistencias.

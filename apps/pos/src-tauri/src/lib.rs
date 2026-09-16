@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 use uuid::Uuid;
 
+mod scale;
+
 const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
 const COMMERCIAL_SCHEMA: &str = include_str!("../migrations/002_commercial_config.sql");
 const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_sale_snapshots.sql");
@@ -1022,8 +1024,20 @@ pub fn run() {
             fs::create_dir_all(&app_data)?;
             let mut connection = Connection::open(app_data.join("carnicerias-pos.sqlite"))?;
             initialize_connection(&mut connection).map_err(std::io::Error::other)?;
+            let scale_config = scale::load_persisted_config(&connection);
+            let autoconnect_scale = scale_config.autoconnect && scale_config.kind != scale::ScaleKind::Manual;
             app.manage(DatabaseState(Mutex::new(connection)));
             app.manage(OperatorSessionState(AtomicBool::new(false)));
+            app.manage(scale::ScaleRuntimeState::new(scale_config));
+            if autoconnect_scale {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<scale::ScaleRuntimeState>();
+                    if let Err(error) = scale::connect_scale(handle.clone(), state) {
+                        eprintln!("Scale autoconnect failed: {error}");
+                    }
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1038,6 +1052,10 @@ pub fn run() {
                     }
                     Err(_) => eprintln!("Could not lock SQLite before closing the POS"),
                 };
+                let scale_state = window.state::<scale::ScaleRuntimeState>();
+                if let Err(error) = scale::disconnect_internal(&scale_state) {
+                    eprintln!("Could not release the scale connection before closing: {error}");
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1066,7 +1084,15 @@ pub fn run() {
             mark_outbox_failed,
             force_outbox_retry,
             force_last_outbox_retry,
-            clear_offline_authorization
+            clear_offline_authorization,
+            scale::get_scale_config,
+            scale::get_scale_snapshot,
+            scale::set_scale_config,
+            scale::list_scale_ports,
+            scale::connect_scale,
+            scale::disconnect_scale,
+            scale::set_simulated_scale_weight,
+            scale::simulate_scale_disconnect
         ])
         .run(tauri::generate_context!())
         .expect("error while running Carnicerías POS");
