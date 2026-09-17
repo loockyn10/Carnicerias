@@ -226,6 +226,7 @@ export default function App() {
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [recentSales, setRecentSales] = useState<RecentLocalSale[]>([]);
   const [outboxSummary, setOutboxSummary] = useState<OutboxSummary | null>(null);
   const [binding, setBinding] = useState(false);
@@ -621,6 +622,12 @@ export default function App() {
   }, [exitModalOpen, shift?.status]);
 
   useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(null), 1_800);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
     if (!selectedProduct || scale.config.kind === "MANUAL") return;
     setScaleModalNow(Date.now());
     const interval = window.setInterval(() => setScaleModalNow(Date.now()), 500);
@@ -968,6 +975,16 @@ export default function App() {
         : syncStatus.pendingCount > 0
           ? `ONLINE · ${String(syncStatus.pendingCount)} pendientes`
           : "SINCRONIZADO";
+  const syncCompactLabel = syncStatus.state === "syncing"
+    ? `↻ ${String(syncStatus.syncingCurrent)}/${String(syncStatus.syncingTotal)}`
+    : syncStatus.state === "offline"
+      ? `○ ${String(syncStatus.pendingCount)}`
+      : syncStatus.state === "error"
+        ? "!"
+        : syncStatus.pendingCount > 0
+          ? `● ${String(syncStatus.pendingCount)}`
+          : "✓";
+  const unreadNotifications = announcements.length;
 
   return (
     <main className="pos-shell min-h-screen bg-stone-950 text-stone-100 lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden">
@@ -977,24 +994,54 @@ export default function App() {
           <p className="truncate text-lg font-black">{activeBranch?.name ?? "Seleccioná sucursal"}</p>
         </div>
         <div className="pos-header-actions flex items-center gap-3">
+          <div className="pos-notifications relative">
+            <button
+              className="rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800"
+              onClick={() => setNotificationsOpen((open) => !open)}
+              type="button"
+              aria-haspopup="true"
+              aria-expanded={notificationsOpen}
+            >
+              🔔{unreadNotifications > 0 ? ` ${String(unreadNotifications)}` : ""}
+            </button>
+            {notificationsOpen ? (
+              <div className="pos-notifications-panel absolute right-0 top-full z-40 mt-2 w-72 rounded-xl border border-stone-700 bg-stone-900 p-3 text-left shadow-2xl">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-black uppercase tracking-wide text-stone-400">Avisos</p>
+                  <button className="text-xs font-bold text-stone-400 hover:text-stone-200" onClick={() => setNotificationsOpen(false)} type="button">Cerrar</button>
+                </div>
+                <div className="mt-2 grid gap-2">
+                  {announcements.map((announcement) => (
+                    <div key={announcement.id} className="rounded-lg border border-amber-700 bg-amber-950 px-3 py-2 text-xs text-amber-100">
+                      <strong className="block">{announcement.title}</strong>
+                      <p>{announcement.message}</p>
+                    </div>
+                  ))}
+                  {!announcements.length ? <p className="text-xs text-stone-500">Sin avisos.</p> : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
           <button className="pos-recent-sales rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}><span className="pos-label-full">Ventas recientes</span><span className="pos-label-compact">Ventas</span></button>
           {desktop ? (
             <button
               className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
               onClick={() => setDiagnosticsOpen(true)}
+              title={syncLabel}
             >
-              {syncLabel}
+              <span className="pos-label-full">{syncLabel}</span>
+              <span className="pos-label-compact">{syncCompactLabel}</span>
             </button>
           ) : null}
           {desktop && scale.config.kind !== "MANUAL" ? (
             <span className={`pos-scale-indicator shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-black ${scale.connectionState === "CONNECTED" ? "border-emerald-700 bg-emerald-950 text-emerald-200" : scale.connectionState === "ERROR" ? "border-red-700 bg-red-950 text-red-200" : "border-stone-700 bg-stone-800 text-stone-300"}`}>
               {scale.connectionState === "CONNECTED"
-                ? `● Balanza · ${formatWeight(scale.reading?.grams ?? 0)}`
+                ? `⚖ ${formatWeight(scale.reading?.grams ?? 0)}`
                 : scale.connectionState === "CONNECTING"
-                  ? "○ Conectando balanza…"
+                  ? "⚖ Conectando…"
                   : scale.connectionState === "ERROR"
-                    ? "○ Error de balanza"
-                    : "○ Balanza desconectada"}
+                    ? "⚖ Error"
+                    : "⚖ Desconectada"}
             </span>
           ) : null}
           {branches.length > 1 ? (
@@ -1040,8 +1087,7 @@ export default function App() {
       ) : null}
 
       {error ? <div className="mx-4 mt-4 rounded-xl border border-red-800 bg-red-950 px-4 py-3 text-red-100">{error}</div> : null}
-      {notice ? <div className="mx-4 mt-4 rounded-xl border border-emerald-700 bg-emerald-950 px-4 py-3 text-emerald-100">{notice}</div> : null}
-      {announcements.length ? <div className="mx-4 mt-4 grid gap-2 md:grid-cols-2">{announcements.map((announcement) => <div key={announcement.id} className="rounded-xl border border-amber-700 bg-amber-950 px-4 py-3 text-sm text-amber-100"><strong>{announcement.title}</strong><p>{announcement.message}</p></div>)}</div> : null}
+      {notice ? <div className="pos-toast" role="status">✓ {notice}</div> : null}
 
       <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
         <section className="pos-catalog min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
@@ -1252,14 +1298,14 @@ export default function App() {
 
       {selectedProduct ? (
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
-          <form className="pos-modal-panel w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
+          <form className="pos-modal-panel pos-weight-modal w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{editingLineId ? "Modificar línea" : "Agregar al ticket"}</p>
             <h2 className="mt-2 text-3xl font-black">{selectedProduct.productName}</h2>
             <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p>
             {desktop && scale.config.kind !== "MANUAL" ? (
               <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
                 <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
-                  {scale.connectionState === "CONNECTED" ? "● Balanza conectada" : scale.connectionState === "CONNECTING" ? "○ Conectando…" : "○ Balanza desconectada"}
+                  {scale.connectionState === "CONNECTED" ? "⚖ Balanza conectada" : scale.connectionState === "CONNECTING" ? "⚖ Conectando…" : "⚖ Balanza desconectada"}
                 </p>
                 {freshScaleReading ? (
                   <button

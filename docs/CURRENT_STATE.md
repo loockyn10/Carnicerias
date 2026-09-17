@@ -116,7 +116,7 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - El estado `SINCRONIZANDO` sólo se publica cuando existe outbox vencido con trabajo real; un ciclo vacío permanece `SINCRONIZADO` y el badge reserva ancho estable.
 - Ticket fijo, footer visible, scroll interno de catálogo/ticket y cards compactas mediante filas de tamaño intrínseco.
 - Colores de categoría configurables, sincronizados a SQLite y con fallback.
-- Layout operativo compacto para baja altura: header de una línea, catálogo/ticket horizontal desde 900 px, proporción fluida, footer del ticket fijo y modales con scroll interno. Objetivo de validación: 1024×600; también 1366×768 y 1920×1080.
+- Layout operativo compacto para baja altura: header de una línea (48 px), catálogo/ticket horizontal desde 900 px de ancho y ≤700 px de alto (breakpoint por viewport, no por plataforma), proporción fluida, footer del ticket fijo (TOTAL + Confirmar venta siempre visibles) y modales con scroll interno. Cards de producto en grilla densa (`auto-fill`, ~115 px) en modo compacto. Avisos operativos (`announcements`) viven detrás de una campana 🔔 con badge en el header en vez de ocupar franja permanente; las confirmaciones transitorias (venta registrada, fichaje, etc.) son un toast que se autodescarta a los ~1.8 s sin bloquear la operación. Errores siguen mostrándose como banner persistente. Validado sin scroll global a 1024×600; también 1366×768 y 1920×1080 mantienen el layout espacioso original (breakpoint no aplica por altura >700 px).
 
 ## Performance Admin
 
