@@ -128,7 +128,31 @@ Ya existen:
 - reducción de `select("*")`;
 - selecciones de columnas más acotadas.
 
-Las rutas siguen siendo dinámicas por cookies/sesión (Next 15 sin `staleTimes` configurado: cada navegación re-ejecuta el layout y vuelve a resolver `getAdminContext`). El sidebar desactiva prefetch. El bundle no muestra librerías pesadas (charts/iconos) que justifiquen `dynamic import`; el First Load JS de todas las rutas ronda 103–110 kB.
+Las rutas siguen siendo dinámicas por cookies/sesión (Next 15 sin `staleTimes` configurado: cada navegación re-ejecuta el layout y vuelve a resolver `getAdminContext`; no se activó porque cachear el layout implica reusar auth/membership entre navegaciones y el riesgo de mostrar datos de sesión obsoletos no se evaluó, sin relación con D-018). El sidebar desactiva prefetch (no se cambió esta sesión: con la causa raíz de región resuelta, dejó de ser la prioridad; ver más abajo). El bundle no muestra librerías pesadas (charts/iconos) que justifiquen `dynamic import`; el First Load JS de todas las rutas ronda 103–110 kB.
+
+### Causa dominante de latencia en producción: mismatch de región Vercel/Supabase — resuelto 2026-09-22
+
+Medido contra producción real (`carnicerias-admin-livid.vercel.app`, con sesión admin autenticada, sesión de seguimiento): el header `x-vercel-id` mostraba `gru1::iad1::...` — el edge de Vercel resolvía en São Paulo (`gru1`) pero la función serverless que ejecuta middleware, layout (`getAdminContext`, 2 llamadas a `auth.getUser()` por navegación: una en `middleware.ts`, otra en el layout) y cada Server Component/Server Action corría en `iad1` (Virginia, EE. UU.), mientras Supabase está confirmado en `sa-east-1` (São Paulo). Cada round-trip a Supabase (auth, membership, y las queries propias de cada página) pagaba la distancia completa Virginia↔São Paulo.
+
+Medido con `fetch()` autenticado directo a cada ruta (bypass de cache de navegador, mismo método antes/después):
+
+| Ruta | Antes (`iad1`) | Después (`gru1`) |
+|---|---|---|
+| `/admin` | 1.75–1.89 s | 0.37–0.41 s |
+| `/admin/branches` | 1.56–4.67 s | 0.29–0.37 s |
+| `/admin/sales` | 1.70–1.95 s | 0.34–1.13 s |
+| `/admin/stock` | 2.09–4.29 s | 0.51–0.61 s |
+| `/admin/products` | 1.46–5.42 s | 0.40–0.43 s |
+| `/admin/replenishment` | 1.11–3.84 s | 0.36–0.37 s |
+| `/admin/analytics` | 0.71–0.80 s | 0.24–0.30 s |
+
+Navegación real (click en el nav, carga de documento completa incluyendo render): `/admin/stock` 355 ms total (TTFB 56 ms) — antes no medida en producción, pero consistente con la mejora de 4–7× vista en `fetch()`.
+
+Fix: `apps/admin/vercel.json` (`"regions": ["gru1"]`) fija la región de las funciones serverless a São Paulo, igual que Supabase. Confirmado post-deploy: `x-vercel-id` pasó a `gru1::gru1::...`. No se tocó código de negocio, RLS, ni el cliente de Supabase.
+
+Complementario: se sacaron 9 llamadas a `router.refresh()` (o `router.replace()` + `router.refresh()`) redundantes después de Server Actions que ya llaman `revalidatePath` sobre la misma ruta (`stock-adjustment-form.tsx`, `branch-form.tsx`, `product-manage-modal.tsx`, `promotion-modal.tsx`, `replenishment-dashboard.tsx` ×2, `set-production-branch-form.tsx`, `transfer-form.tsx`, `void-settlement-form.tsx`, `add-production-batch-output-form.tsx`). Next.js ya incluye la data revalidada en la respuesta de la propia Server Action; el `router.refresh()` disparaba una segunda vuelta completa (auth + membership + queries) después de cada "Guardar". No se tocó semántica: todas las acciones revalidaban exactamente la ruta donde vive el formulario.
+
+No se tocó (evaluado, no priorizado dentro de este sprint): `experimental.staleTimes` (implica cachear el layout auth entre navegaciones, requiere decisión explícita de producto por el trade-off de frescura), `loading.tsx` por ruta (con la causa raíz resuelta, dejó de ser necesario para la sensación de espera; sólo `/admin` y el modal de sucursal lo tienen hoy), y `prefetch={false}` del sidebar (no se corrigió porque el costo ya no es dominante; ver `TASKS.md` si se quiere una prueba A/B igual).
 
 ### Cuello de botella `branch_stock_status` / RLS por fila — resuelto 2026-09-16
 
