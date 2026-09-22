@@ -106,7 +106,9 @@ begin
     raise exception 'El producto "%" no tiene un precio de venta vigente', missing_product using errcode = '22023';
   end if;
 
-  select coalesce(sum(preview.sale_value_cents), 0) into total_sale_value
+  -- sum() over a bigint input (sale_value_cents) returns numeric in PostgreSQL; cast back so
+  -- total_sale_value stays bigint end to end, matching its declared type below.
+  select coalesce(sum(preview.sale_value_cents)::bigint, 0) into total_sale_value
   from app_private.compute_production_preview(p_batch_id) preview;
   if total_sale_value <= 0 then
     raise exception 'No se puede asignar el costo: el valor potencial de venta total es cero' using errcode = '22023';

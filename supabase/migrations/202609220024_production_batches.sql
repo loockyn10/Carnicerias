@@ -152,7 +152,13 @@ as $$
       end as sale_value_cents
     from priced
   ), totals as (
-    select sum(valued.sale_value_cents) as total_sale_value_cents,
+    -- PostgreSQL's sum() over a bigint input returns numeric, not bigint (only sum() of
+    -- smallint/integer stays within bigint). Cast back explicitly so every downstream column
+    -- derived from this value (floor_cents, remainder_cents, leftover_cents,
+    -- allocated_cost_cents) stays bigint all the way to the final round_ratio_half_up(bigint,
+    -- bigint) call, instead of silently widening to numeric and failing to resolve that call
+    -- (42883: round_ratio_half_up(numeric, integer) does not exist).
+    select sum(valued.sale_value_cents)::bigint as total_sale_value_cents,
       bool_and(valued.sale_value_cents is not null) as all_priced
     from valued
   ), shares as (
@@ -167,7 +173,10 @@ as $$
     -- single-row CTE, and previously failed with 42803 ("column must appear in the GROUP BY
     -- clause"). batch always has zero or one row for a given p_batch_id, so the subquery is
     -- exactly equivalent and needs no GROUP BY.
-    select (select batch.cost_total_cents from batch) - coalesce(sum(shares.floor_cents), 0) as leftover_cents
+    -- Same sum()-widens-to-numeric issue as totals.total_sale_value_cents above: floor_cents is
+    -- bigint (once totals is cast), but sum(shares.floor_cents) would still promote to numeric
+    -- without this cast, breaking leftover_cents' own bigint-ness downstream.
+    select (select batch.cost_total_cents from batch) - coalesce(sum(shares.floor_cents)::bigint, 0) as leftover_cents
     from shares
   ), ranked as (
     select shares.output_id, shares.floor_cents,
@@ -491,7 +500,7 @@ begin
     raise exception 'El producto "%" no tiene un precio de venta vigente', missing_product using errcode = '22023';
   end if;
 
-  select coalesce(sum(preview.sale_value_cents), 0) into total_sale_value
+  select coalesce(sum(preview.sale_value_cents)::bigint, 0) into total_sale_value
   from app_private.compute_production_preview(p_batch_id) preview;
   if total_sale_value <= 0 then
     raise exception 'No se puede asignar el costo: el valor potencial de venta total es cero' using errcode = '22023';
@@ -679,7 +688,7 @@ begin
         'isSnapshot', false
       ) order by preview.product_name), '[]'::jsonb),
       coalesce(sum(preview.output_weight_grams), 0),
-      sum(preview.sale_value_cents)
+      sum(preview.sale_value_cents)::bigint
     into outputs_json, produced_weight, total_sale_value
     from app_private.compute_production_preview(p_batch_id) preview;
 
