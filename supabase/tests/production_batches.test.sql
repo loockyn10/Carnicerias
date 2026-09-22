@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(65);
+select plan(68);
 
 -- Shape and hardening.
 select has_table('public', 'production_batches', 'production_batches table exists');
@@ -24,8 +24,9 @@ select ok((select bool_and(prosecdef) from pg_proc where oid in (
   'public.complete_production_batch(uuid)'::regprocedure,
   'public.get_production_batch_detail(uuid)'::regprocedure
 )), 'production RPCs are security definer');
+select ok(exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000001' and permission_key = 'production.read'), 'admin receives production read permission');
 select ok(exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000001' and permission_key = 'production.write'), 'admin receives production write permission');
-select ok(exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000002' and permission_key = 'production.write'), 'employee receives production write permission (POS operates this module)');
+select ok(not exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000002' and permission_key like 'production.%'), 'employee receives no production permission (Desposte is an Admin-only capability, matching settlements.*/analytics.read)');
 select has_column('public', 'stock_movements', 'production_batch_id', 'stock_movements gained a production_batch_id link column');
 
 -- Fixture: two organizations. Org A has two branches (employee assigned only to A1).
@@ -197,23 +198,30 @@ select throws_ok($$select public.set_production_batch_output(
 )$$, '22023', 'Sólo un lote en borrador puede editar sus productos obtenidos', 'a cancelled batch cannot have outputs added');
 
 -- Branch isolation within the same organization: a batch created in branch A2 (admin has
--- branches.read_all so this succeeds), then the A1-only employee must not see it.
+-- branches.read_all so this succeeds).
 select lives_ok($$select public.create_production_batch(
   'b3000000-0000-4000-8000-000000000002', 'b5000000-0000-4000-8000-000000000001', 5000, 420000, 'Lote sucursal A2', null
 )$$, 'admin creates a batch in branch A2');
+select lives_ok($$select public.create_production_batch(
+  'b3000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000001', 3000, 420000, 'Lote org A extra', null
+)$$, 'admin creates one more batch in branch A1, reused below for the employee/org B checks');
 
+-- Desposte is an Admin-only capability (see the permission assertions above): an employee,
+-- even one assigned to the branch itself, must be blocked by every production RPC, not merely
+-- by branch membership.
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'b1000000-0000-4000-8000-000000000002', true);
 select set_config('request.jwt.claims', '{"sub":"b1000000-0000-4000-8000-000000000002","role":"authenticated"}', true);
 
+select throws_ok($$select public.list_production_batches()$$, '42501', 'Permission production.read is required', 'an employee cannot list production batches at all');
 select throws_ok($$select public.get_production_batch_detail(
-  (select id from public.production_batches where description = 'Lote sucursal A2')
-)$$, '42501', 'Branch is not authorized for this user', 'an employee assigned only to A1 cannot read a batch from A2');
-select is((select count(*) from public.production_batches where branch_id = 'b3000000-0000-4000-8000-000000000002'), 0::bigint, 'RLS hides branch A2 batches from the A1-only employee');
-select lives_ok($$select public.create_production_batch(
-  'b3000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000001', 3000, 420000, 'Lote del empleado', null
-)$$, 'the A1 employee can create a batch in their own assigned branch');
+  (select id from public.production_batches where description = 'Lote org A extra')
+)$$, '42501', 'Branch is not authorized for this user', 'an employee cannot read a batch even in their own assigned branch');
+select throws_ok($$select public.create_production_batch(
+  'b3000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000001', 3000, 420000, null, null
+)$$, '42501', 'Branch is not authorized for this user', 'an employee cannot create a batch even in their own assigned branch');
+select is((select count(*) from public.production_batches), 0::bigint, 'RLS hides every production batch from the employee, including ones in their own branch');
 
 -- Cross-organization isolation.
 reset role;
@@ -225,10 +233,10 @@ select is((select count(*) from public.production_batches), 0::bigint, 'org B ad
 select is((select count(*) from public.stock_movements where type in ('PRODUCTION_CONSUME', 'PRODUCTION_YIELD')), 0::bigint, 'org B admin cannot see org A''s production stock movements through RLS');
 select is((jsonb_array_length(public.list_production_batches())), 0, 'org B admin lists zero batches (none exist in org B yet)');
 select throws_ok($$select public.get_production_batch_detail(
-  (select id from public.production_batches where description = 'Lote del empleado')
+  (select id from public.production_batches where description = 'Lote org A extra')
 )$$, '42501', 'Branch is not authorized for this user', 'org B admin cannot read an org A batch by id');
 select throws_ok($$select public.set_production_batch_output(
-  (select id from public.production_batches where description = 'Lote del empleado'), 'b5000000-0000-4000-8000-000000000005', 500
+  (select id from public.production_batches where description = 'Lote org A extra'), 'b5000000-0000-4000-8000-000000000005', 500
 )$$, '42501', 'Branch is not authorized for this user', 'org B admin cannot insert an output into an org A batch');
 select throws_ok($$select public.create_production_batch(
   'b3000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000005', 5000, 100000, null, null

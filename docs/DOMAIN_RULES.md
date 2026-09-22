@@ -191,6 +191,7 @@ Un `production_batch` transforma un insumo de origen (peso, gramos enteros) en m
 - Al finalizar se toma un snapshot del precio de venta vigente de cada output (reutilizando `product_prices`, no un sistema paralelo). Si un output no tiene precio vigente, se bloquea el cálculo y se informa cuál producto lo necesita.
 - Estados: `DRAFT` (editable), `COMPLETED` (histórico, inmutable), `CANCELLED` (sólo permitido desde `DRAFT`; cancelar un lote completado requeriría una reversión que todavía no existe).
 - Un lote completado nunca se reescribe silenciosamente.
+- Es información administrativa (costo de compra, costo asignado, márgenes): pertenece a Admin, no al POS de mostrador. Los permisos `production.read`/`production.write` son exclusivos del rol `admin` (mismo patrón que `settlements.*`/`analytics.read`).
 
 ### Integración con stock
 

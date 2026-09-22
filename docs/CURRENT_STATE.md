@@ -195,9 +195,9 @@ disponible). Validado sin hardware: 20 tests Rust nuevos (parser + estado,
 ver "Validación actual"), 9 tests `vitest` de frescura de lectura, build
 Windows NSIS x64 completo con el nuevo crate.
 
-## Desposte / Producción — implementada 2026-09-22
+## Desposte / Producción — implementada 2026-09-22, corregida a Admin el mismo día
 
-Primera versión funcional del módulo, sólo en POS (online, todavía sin SQLite/offline):
+Primera versión funcional del módulo, sólo en Admin (online, ver D-031; el POS de mostrador nunca lo expuso funcionalmente — una primera pasada lo integró equivocadamente en el POS y se corrigió el mismo día tras revisión, antes de cualquier uso real):
 
 - `production_batches`/`production_batch_outputs` (migraciones `202609220024`/`202609220025`), RLS por organización y sucursal (`app_private.can_access_branch`, mismo patrón que ventas).
 - Cálculos de dominio puros y testeados en `packages/business-logic/src/production.ts`: costo de entrada, merma, rendimiento, valor potencial, asignación de costo por valor relativo de venta con redondeo determinístico exacto (los costos asignados siempre suman exactamente el costo del lote), márgenes.
@@ -205,12 +205,13 @@ Primera versión funcional del módulo, sólo en POS (online, todavía sin SQLit
 - Snapshot de precio de venta vigente por output al finalizar (reutiliza `product_prices`); si falta un precio vigente, se bloquea la finalización y se informa qué producto lo necesita.
 - Estados `DRAFT` (editable) / `COMPLETED` (histórico inmutable) / `CANCELLED` (sólo desde `DRAFT`). Reversión de un lote completado no está implementada (ver D-030).
 - **Stock**: el ledger `stock_movements` ya existía en el repositorio (contrario a lo asumido al iniciar este sprint); el desposte lo integra en vez de dejarlo desacoplado, con dos tipos nuevos `PRODUCTION_CONSUME`/`PRODUCTION_YIELD` (ver D-029 y `docs/DOMAIN_RULES.md`). No se creó un segundo modelo de inventario.
-- UI: `apps/pos/src/features/production/ProductionView.tsx` (listado, alta, edición de borrador, finalización, resumen de rendimiento promedio por insumo).
-- Tests: 18 casos Vitest (`packages/business-logic/src/production.test.ts`, incluyendo el ejemplo numérico exacto de la media res) y 65 aserciones pgTAP (`supabase/tests/production_batches.test.sql`) cubriendo aislamiento por organización/sucursal, inmutabilidad post-finalización y la integración de stock.
+- **Permisos**: `production.read`/`production.write` son exclusivos del rol `admin` (mismo patrón que `settlements.*`/`analytics.read`); el empleado no los recibe. `requireAdminContext()` además exige `role.key === 'admin'` para entrar a cualquier `/admin/*`, doble capa igual que el resto de Admin.
+- UI: `/admin/production` (`apps/admin/src/app/admin/production/page.tsx`), Server Component + Server Actions en `apps/admin/src/app/admin/actions.ts` (mismo patrón que rendiciones/stock): listado con filtro por estado, alta, edición de borrador (datos de entrada y outputs), finalización, cancelación de borrador, resumen de rendimiento promedio por insumo. Reutiliza `formatCurrency`/`formatWeight` de `packages/business-logic`.
+- Tests: 18 casos Vitest (`packages/business-logic/src/production.test.ts`, incluyendo el ejemplo numérico exacto de la media res) y 68 aserciones pgTAP (`supabase/tests/production_batches.test.sql`) cubriendo aislamiento por organización/sucursal, que el rol `employee` no tiene ningún acceso (ni siquiera en su propia sucursal), inmutabilidad post-finalización y la integración de stock.
 
-**REQUIERE VERIFICACIÓN**: Docker Desktop no llegó a estar operativo en esta sesión (mismo síntoma que sesiones previas, ver más abajo), por lo que `pnpm db:reset`/`pnpm db:test` no se pudieron ejecutar contra Postgres real; las migraciones y el suite pgTAP se revisaron manualmente pero no corrieron. `pnpm db:types` tampoco pudo regenerarse: `packages/database/src/database.types.ts` se actualizó a mano para las tablas/RPC/enum nuevos.
+**REQUIERE VERIFICACIÓN**: Docker Desktop no llegó a estar operativo en ninguna de las dos sesiones de este sprint (mismo síntoma que sesiones previas, ver más abajo), por lo que `pnpm db:reset`/`pnpm db:test` no se pudieron ejecutar contra Postgres real; las migraciones y el suite pgTAP se revisaron manualmente pero no corrieron. `pnpm db:types` tampoco pudo regenerarse: `packages/database/src/database.types.ts` se actualizó a mano para las tablas/RPC/enum nuevos.
 
-No implementado en este sprint (ver `docs/TASKS.md`): reversión/ajuste de un lote completado; Admin no tiene pantalla propia del módulo (alcance pedido era sólo POS); `branch-detail.tsx` (Admin) no incluye `PRODUCTION_YIELD` en su widget de "ingresos recientes".
+No implementado en este sprint (ver `docs/TASKS.md`): reversión/ajuste de un lote completado; `apps/admin/src/components/branch-detail.tsx` no incluye `PRODUCTION_YIELD` en su widget de "ingresos recientes".
 
 ## Migraciones locales confirmadas
 
@@ -257,10 +258,10 @@ No implementado en este sprint (ver `docs/TASKS.md`): reversión/ajuste de un lo
 
 ## Validación actual
 
-- Admin typecheck/lint/build: OK (incluye `/admin/branch-stock`, ruta nueva compilada y prerenderizada; sin cambios de Admin en el sprint de desposte).
-- POS typecheck/lint/build web: OK (incluye la UI de balanza y la nueva vista de Desposte).
-- Vitest: monorepo completo (`pnpm test`) OK — 45 tests en `packages/business-logic` (incluye 18 nuevos de `production.test.ts`), 6 en `packages/sync`, 28 en `apps/admin`, 4 en `apps/pos`.
-- Migraciones `202609220024`/`202609220025` (Desposte/Producción) y `supabase/tests/production_batches.test.sql` (65 aserciones pgTAP): revisados manualmente línea por línea, **no ejecutados**; Docker Desktop no llegó a estar operativo en esta sesión (ver "Desposte / Producción" arriba). Pendiente correr `pnpm db:reset && pnpm db:test` y regenerar `pnpm db:types` en un entorno con Docker/CI Linux funcional.
+- Admin typecheck/lint/build: OK (incluye `/admin/production`, ruta nueva del módulo de Desposte, compilada y prerenderizada; también `/admin/branch-stock` de un sprint anterior).
+- POS typecheck/lint/build web: OK. Sin cambios funcionales respecto al estado previo a este sprint: la integración de Desposte se agregó y se removió el mismo día tras la corrección de superficie; el `git diff` de `apps/pos/src/App.tsx` es idéntico al de antes de tocarlo.
+- Vitest: monorepo completo (`pnpm test`) OK — 45 tests en `packages/business-logic` (incluye 18 de `production.test.ts`), 6 en `packages/sync`, 28 en `apps/admin`, 4 en `apps/pos`.
+- Migraciones `202609220024`/`202609220025` (Desposte/Producción) y `supabase/tests/production_batches.test.sql` (68 aserciones pgTAP): revisados manualmente línea por línea, **no ejecutados**; Docker Desktop no llegó a estar operativo en ninguna sesión de este sprint (ver "Desposte / Producción" arriba). Pendiente correr `pnpm db:reset && pnpm db:test` y regenerar `pnpm db:types` en un entorno con Docker/CI Linux funcional.
 - Rust: 26 tests OK (6 preexistentes + 14 de `scale/parser.rs` — frame completo/dividido/concatenado, basura previa, CR incompleto, frame sobredimensionado, 0 g, 500 g, 1.250 kg, 12.345 kg, caracteres inválidos, sin punto decimal, frame vacío — + 6 de `scale/mod.rs` — desconexión limpia, generación obsoleta no sobrescribe lectura, config sobrevive guardado/recarga, config corrupta cae a `MANUAL`).
 - Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK; reconfirmado 2026-09-16 con la dependencia `serialport` agregada (mismo instalador `Carnicerías POS_0.1.0_x64-setup.exe`).
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.

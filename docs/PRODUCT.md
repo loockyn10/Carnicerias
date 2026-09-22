@@ -95,8 +95,7 @@ Principios:
 - historial local relevante;
 - identidad de operador;
 - fichaje entrada/salida;
-- integración de balanza KRETZ Novel Eco 2 (RS232, peso únicamente; ver `docs/SCALE_INTEGRATION.md`), con smoke test en hardware real pendiente;
-- Desposte: transformar un insumo comprado por peso en productos de catálogo más merma, con costo asignado por valor relativo de venta y rentabilidad proyectada (online únicamente, ver `docs/DOMAIN_RULES.md`).
+- integración de balanza KRETZ Novel Eco 2 (RS232, peso únicamente; ver `docs/SCALE_INTEGRATION.md`), con smoke test en hardware real pendiente.
 
 ### Admin
 
@@ -104,6 +103,7 @@ Principios:
 - stock y reposición;
 - rendiciones;
 - rentabilidad;
+- Desposte/Producción: transformar un insumo comprado por peso en productos de catálogo más merma, con costo asignado por valor relativo de venta y rentabilidad proyectada (información administrativa, no expuesta en el POS; ver D-031 y `docs/DOMAIN_RULES.md`);
 - personal y dispositivos;
 - configuración;
 - auditoría.

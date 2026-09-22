@@ -92,7 +92,7 @@ Los cálculos (costo total, merma, rendimiento, valor potencial, asignación de 
 
 Al finalizar un lote (`DRAFT → COMPLETED`, irreversible salvo una futura reversión no implementada), se toma snapshot del precio de venta vigente de cada output (reutilizando `product_prices`) y se escribe en el ledger existente `stock_movements`: `PRODUCTION_CONSUME` (negativo, insumo completo) y `PRODUCTION_YIELD` (positivo, cada output). La merma nunca es un movimiento de stock; es la diferencia aritmética reportada en `production_batches.waste_grams`. No existe un segundo modelo de inventario.
 
-La UI vive enteramente en el POS (`apps/pos/src/features/production/ProductionView.tsx`), es online-only (llama las RPC directamente vía Supabase) y no participa todavía del flujo SQLite/outbox.
+La UI vive enteramente en Admin (`/admin/production`, patrón Server Component + Server Actions en `apps/admin/src/app/admin/actions.ts`, igual que rendiciones/stock), no en el POS: es información administrativa (costo, costo asignado, márgenes), no operativa de mostrador (ver D-031). Los permisos `production.read`/`production.write` son exclusivos del rol `admin`.
 
 ## Stock, reposición, rendiciones y analítica
 

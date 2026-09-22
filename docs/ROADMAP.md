@@ -13,6 +13,6 @@ Agregar instalación formal y modo standalone sin convertir el Admin en offline-
 - completar venta POS de productos `UNIT`;
 - introducir `ScaleAdapter` e integración Kretz con hardware disponible;
 - reconsiderar señales avanzadas de inconsistencias sólo si el uso real las justifica;
-- reversión/ajuste de un desposte finalizado; Desposte offline/SQLite si se vuelve necesario.
+- reversión/ajuste de un desposte finalizado.
 
 El detalle ejecutable vive en `TASKS.md`.

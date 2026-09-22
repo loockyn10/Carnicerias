@@ -453,3 +453,76 @@ export async function voidSettlementFormAction(_: SettlementFormState, formData:
     return { error: error instanceof Error ? error.message : "No se pudo anular la rendición" };
   }
 }
+
+export interface ProductionBatchFormState { error?: string; batchId?: string }
+
+export async function createProductionBatchFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
+  try {
+    const batchId = await rpcOrThrow("create_production_batch", {
+      p_branch_id: text(formData, "branch_id"),
+      p_source_product_id: text(formData, "source_product_id"),
+      p_input_weight_grams: kilogramsToGrams(text(formData, "input_weight_kg")),
+      p_cost_per_kg_cents: pesosToCents(text(formData, "cost_per_kg")),
+      p_description: text(formData, "description") || null,
+      p_notes: text(formData, "notes") || null
+    });
+    revalidatePath("/admin/production");
+    return { batchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo crear el desposte" };
+  }
+}
+
+export async function updateProductionBatchHeaderFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
+  const batchId = text(formData, "batch_id");
+  try {
+    await rpcOrThrow("update_production_batch_header", {
+      p_batch_id: batchId,
+      p_source_product_id: text(formData, "source_product_id"),
+      p_input_weight_grams: kilogramsToGrams(text(formData, "input_weight_kg")),
+      p_cost_per_kg_cents: pesosToCents(text(formData, "cost_per_kg")),
+      p_description: text(formData, "description") || null,
+      p_notes: text(formData, "notes") || null
+    });
+    revalidatePath("/admin/production");
+    return { batchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo actualizar el desposte", batchId };
+  }
+}
+
+export async function setProductionBatchOutputFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
+  const batchId = text(formData, "batch_id");
+  try {
+    await rpcOrThrow("set_production_batch_output", {
+      p_batch_id: batchId,
+      p_product_id: text(formData, "product_id"),
+      p_output_weight_grams: kilogramsToGrams(text(formData, "output_weight_kg"))
+    });
+    revalidatePath("/admin/production");
+    return { batchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo agregar el producto obtenido", batchId };
+  }
+}
+
+export async function removeProductionBatchOutputAction(formData: FormData) {
+  await rpcOrThrow("remove_production_batch_output", { p_output_id: text(formData, "output_id") });
+  revalidatePath("/admin/production");
+}
+
+export async function cancelProductionBatchAction(formData: FormData) {
+  await rpcOrThrow("cancel_production_batch", { p_batch_id: text(formData, "batch_id") });
+  revalidatePath("/admin/production");
+}
+
+export async function completeProductionBatchFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
+  const batchId = text(formData, "batch_id");
+  try {
+    await rpcOrThrow("complete_production_batch", { p_batch_id: batchId });
+    revalidatePath("/admin/production");
+    return { batchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo finalizar el desposte", batchId };
+  }
+}

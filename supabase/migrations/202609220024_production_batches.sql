@@ -91,11 +91,11 @@ insert into public.permissions (key, description) values
   ('production.write', 'Create, edit, finalize and cancel production/desposte batches')
 on conflict (key) do nothing;
 
+-- Admin-only, matching the settlements.*/analytics.read pattern: production costs, allocated
+-- cost and margins are administrative information, never granted to the employee role.
 insert into public.role_permissions (role_id, permission_key) values
   ('10000000-0000-4000-8000-000000000001', 'production.read'),
-  ('10000000-0000-4000-8000-000000000001', 'production.write'),
-  ('10000000-0000-4000-8000-000000000002', 'production.read'),
-  ('10000000-0000-4000-8000-000000000002', 'production.write')
+  ('10000000-0000-4000-8000-000000000001', 'production.write')
 on conflict (role_id, permission_key) do nothing;
 
 -- Shared allocation engine: computes, from CURRENT prices, the same relative-sale-value
