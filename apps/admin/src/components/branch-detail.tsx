@@ -6,6 +6,7 @@ import { MetricCard, SectionHeader, StatusBadge } from "./admin-ui";
 import { BranchDetailFrame } from "./branch-detail-frame";
 import { BranchForm } from "./branch-form";
 import { BranchLifecyclePanel } from "./branch-lifecycle-panel";
+import { ForceHardNavigation } from "./force-hard-navigation";
 import { BranchSummary } from "./branch-summary";
 import { BranchStockPanel } from "./branch-stock-panel";
 import { BranchTabs } from "./branch-tabs";
@@ -32,7 +33,14 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     supabase.from("stock_movements").select("product_id, type, quantity_grams, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).in("type", ["PURCHASE", "RETURN", "ADJUSTMENT_POSITIVE", "TRANSFER_IN"]).order("occurred_at", { ascending: false }).limit(6),
     supabase.from("stock_operations").select("id, waste_reason, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("operation_type", "WASTE").order("occurred_at", { ascending: false }).limit(6)
   ]);
-  if (!branchResult.data) notFound();
+  if (!branchResult.data) {
+    // Reached with modal=true when Next's route interception (see
+    // force-hard-navigation.tsx) mismatched a static sibling of [id], such as
+    // /admin/branches/new or /admin/branches/compare, as a branch id. A real
+    // missing/invalid id via direct navigation (modal=false) still 404s.
+    if (modal) return <ForceHardNavigation />;
+    notFound();
+  }
   const error = [branchResult.error, dashboardResult.error, stockResult.error, weekSalesResult.error, recentSalesResult.error, restocksResult.error, wasteResult.error].find(Boolean);
   if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la sucursal: {error.message}</main>;
   const todayStart = localDayStart(context.timezone);
