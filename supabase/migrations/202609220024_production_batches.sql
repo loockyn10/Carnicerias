@@ -137,7 +137,11 @@ as $$
         and (pp.branch_id = batch.branch_id or pp.branch_id is null)
         and pp.valid_from <= now()
         and (pp.valid_to is null or pp.valid_to > now())
-      order by (pp.branch_id = batch.branch_id) desc, pp.valid_from desc
+      -- Boolean equality is NULL for a global price row (pp.branch_id is null), and PostgreSQL
+      -- sorts NULL first on DESC unless told otherwise, which would incorrectly prefer the
+      -- global price over a matching branch override (see migration 202609100004, the existing
+      -- fix for this exact issue in get_pos_catalog/complete_sale).
+      order by (pp.branch_id = batch.branch_id) desc nulls last, pp.valid_from desc
       limit 1
     ) effective_price on true
     where o.batch_id = p_batch_id
@@ -158,8 +162,13 @@ as $$
     from valued, batch, totals
     where totals.all_priced and totals.total_sale_value_cents > 0
   ), leftover as (
-    select batch.cost_total_cents - coalesce(sum(shares.floor_cents), 0) as leftover_cents
-    from batch left join shares on true
+    -- Scalar subquery, not a plain "batch.cost_total_cents" column reference: mixing a
+    -- non-aggregated column with sum() here requires a GROUP BY that has no meaning for a
+    -- single-row CTE, and previously failed with 42803 ("column must appear in the GROUP BY
+    -- clause"). batch always has zero or one row for a given p_batch_id, so the subquery is
+    -- exactly equivalent and needs no GROUP BY.
+    select (select batch.cost_total_cents from batch) - coalesce(sum(shares.floor_cents), 0) as leftover_cents
+    from shares
   ), ranked as (
     select shares.output_id, shares.floor_cents,
       row_number() over (order by shares.remainder_cents desc, shares.product_id asc) as rn
@@ -212,7 +221,9 @@ begin
       and (pp.branch_id = p_branch_id or pp.branch_id is null)
       and pp.valid_from <= now()
       and (pp.valid_to is null or pp.valid_to > now())
-    order by (pp.branch_id = p_branch_id) desc, pp.valid_from desc
+    -- Same branch-price-precedence fix as migration 202609100004: nulls last so a global price
+    -- never outranks a matching branch-specific override.
+    order by (pp.branch_id = p_branch_id) desc nulls last, pp.valid_from desc
     limit 1
   ) effective_price on true
   where p.organization_id = current_organization_id
