@@ -17,6 +17,7 @@ import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime,
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
+import { ProductionView } from "./features/production/ProductionView";
 
 interface AuthUser {
   id: string;
@@ -226,6 +227,7 @@ export default function App() {
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
+  const [productionOpen, setProductionOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [recentSales, setRecentSales] = useState<RecentLocalSale[]>([]);
   const [outboxSummary, setOutboxSummary] = useState<OutboxSummary | null>(null);
@@ -1023,6 +1025,9 @@ export default function App() {
             ) : null}
           </div>
           <button className="pos-recent-sales rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}><span className="pos-label-full">Ventas recientes</span><span className="pos-label-compact">Ventas</span></button>
+          {!user.offline && navigator.onLine && branchId ? (
+            <button className="pos-production rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setProductionOpen(true)}>Desposte</button>
+          ) : null}
           {desktop ? (
             <button
               className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
@@ -1295,6 +1300,8 @@ export default function App() {
           </section>
         </div>
       ) : null}
+
+      {productionOpen && branchId ? <ProductionView branchId={branchId} onClose={() => setProductionOpen(false)} /> : null}
 
       {selectedProduct ? (
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">

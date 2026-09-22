@@ -437,7 +437,9 @@ export interface Database {
             | "ADJUSTMENT_NEGATIVE"
             | "TRANSFER_IN"
             | "TRANSFER_OUT"
-            | "RETURN";
+            | "RETURN"
+            | "PRODUCTION_CONSUME"
+            | "PRODUCTION_YIELD";
           quantity_grams: number;
           sale_id: string | null;
           reason: string | null;
@@ -445,6 +447,7 @@ export interface Database {
           occurred_at: Timestamp;
           created_at: Timestamp;
           stock_operation_id: string | null;
+          production_batch_id: string | null;
         };
         Insert: {
           id?: string;
@@ -459,7 +462,9 @@ export interface Database {
             | "ADJUSTMENT_NEGATIVE"
             | "TRANSFER_IN"
             | "TRANSFER_OUT"
-            | "RETURN";
+            | "RETURN"
+            | "PRODUCTION_CONSUME"
+            | "PRODUCTION_YIELD";
           quantity_grams: number;
           sale_id?: string | null;
           reason?: string | null;
@@ -467,6 +472,7 @@ export interface Database {
           occurred_at?: Timestamp;
           created_at?: Timestamp;
           stock_operation_id?: string | null;
+          production_batch_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["stock_movements"]["Insert"]>;
         Relationships: [];
@@ -675,6 +681,44 @@ export interface Database {
         Row: { id: string; organization_id: string; employee_id: string; rate_cents_per_hour: number; valid_from: Timestamp; valid_to: Timestamp | null; created_by: string; created_at: Timestamp };
         Insert: { id?: string; organization_id: string; employee_id: string; rate_cents_per_hour: number; valid_from: Timestamp; valid_to?: Timestamp | null; created_by: string; created_at?: Timestamp };
         Update: Partial<Database["public"]["Tables"]["employee_hourly_rates"]["Insert"]>;
+        Relationships: [];
+      };
+      production_batches: {
+        Row: {
+          id: string; organization_id: string; branch_id: string; source_product_id: string;
+          description: string | null; input_weight_grams: number; cost_per_kg_cents: number; cost_total_cents: number;
+          status: "DRAFT" | "COMPLETED" | "CANCELLED"; notes: string | null;
+          created_by: string; created_at: Timestamp; updated_at: Timestamp;
+          completed_by: string | null; completed_at: Timestamp | null;
+          cancelled_by: string | null; cancelled_at: Timestamp | null;
+          produced_weight_grams: number | null; waste_grams: number | null; total_sale_value_cents: number | null;
+        };
+        Insert: {
+          id?: string; organization_id: string; branch_id: string; source_product_id: string;
+          description?: string | null; input_weight_grams: number; cost_per_kg_cents: number; cost_total_cents: number;
+          status?: "DRAFT" | "COMPLETED" | "CANCELLED"; notes?: string | null;
+          created_by: string; created_at?: Timestamp; updated_at?: Timestamp;
+          completed_by?: string | null; completed_at?: Timestamp | null;
+          cancelled_by?: string | null; cancelled_at?: Timestamp | null;
+          produced_weight_grams?: number | null; waste_grams?: number | null; total_sale_value_cents?: number | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["production_batches"]["Insert"]>;
+        Relationships: [];
+      };
+      production_batch_outputs: {
+        Row: {
+          id: string; batch_id: string; organization_id: string; branch_id: string; product_id: string;
+          output_weight_grams: number;
+          sale_price_per_kg_cents_snapshot: number | null; sale_value_cents_snapshot: number | null; allocated_cost_cents_snapshot: number | null;
+          created_at: Timestamp; updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string; batch_id: string; organization_id: string; branch_id: string; product_id: string;
+          output_weight_grams: number;
+          sale_price_per_kg_cents_snapshot?: number | null; sale_value_cents_snapshot?: number | null; allocated_cost_cents_snapshot?: number | null;
+          created_at?: Timestamp; updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["production_batch_outputs"]["Insert"]>;
         Relationships: [];
       };
     };
@@ -907,6 +951,52 @@ export interface Database {
         Args: { p_settlement_id: string; p_reason: string };
         Returns: undefined;
       };
+      get_production_catalog: {
+        Args: { p_branch_id: string };
+        Returns: { product_id: string; product_name: string; product_sku: string | null; sale_price_per_kg_cents: number | null }[];
+      };
+      create_production_batch: {
+        Args: {
+          p_branch_id: string; p_source_product_id: string; p_input_weight_grams: number; p_cost_per_kg_cents: number;
+          p_description?: string | null; p_notes?: string | null;
+        };
+        Returns: string;
+      };
+      update_production_batch_header: {
+        Args: {
+          p_batch_id: string; p_source_product_id: string; p_input_weight_grams: number; p_cost_per_kg_cents: number;
+          p_description?: string | null; p_notes?: string | null;
+        };
+        Returns: undefined;
+      };
+      set_production_batch_output: {
+        Args: { p_batch_id: string; p_product_id: string; p_output_weight_grams: number };
+        Returns: string;
+      };
+      remove_production_batch_output: {
+        Args: { p_output_id: string };
+        Returns: undefined;
+      };
+      cancel_production_batch: {
+        Args: { p_batch_id: string };
+        Returns: undefined;
+      };
+      complete_production_batch: {
+        Args: { p_batch_id: string };
+        Returns: Json;
+      };
+      list_production_batches: {
+        Args: { p_branch_id?: string | null; p_status?: string | null; p_limit?: number };
+        Returns: Json;
+      };
+      get_production_batch_detail: {
+        Args: { p_batch_id: string };
+        Returns: Json;
+      };
+      get_production_yield_summary: {
+        Args: { p_source_product_id: string; p_limit?: number };
+        Returns: Json;
+      };
     };
     Enums: {
       unit_type: "WEIGHT" | "UNIT";
@@ -922,11 +1012,14 @@ export interface Database {
         | "ADJUSTMENT_NEGATIVE"
         | "TRANSFER_IN"
         | "TRANSFER_OUT"
-        | "RETURN";
+        | "RETURN"
+        | "PRODUCTION_CONSUME"
+        | "PRODUCTION_YIELD";
       pos_device_status: "ACTIVE" | "DISABLED";
       stock_operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT";
       waste_reason: "DISCARD" | "EXPIRY" | "TRIMMING" | "DETERIORATION" | "INVENTORY_DIFFERENCE" | "OTHER";
       weight_discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG";
+      production_batch_status: "DRAFT" | "COMPLETED" | "CANCELLED";
       employee_shift_status: "OPEN" | "CLOSED" | "REQUIRES_REVIEW";
       time_event_action: "CLOCK_IN" | "CLOCK_OUT";
       time_event_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION";

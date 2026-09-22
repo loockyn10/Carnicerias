@@ -84,6 +84,16 @@ Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso us
 
 Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo/markup. El dominio, pricing y analytics contemplan `UNIT`, pero la venta POS completa actualmente sólo soporta `WEIGHT`.
 
+## Desposte / Producción
+
+`production_batches` y `production_batch_outputs` (migraciones `202609220024`/`202609220025`) registran la transformación de un insumo comprado por peso en múltiples productos de catálogo más merma. Nombres genéricos deliberadamente (no específicos de cerdo): el mismo modelo sirve para cualquier insumo.
+
+Los cálculos (costo total, merma, rendimiento, valor potencial, asignación de costo por valor relativo de venta con redondeo determinístico exacto, márgenes) viven como funciones puras en `packages/business-logic/src/production.ts`, reutilizables sin Supabase. El servidor implementa la misma asignación (`app_private.compute_production_preview`) tanto para la vista previa en vivo de un borrador como, sin cambios, para los valores que `complete_production_batch` congela como snapshot.
+
+Al finalizar un lote (`DRAFT → COMPLETED`, irreversible salvo una futura reversión no implementada), se toma snapshot del precio de venta vigente de cada output (reutilizando `product_prices`) y se escribe en el ledger existente `stock_movements`: `PRODUCTION_CONSUME` (negativo, insumo completo) y `PRODUCTION_YIELD` (positivo, cada output). La merma nunca es un movimiento de stock; es la diferencia aritmética reportada en `production_batches.waste_grams`. No existe un segundo modelo de inventario.
+
+La UI vive enteramente en el POS (`apps/pos/src/features/production/ProductionView.tsx`), es online-only (llama las RPC directamente vía Supabase) y no participa todavía del flujo SQLite/outbox.
+
 ## Stock, reposición, rendiciones y analítica
 
 - `stock_movements` es la fuente de verdad del stock teórico.

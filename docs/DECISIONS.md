@@ -276,3 +276,33 @@ de compilación (`i686-unknown-linux-gnu`) y el empaquetado (`.deb` en vez de
 NSIS). El frontend se compila en la máquina de desarrollo; el binario/paquete
 Linux se genera de forma nativa dentro de un contenedor Debian 12 i386, no
 por cross-compilación desde otra arquitectura. Detalle en `docs/LINUX_POS.md`.
+
+---
+
+## D-028 — Desposte: costo asignado por valor relativo de venta
+
+**Status:** Active
+
+El costo por producto obtenido en un desposte se distribuye proporcionalmente a su valor potencial de venta (`peso × precio vigente`), no por una estimación técnica del corte.
+
+**Motivo:** es el método estándar para costos conjuntos cuando no existe un costo de compra individual por corte. Debe presentarse siempre como "costo asignado", nunca como costo de compra real.
+
+---
+
+## D-029 — Desposte consume/produce stock en el ledger existente
+
+**Status:** Active
+
+Un desposte finalizado escribe en `stock_movements` (el mismo ledger que ventas y operaciones de stock), usando dos tipos nuevos: `PRODUCTION_CONSUME` (negativo, insumo de origen) y `PRODUCTION_YIELD` (positivo, cada output). No se crea un segundo modelo de inventario.
+
+**Motivo:** D-010 prohíbe fuentes paralelas de stock; el ledger ya existía cuando se implementó el módulo, por lo que corresponde integrarlo en vez de dejarlo desacoplado.
+
+---
+
+## D-030 — Reversión de desposte completado pospuesta
+
+**Status:** Active
+
+Un lote de desposte `COMPLETED` es histórico e inmutable. Cancelar sólo es válido en estado `DRAFT` (no tocó stock todavía). Corregir un lote ya finalizado requerirá un flujo de reversión/ajuste que no se construyó en este sprint.
+
+**Motivo:** evitar reescritura silenciosa de historia (ver D-005, D-009) sin comprometerse todavía a diseñar reversión de stock antes de que exista evidencia de necesidad real.

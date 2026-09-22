@@ -195,6 +195,23 @@ disponible). Validado sin hardware: 20 tests Rust nuevos (parser + estado,
 ver "Validación actual"), 9 tests `vitest` de frescura de lectura, build
 Windows NSIS x64 completo con el nuevo crate.
 
+## Desposte / Producción — implementada 2026-09-22
+
+Primera versión funcional del módulo, sólo en POS (online, todavía sin SQLite/offline):
+
+- `production_batches`/`production_batch_outputs` (migraciones `202609220024`/`202609220025`), RLS por organización y sucursal (`app_private.can_access_branch`, mismo patrón que ventas).
+- Cálculos de dominio puros y testeados en `packages/business-logic/src/production.ts`: costo de entrada, merma, rendimiento, valor potencial, asignación de costo por valor relativo de venta con redondeo determinístico exacto (los costos asignados siempre suman exactamente el costo del lote), márgenes.
+- El servidor implementa la misma asignación (`app_private.compute_production_preview`) tanto para la vista previa en vivo de un borrador como para los valores que `complete_production_batch` congela como snapshot al finalizar.
+- Snapshot de precio de venta vigente por output al finalizar (reutiliza `product_prices`); si falta un precio vigente, se bloquea la finalización y se informa qué producto lo necesita.
+- Estados `DRAFT` (editable) / `COMPLETED` (histórico inmutable) / `CANCELLED` (sólo desde `DRAFT`). Reversión de un lote completado no está implementada (ver D-030).
+- **Stock**: el ledger `stock_movements` ya existía en el repositorio (contrario a lo asumido al iniciar este sprint); el desposte lo integra en vez de dejarlo desacoplado, con dos tipos nuevos `PRODUCTION_CONSUME`/`PRODUCTION_YIELD` (ver D-029 y `docs/DOMAIN_RULES.md`). No se creó un segundo modelo de inventario.
+- UI: `apps/pos/src/features/production/ProductionView.tsx` (listado, alta, edición de borrador, finalización, resumen de rendimiento promedio por insumo).
+- Tests: 18 casos Vitest (`packages/business-logic/src/production.test.ts`, incluyendo el ejemplo numérico exacto de la media res) y 65 aserciones pgTAP (`supabase/tests/production_batches.test.sql`) cubriendo aislamiento por organización/sucursal, inmutabilidad post-finalización y la integración de stock.
+
+**REQUIERE VERIFICACIÓN**: Docker Desktop no llegó a estar operativo en esta sesión (mismo síntoma que sesiones previas, ver más abajo), por lo que `pnpm db:reset`/`pnpm db:test` no se pudieron ejecutar contra Postgres real; las migraciones y el suite pgTAP se revisaron manualmente pero no corrieron. `pnpm db:types` tampoco pudo regenerarse: `packages/database/src/database.types.ts` se actualizó a mano para las tablas/RPC/enum nuevos.
+
+No implementado en este sprint (ver `docs/TASKS.md`): reversión/ajuste de un lote completado; Admin no tiene pantalla propia del módulo (alcance pedido era sólo POS); `branch-detail.tsx` (Admin) no incluye `PRODUCTION_YIELD` en su widget de "ingresos recientes".
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -222,6 +239,8 @@ Windows NSIS x64 completo con el nuevo crate.
 21. `202609130021_review_stale_offline_clockins.sql`
 22. `202609140022_internal_pos_employees.sql`
 23. `202609160023_get_branch_stock_status.sql`
+24. `202609220024_production_batches.sql`
+25. `202609220025_production_batch_stock_integration.sql`
 
 ### SQLite POS
 
@@ -238,9 +257,10 @@ Windows NSIS x64 completo con el nuevo crate.
 
 ## Validación actual
 
-- Admin typecheck/lint/build: OK (incluye `/admin/branch-stock`, ruta nueva compilada y prerenderizada).
-- POS typecheck/lint/build web: OK (incluye la UI de balanza).
-- Vitest: 56 tests OK (20 de `branch-stock.test.ts`) + 9 nuevos de `packages/business-logic/src/scale.test.ts` (frescura de lectura: fresca, en el borde del TTL, vencida, desconectada/error/conectando, sin lectura, timestamp inválido, no revivir lectura previa tras reconectar).
+- Admin typecheck/lint/build: OK (incluye `/admin/branch-stock`, ruta nueva compilada y prerenderizada; sin cambios de Admin en el sprint de desposte).
+- POS typecheck/lint/build web: OK (incluye la UI de balanza y la nueva vista de Desposte).
+- Vitest: monorepo completo (`pnpm test`) OK — 45 tests en `packages/business-logic` (incluye 18 nuevos de `production.test.ts`), 6 en `packages/sync`, 28 en `apps/admin`, 4 en `apps/pos`.
+- Migraciones `202609220024`/`202609220025` (Desposte/Producción) y `supabase/tests/production_batches.test.sql` (65 aserciones pgTAP): revisados manualmente línea por línea, **no ejecutados**; Docker Desktop no llegó a estar operativo en esta sesión (ver "Desposte / Producción" arriba). Pendiente correr `pnpm db:reset && pnpm db:test` y regenerar `pnpm db:types` en un entorno con Docker/CI Linux funcional.
 - Rust: 26 tests OK (6 preexistentes + 14 de `scale/parser.rs` — frame completo/dividido/concatenado, basura previa, CR incompleto, frame sobredimensionado, 0 g, 500 g, 1.250 kg, 12.345 kg, caracteres inválidos, sin punto decimal, frame vacío — + 6 de `scale/mod.rs` — desconexión limpia, generación obsoleta no sobrescribe lectura, config sobrevive guardado/recarga, config corrupta cae a `MANUAL`).
 - Tauri desktop Windows completo (NSIS x64) tras separar config por plataforma: OK; reconfirmado 2026-09-16 con la dependencia `serialport` agregada (mismo instalador `Carnicerías POS_0.1.0_x64-setup.exe`).
 - Validación de viewport sin sesión: caja no autorizada y configuración administrativa sin overflow a 1024×600, 1366×768 y 1920×1080.

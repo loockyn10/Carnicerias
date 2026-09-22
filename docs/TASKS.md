@@ -41,9 +41,29 @@ Pendiente:
 - Confirmar `cargo check`/build contra `i686-unknown-linux-gnu` con el
   crate `serialport` agregado (requiere Docker o GitHub Actions).
 
+## P1 — Validar Desposte / Producción contra Postgres real
+
+Implementado en el sprint 2026-09-22 (ver `docs/CURRENT_STATE.md`): tablas,
+RLS, RPCs, integración con `stock_movements`, cálculos de dominio y tests
+(Vitest + pgTAP) escritos y revisados manualmente. Docker Desktop no llegó a
+estar operativo en esta sesión.
+
+Pendiente:
+
+- Ejecutar `pnpm db:reset && pnpm db:test` (65 aserciones en
+  `supabase/tests/production_batches.test.sql`) en un entorno con
+  Docker/CI Linux funcional.
+- Regenerar `packages/database/src/database.types.ts` con `pnpm db:types`
+  (se editó a mano en esta sesión) y confirmar que coincide con el schema real.
+- Smoke manual en el POS: crear un desposte, agregar/quitar outputs,
+  finalizar, verificar que el listado y el historial se vean bien.
+
 ## P2/P3 — Capacidades opcionales según negocio
 
 - Completar venta POS `UNIT` si se vuelve necesaria comercialmente.
 - Conservar como evidencia el timestamp/intento de clock-out offline anómalo, manteniendo el turno en `REQUIRES_REVIEW`.
+- Reversión/ajuste de un desposte ya finalizado (hoy sólo puede cancelarse un borrador; ver D-030).
+- Evaluar si `apps/admin/src/components/branch-detail.tsx` ("ingresos recientes") debería incluir `PRODUCTION_YIELD` junto a PURCHASE/RETURN/ADJUSTMENT_POSITIVE/TRANSFER_IN.
+- Desposte offline/SQLite si el negocio lo necesita (hoy es online-only por diseño; el dominio ya está desacoplado de Supabase en `packages/business-logic`).
 
 No priorizar actualmente detección avanzada de inconsistencias.

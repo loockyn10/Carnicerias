@@ -179,6 +179,29 @@ Rankings distintos:
 
 No asumir que “más vendido” = “más rentable”.
 
+## Desposte / Producción
+
+Un `production_batch` transforma un insumo de origen (peso, gramos enteros) en múltiples `production_batch_outputs` (productos reales del catálogo) más merma.
+
+- Peso: gramos enteros. Dinero: centavos enteros. Sin excepciones.
+- `merma = peso_entrada - suma(peso_outputs)`. No se permite finalizar si la suma de outputs supera el peso de entrada.
+- `costo_promedio_kg_vendible = costo_total / kg_vendibles` es un promedio global; nunca se presenta como el costo real de un corte específico.
+- El costo por output se distribuye por **valor relativo de venta** (`valor_output / valor_total × costo_total`). Es una asignación estimada, no el costo de compra individual del corte.
+- La suma de los costos asignados debe ser **exactamente igual** al costo total del lote. Se distribuye el residuo de redondeo determinísticamente (mayor resto primero, empate por `product_id`), nunca se acepta una diferencia de centavos.
+- Al finalizar se toma un snapshot del precio de venta vigente de cada output (reutilizando `product_prices`, no un sistema paralelo). Si un output no tiene precio vigente, se bloquea el cálculo y se informa cuál producto lo necesita.
+- Estados: `DRAFT` (editable), `COMPLETED` (histórico, inmutable), `CANCELLED` (sólo permitido desde `DRAFT`; cancelar un lote completado requeriría una reversión que todavía no existe).
+- Un lote completado nunca se reescribe silenciosamente.
+
+### Integración con stock
+
+`stock_movements` es el único ledger de stock (ver sección "Stock" arriba); el desposte no introduce un segundo modelo. Al finalizar, un lote:
+
+- consume el insumo de origen completo (`PRODUCTION_CONSUME`, negativo, por `input_weight_grams`);
+- produce stock de cada output (`PRODUCTION_YIELD`, positivo, por su peso obtenido);
+- la merma nunca es un movimiento de stock de ningún producto: es la diferencia aritmética, informativa (`production_batches.waste_grams`), no inventario.
+
+Igual que WASTE/ADJUSTMENT_NEGATIVE, el stock resultante puede quedar negativo; no se clampea.
+
 ## Control horario
 
 - el empleado marca entrada/salida;

@@ -38,6 +38,9 @@ export type SaleStatus = (typeof SALE_STATUSES)[number];
 export const PAYMENT_METHODS = ["CASH", "TRANSFER", "DEBIT", "CREDIT", "OTHER"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
+export const PRODUCTION_BATCH_STATUSES = ["DRAFT", "COMPLETED", "CANCELLED"] as const;
+export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
+
 export const STOCK_MOVEMENT_TYPES = [
   "PURCHASE",
   "SALE",
@@ -46,7 +49,9 @@ export const STOCK_MOVEMENT_TYPES = [
   "ADJUSTMENT_NEGATIVE",
   "TRANSFER_IN",
   "TRANSFER_OUT",
-  "RETURN"
+  "RETURN",
+  "PRODUCTION_CONSUME",
+  "PRODUCTION_YIELD"
 ] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 

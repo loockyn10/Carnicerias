@@ -95,7 +95,8 @@ Principios:
 - historial local relevante;
 - identidad de operador;
 - fichaje entrada/salida;
-- integración de balanza KRETZ Novel Eco 2 (RS232, peso únicamente; ver `docs/SCALE_INTEGRATION.md`), con smoke test en hardware real pendiente.
+- integración de balanza KRETZ Novel Eco 2 (RS232, peso únicamente; ver `docs/SCALE_INTEGRATION.md`), con smoke test en hardware real pendiente;
+- Desposte: transformar un insumo comprado por peso en productos de catálogo más merma, con costo asignado por valor relativo de venta y rentabilidad proyectada (online únicamente, ver `docs/DOMAIN_RULES.md`).
 
 ### Admin
 
