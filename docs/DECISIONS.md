@@ -348,3 +348,40 @@ Un producto tiene un `inventory_role`: `RAW_MATERIAL`, `SELLABLE` (default, pres
 La distribución de stock entre sucursales (`stock_transfers`/`stock_transfer_items`, RPC `create_stock_transfer`) escribe en `stock_movements` usando `TRANSFER_OUT`/`TRANSFER_IN`, tipos que existían en el enum desde el sprint de ventas online pero nunca se habían usado. No se crea un segundo modelo de inventario. Alcance de este sprint: sólo productos `WEIGHT`, transferencia inmediata y atómica (sin confirmación de recepción en dos etapas).
 
 **Motivo:** D-010 prohíbe fuentes paralelas de stock. Reutilizar los tipos de movimiento ya reservados para esto es más simple que diseñar un modelo nuevo, y mantiene "stock por sucursal" y "stock" (que ya suman `stock_movements` sin filtrar por tipo) correctos automáticamente, sin cambios.
+
+---
+
+## D-035 — Gestión real de sucursales: hard-delete sólo sin historial
+
+**Status:** Active
+
+Admin puede crear, editar y activar/desactivar sucursales (`save_branch`,
+`set_branch_active`, migración `202609220028`). El borrado físico
+(`delete_branch`) sólo se permite si la sucursal no tiene ninguna fila en
+ventas, stock, rendiciones, turnos, dispositivos, despostes, transferencias,
+auditoría o precios propios; si tiene cualquiera de esas, la función rechaza
+el borrado y exige desactivar (`active = false`) en su lugar.
+
+**Motivo:** aplica D-005 (desactivar, no borrar historia) a una entidad que
+hasta ahora sólo se sembraba manualmente. `branches.write` y las policies de
+insert/update en `branches` ya existían desde `202609100001` sin usarse; esta
+decisión es sobre cómo se usa ese permiso, no un cambio de RLS nuevo.
+
+---
+
+## D-036 — Pre-production reset es manual, nunca automático
+
+**Status:** Active
+
+`scripts/pre-production-reset.sql` limpia datos operativos ficticios
+(ventas, stock, turnos, rendiciones, dispositivos, empleados internos y
+sucursales de prueba) preservando organización, admin, catálogo y precios.
+Es una operación de una sola vez, manual, sin migración ni RPC ni botón de
+Admin asociado, y exige backup + confirmación explícita en sesión
+(`SET app.confirm_pre_production_reset = 'YES-DELETE-TEST-DATA';`) antes de
+ejecutarse.
+
+**Motivo:** pasar de datos demo a producción real es un evento único e
+irreversible sobre datos reales; automatizarlo (migración, RPC, botón)
+crearía una superficie de borrado accidental que no se justifica para algo
+que ocurre una sola vez por instalación. Ver `docs/PRE_PRODUCTION_RESET.md`.

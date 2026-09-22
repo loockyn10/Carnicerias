@@ -10,8 +10,10 @@ import type { Database as GeneratedDatabase, Json } from "./database.types";
  * called with SQL NULL — so the generator has no signal to add `| null` even when a function's
  * own body treats that null as meaningful, e.g.:
  *
- *   - save_category / save_product: p_category_id / p_product_id have no default, but the
- *     function branches on them — null means "create", a real id means "update this row".
+ *   - save_branch / save_category / save_product: p_branch_id / p_category_id / p_product_id
+ *     have no default, but the function branches on them — null means "create", a real id means
+ *     "update this row". save_branch's p_address is also `default null` in SQL and genuinely
+ *     optional (a branch with no street address is valid).
  *   - set_product_price: p_branch_id null means "the global price"; p_price_cents null means
  *     "close this price range without a replacement".
  *   - manage_existing_member: p_branch_id is null for an admin membership, required only when
@@ -121,6 +123,16 @@ export interface RpcNullOverrides {
       p_operation_type: string
       p_supplier?: string | null
       p_waste_reason?: string | null
+    }
+    Returns: string
+  }
+  save_branch: {
+    Args: {
+      p_active?: boolean
+      p_address?: string | null
+      p_branch_id: string | null
+      p_code: string
+      p_name: string
     }
     Returns: string
   }

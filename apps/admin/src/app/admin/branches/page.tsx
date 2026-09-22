@@ -7,7 +7,7 @@ import { localDayStart, stockPriority } from "../../../lib/multibranch";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
 
-type Filter = "all" | "alerts" | "critical";
+type Filter = "all" | "alerts" | "critical" | "inactive";
 type Sort = "name" | "revenue" | "alerts";
 
 export default async function BranchesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -18,12 +18,12 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const params = await searchParams;
   const value = (key: string) => typeof params[key] === "string" ? params[key] : "";
   const q = value("q").trim().toLocaleLowerCase("es");
-  const filter: Filter = ["alerts", "critical"].includes(value("filter")) ? value("filter") as Filter : "all";
+  const filter: Filter = ["alerts", "critical", "inactive"].includes(value("filter")) ? value("filter") as Filter : "all";
   const sort: Sort = ["revenue", "alerts"].includes(value("sort")) ? value("sort") as Sort : "name";
   const today = localDayStart(context.timezone);
   const supabase = await createClient();
   const [branchesResult, salesResult, stockResult] = await Promise.all([
-    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).order("name")),
     perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
     perf.measure("stock", supabase.rpc("get_branch_stock_status"))
   ]);
@@ -31,7 +31,7 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   if (error) { perf.flush(); return <main className="mx-auto max-w-6xl p-8 text-red-800">No se pudieron cargar las sucursales: {error.message}</main>; }
 
   const transformStartedAt = performance.now();
-  const rows = new Map((branchesResult.data ?? []).map((branch) => [branch.id, { id: branch.id, name: branch.name, revenue: 0, previous: 0, grams: 0, tickets: 0, out: 0, low: 0 }]));
+  const rows = new Map((branchesResult.data ?? []).map((branch) => [branch.id, { id: branch.id, name: branch.name, active: branch.active, revenue: 0, previous: 0, grams: 0, tickets: 0, out: 0, low: 0 }]));
   for (const sale of salesResult.data ?? []) {
     const row = rows.get(sale.branch_id);
     if (!row) continue;
@@ -45,16 +45,19 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   }
   const visible = [...rows.values()]
     .filter((row) => row.name.toLocaleLowerCase("es").includes(q))
-    .filter((row) => filter === "all" || (filter === "alerts" && row.out + row.low > 0) || (filter === "critical" && row.out > 0))
+    .filter((row) => filter === "all" || (filter === "alerts" && row.out + row.low > 0) || (filter === "critical" && row.out > 0) || (filter === "inactive" && !row.active))
     .sort((a, b) => sort === "revenue" ? b.revenue - a.revenue || a.name.localeCompare(b.name, "es") : sort === "alerts" ? (b.out + b.low) - (a.out + a.low) || a.name.localeCompare(b.name, "es") : a.name.localeCompare(b.name, "es"));
   perf.mark("transform", transformStartedAt);
   perf.flush();
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
-    <div className="flex justify-end"><Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches/compare">Comparar sucursales →</Link></div>
+    <div className="flex flex-wrap items-center justify-end gap-4">
+      <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches/compare">Comparar sucursales →</Link>
+      <Link className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white" href="/admin/branches/new">+ Nueva sucursal</Link>
+    </div>
     <form className="mt-3 grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-[1fr_12rem_13rem_auto]">
       <input className="rounded-lg border border-stone-300 px-3 py-2" defaultValue={value("q")} name="q" placeholder="Buscar sucursal…" />
-      <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={filter} name="filter"><option value="all">Todas</option><option value="alerts">Con alertas</option><option value="critical">Stock crítico</option></select>
+      <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={filter} name="filter"><option value="all">Todas</option><option value="alerts">Con alertas</option><option value="critical">Stock crítico</option><option value="inactive">Inactivas</option></select>
       <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={sort} name="sort"><option value="name">Nombre</option><option value="revenue">Mayor facturación</option><option value="alerts">Más alertas</option></select>
       <button className="rounded-lg border px-4 py-2 font-bold">Aplicar</button>
     </form>
@@ -62,8 +65,8 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
       {visible.map((row) => {
         const alerts = row.out + row.low;
         const change = row.previous ? ((row.revenue - row.previous) / row.previous) * 100 : null;
-        return <Link aria-label={`Ver sucursal ${row.name}`} className="block cursor-pointer rounded-xl border border-transparent bg-white p-4 shadow-sm transition-shadow hover:border-rose-200 hover:bg-rose-50/30 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800" href={`/admin/branches/${row.id}`} key={row.id}>
-          <div className="flex items-start justify-between gap-3"><h2 className="text-lg font-black">{row.name}</h2>{alerts ? <StatusBadge tone={row.out ? "critical" : "warning"}>{alerts} alertas</StatusBadge> : <StatusBadge tone="success">Sin alertas</StatusBadge>}</div>
+        return <Link aria-label={`Ver sucursal ${row.name}`} className={`block cursor-pointer rounded-xl border border-transparent bg-white p-4 shadow-sm transition-shadow hover:border-rose-200 hover:bg-rose-50/30 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800 ${row.active ? "" : "opacity-60"}`} href={`/admin/branches/${row.id}`} key={row.id}>
+          <div className="flex items-start justify-between gap-3"><h2 className="text-lg font-black">{row.name}</h2>{!row.active ? <StatusBadge tone="neutral">Inactiva</StatusBadge> : alerts ? <StatusBadge tone={row.out ? "critical" : "warning"}>{alerts} alertas</StatusBadge> : <StatusBadge tone="success">Sin alertas</StatusBadge>}</div>
           <p className="mt-4 text-2xl font-black text-rose-800">{formatCurrency(BigInt(row.revenue))}</p>
           <p className={`text-sm font-bold ${change !== null && change < 0 ? "text-red-700" : "text-emerald-700"}`}>{change === null ? "Sin comparación previa" : `${change >= 0 ? "+" : ""}${change.toFixed(1)}% vs ayer`}</p>
           <p className="mt-2 text-sm text-stone-600">{formatWeight(row.grams)} · {row.tickets} tickets</p>

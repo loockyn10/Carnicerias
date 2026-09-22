@@ -100,6 +100,48 @@ export async function logout() {
   redirect("/login");
 }
 
+export interface BranchFormState { error?: string; branchId?: string }
+
+export async function saveBranchFormAction(_: BranchFormState, formData: FormData): Promise<BranchFormState> {
+  try {
+    const branchId = await rpcOrThrow("save_branch", {
+      p_branch_id: optionalId(formData, "branch_id"),
+      p_name: text(formData, "name"),
+      p_code: text(formData, "code"),
+      p_address: text(formData, "address") || null,
+      p_active: formData.get("active") === "on"
+    });
+    revalidatePath("/admin/branches");
+    revalidatePath(`/admin/branches/${branchId}`);
+    return { branchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar la sucursal" };
+  }
+}
+
+export async function setBranchActiveFormAction(_: BranchFormState, formData: FormData): Promise<BranchFormState> {
+  const branchId = text(formData, "branch_id");
+  try {
+    await rpcOrThrow("set_branch_active", { p_branch_id: branchId, p_active: formData.get("active") === "on" });
+    revalidatePath("/admin/branches");
+    revalidatePath(`/admin/branches/${branchId}`);
+    return { branchId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo cambiar el estado de la sucursal", branchId };
+  }
+}
+
+export async function deleteBranchFormAction(_: BranchFormState, formData: FormData): Promise<BranchFormState> {
+  const branchId = text(formData, "branch_id");
+  try {
+    await rpcOrThrow("delete_branch", { p_branch_id: branchId });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo eliminar la sucursal", branchId };
+  }
+  revalidatePath("/admin/branches");
+  redirect("/admin/branches");
+}
+
 export async function saveCategoryAction(formData: FormData) {
   const name = text(formData, "name");
   await rpcOrThrow("save_category", {

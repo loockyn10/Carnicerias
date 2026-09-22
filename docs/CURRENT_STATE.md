@@ -237,6 +237,42 @@ Continuación del sprint de Desposte, sobre el mismo módulo:
 
 **Hallazgo colateral, no introducido por este sprint (deuda técnica preexistente)**: al reconvertir `packages/database/src/database.types.ts` de UTF-16LE (encoding con el que estaba guardado en el árbol de trabajo, probablemente por una redirección de PowerShell de una sesión anterior) a UTF-8 para poder editarlo de forma confiable, `pnpm typecheck`/`pnpm build` de `@carnicerias/admin` empezaron a fallar con errores `exactOptionalPropertyTypes` preexistentes (ese flag está en `tsconfig.base.json` desde el commit inicial del repo, confirmado con `git log`) en funciones y páginas que esta sesión no tocó: `saveCategoryAction`, `saveProductAction` (no usada por ninguna UI), `setPriceAction`, `recordPurchaseAction`, `recordReplenishmentFormAction`, `recordWasteAction`, `recordAdjustmentAction`, `manageMemberAction`, `createPosEmployeeAction`/`updatePosEmployeeAction`, y las páginas `/admin/analytics`, `/admin/employees`, `/admin/settlements`, `/admin/timekeeping`. El patrón común es pasar `null` explícito a un argumento de RPC opcional tipado sin `| null`. No se corrigieron: al menos `setPriceAction` usa `null` con un significado propio ("cerrar el precio sin fijar uno nuevo") que **no** es intercambiable con omitir el argumento para un parámetro Postgres sin `default` — una corrección mecánica global sería insegura sin revisar cada RPC, y tocaría precios/reposición/empleados/rentabilidad/rendiciones/horas trabajadas, fuera del alcance de este sprint. El código propio de este sprint (Desposte, materias primas, transferencias) sí compila y lintea limpio de forma aislada (verificado). Queda como tarea de seguimiento en `TASKS.md`.
 
+## Gestión de sucursales y pre-production reset — implementado 2026-09-22
+
+- Admin → Sucursales ahora permite crear, editar y activar/desactivar
+  sucursales (`save_branch`, `set_branch_active`, migración
+  `202609220028_branch_management.sql`). El permiso `branches.write` y las
+  policies RLS de insert/update en `branches` ya existían desde
+  `202609100001` sin usarse; esta migración sólo agrega las RPC y un trigger
+  de auditoría (`branches_audit`, mismo patrón que `categories`/`products`)
+  que faltaba. UI: `/admin/branches/new` (crear) y el detalle de sucursal
+  (`components/branch-detail.tsx`, pestaña "Otros") para editar/activar,
+  desactivar o eliminar. El listado (`/admin/branches`) ahora también
+  muestra sucursales inactivas (antes las ocultaba por completo, lo que
+  hacía imposible reactivarlas desde la UI) con un filtro "Inactivas".
+- `delete_branch` (hard delete) sólo procede si la sucursal no tiene ninguna
+  fila en ventas, stock, rendiciones, turnos, dispositivos, despostes,
+  transferencias, auditoría o precios propios; si tiene, rechaza y pide
+  desactivar en su lugar (D-005, D-035).
+- `scripts/pre-production-reset.sql` (manual, una sola vez, ver D-036 y
+  `docs/PRE_PRODUCTION_RESET.md`): limpia ventas, pagos, stock, rendiciones,
+  turnos, dispositivos, empleados internos y sucursales ficticias
+  preservando organización, admin/owner, catálogo y `product_prices`.
+  Aborta si detecta un precio específico de una sucursal a eliminar (la
+  FK `product_prices.branch_id → branches` es `on delete restrict`, así que
+  esto también es un requisito técnico, no sólo una precaución). No se
+  ejecutó contra ningún entorno en esta sesión — el usuario debe correrlo
+  manualmente siguiendo `docs/PRE_PRODUCTION_RESET.md` (incluye backup, cómo
+  revisar antes de confirmar, y verificación posterior).
+- **REQUIERE VERIFICACIÓN**: igual que el resto de las migraciones desde
+  `202609220024`, Docker Desktop no estuvo operativo en esta sesión (mismo
+  síntoma: `dockerDesktopLinuxEngine` no responde), así que
+  `202609220028_branch_management.sql` se revisó manualmente pero no corrió
+  contra Postgres real, y `database.types.ts`/`database.rpc-null-overrides.ts`
+  se actualizaron a mano (mismo patrón ya usado para 024–027) en vez de con
+  `pnpm db:types`. `pnpm typecheck`/`lint`/`test`/`build` sí corrieron limpio
+  en todo el monorepo con estos cambios incluidos.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -268,6 +304,7 @@ Continuación del sprint de Desposte, sobre el mismo módulo:
 25. `202609220025_production_batch_stock_integration.sql`
 26. `202609220026_raw_materials_and_production_branch.sql`
 27. `202609220027_stock_transfers.sql`
+28. `202609220028_branch_management.sql`
 
 ### SQLite POS
 

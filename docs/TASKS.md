@@ -71,6 +71,28 @@ Pendiente:
   recién finalizado). Confirmar que el rol `employee` no puede acceder a
   ninguna de las dos pantallas.
 
+## P1 — Ejecutar pre-production reset y crear sucursales reales (acción del usuario)
+
+Implementado 2026-09-22: `scripts/pre-production-reset.sql`, gestión de
+sucursales en Admin (`/admin/branches/new`, editar/activar/desactivar/borrar
+en el detalle), migración `202609220028_branch_management.sql`. No ejecutado
+contra ningún entorno en esta sesión (requiere confirmación explícita del
+usuario, ver `docs/PRE_PRODUCTION_RESET.md`).
+
+Pendiente (usuario, no Claude/Codex):
+
+- Backup del proyecto Supabase remoto.
+- Correr `scripts/pre-production-reset.sql` siguiendo `docs/PRE_PRODUCTION_RESET.md`.
+- Verificar el resultado (queries de la sección "Verificar que quedó limpio").
+- Crear las sucursales reales desde Admin → Sucursales y autorizar cada
+  dispositivo real a la suya.
+
+Pendiente (agente, requiere Docker/CI Linux — mismo bloqueo que 024–027):
+
+- Ejecutar `202609220028_branch_management.sql` contra Postgres real
+  (`pnpm db:reset && pnpm db:test`) y regenerar `database.types.ts` con
+  `pnpm db:types`.
+
 ## P2/P3 — Capacidades opcionales según negocio
 
 - Completar venta POS `UNIT` si se vuelve necesaria comercialmente.
