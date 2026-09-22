@@ -21,9 +21,9 @@ export default async function EmployeesPage() {
   perf.mark("adminContext", contextStartedAt);
   const supabase = await createClient();
   const [{ data: members, error }, { data: branches, error: branchesError }, { data: security, error: securityError }] = await Promise.all([
-    perf.measure("members", supabase.rpc("list_organization_members", {})),
+    perf.measure("members", supabase.rpc("list_organization_members")),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
-    perf.measure("securityStatus", supabase.rpc("get_employee_security_status", {}))
+    perf.measure("securityStatus", supabase.rpc("get_employee_security_status"))
   ]);
   perf.flush();
   const pageError = error ?? branchesError ?? securityError;

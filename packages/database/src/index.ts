@@ -1,8 +1,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import type { Database } from "./database.types";
+import type { Database } from "./database.merged";
 
-export type { Database, Json } from "./database.types";
+export type { Json } from "./database.types";
+export type { Database } from "./database.merged";
 
 export interface PublicSupabaseConfig {
   url: string;

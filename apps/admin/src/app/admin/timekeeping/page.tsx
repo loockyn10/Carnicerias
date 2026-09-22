@@ -30,7 +30,7 @@ export default async function TimekeepingPage({ searchParams }: { searchParams: 
   const supabase = await createClient();
   const [{ data, error }, { data: members }, { data: branches }] = await Promise.all([
     supabase.rpc("get_timekeeping_report", { p_from: from, p_to: to, p_employee_id: employee, p_branch_id: branch }),
-    supabase.rpc("list_organization_members", {}),
+    supabase.rpc("list_organization_members"),
     supabase.from("branches").select("id,name").eq("organization_id", context.organizationId).eq("active", true).order("name")
   ]);
   const report = (data ?? { from, to, maxShiftHours: 12, employees: [], shifts: [], review: [] }) as unknown as Report;

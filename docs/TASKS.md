@@ -56,6 +56,9 @@ Pendiente:
   entorno con Docker/CI Linux funcional.
 - Regenerar `packages/database/src/database.types.ts` con `pnpm db:types`
   (se editó a mano en varias sesiones) y confirmar que coincide con el schema real.
+  Al regenerar, revisar `packages/database/src/database.rpc-null-overrides.ts`
+  contra el nuevo archivo: si alguna migración tocada cambió el argumento/retorno
+  real de una de las RPC ahí listadas, actualizar esa entrada para que coincida.
 - Confirmar con `supabase migration list --linked` si 024–027 llegaron a
   aplicarse al remoto antes de asumir que están pendientes.
 - Smoke manual en Admin: crear un desposte con varias medias res
@@ -67,40 +70,6 @@ Pendiente:
   desde `/admin/transfers` (incluida "Distribuir ahora" desde un desposte
   recién finalizado). Confirmar que el rol `employee` no puede acceder a
   ninguna de las dos pantallas.
-
-## P1 — `exactOptionalPropertyTypes` rompe `pnpm typecheck`/`pnpm build` de `@carnicerias/admin`
-
-Descubierto el 2026-09-22 al normalizar la codificación de
-`packages/database/src/database.types.ts` (estaba guardado en UTF-16LE en el
-árbol de trabajo, probablemente por una redirección de PowerShell de una
-sesión anterior; se convirtió a UTF-8 para poder editarlo con confianza, sin
-cambiar su contenido). `tsconfig.base.json` tiene `exactOptionalPropertyTypes: true`
-desde el commit inicial del repositorio (confirmado con `git log`); no es un
-flag nuevo. El problema es preexistente, no introducido por el sprint de
-materias primas/Distribución: varios RPC pasan `null` explícito a
-argumentos opcionales tipados sin `| null`, lo que esa opción rechaza.
-
-Afectados (confirmado con `pnpm --filter @carnicerias/admin typecheck` y
-`build`, ninguno tocado por el sprint de materias primas/Distribución):
-`saveCategoryAction`, `saveProductAction` (sin ningún caller en la UI),
-`setPriceAction`, `recordPurchaseAction`, `recordReplenishmentFormAction`,
-`recordWasteAction`, `recordAdjustmentAction`, `manageMemberAction`,
-`createPosEmployeeAction`/`updatePosEmployeeAction` en
-`apps/admin/src/app/admin/actions.ts`, y las páginas `/admin/analytics`,
-`/admin/employees`, `/admin/settlements`, `/admin/timekeeping`.
-
-No corregir en bloque: al menos `setPriceAction` usa `p_price_cents: null`
-con un significado propio ("cerrar el precio sin fijar uno nuevo") distinto
-de omitir el argumento, así que una corrección mecánica global sería
-insegura. Cada sitio necesita revisión puntual de qué espera su RPC. El
-código del sprint de materias primas/Distribución no tiene este problema
-(usa omisión condicional de claves, verificado con `pnpm --filter
-@carnicerias/admin typecheck`/`lint` limpios en los archivos que agrega o
-modifica).
-
-Pendiente: revisar cada sitio listado arriba contra su RPC/función real y
-decidir, caso por caso, si el valor correcto es omitir la clave o ampliar el
-tipo del argumento para aceptar `null` explícitamente.
 
 ## P2/P3 — Capacidades opcionales según negocio
 
