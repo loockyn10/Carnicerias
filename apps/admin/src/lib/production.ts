@@ -10,6 +10,7 @@ export interface ProductionBatchListItem {
   createdAt: string;
   completedAt: string | null;
   inputWeightGrams: number;
+  inputUnitCount: number | null;
   producedWeightGrams: number;
   wasteGrams: number;
   yieldBps: number | null;
@@ -52,6 +53,7 @@ export interface ProductionBatchDetail {
     sourceProductName: string;
     description: string | null;
     inputWeightGrams: number;
+    inputUnitCount: number | null;
     costPerKgCents: number;
     costTotalCents: number;
     status: ProductionBatchStatus;

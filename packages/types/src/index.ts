@@ -41,6 +41,9 @@ export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 export const PRODUCTION_BATCH_STATUSES = ["DRAFT", "COMPLETED", "CANCELLED"] as const;
 export type ProductionBatchStatus = (typeof PRODUCTION_BATCH_STATUSES)[number];
 
+export const PRODUCT_INVENTORY_ROLES = ["RAW_MATERIAL", "SELLABLE", "BOTH"] as const;
+export type ProductInventoryRole = (typeof PRODUCT_INVENTORY_ROLES)[number];
+
 export const STOCK_MOVEMENT_TYPES = [
   "PURCHASE",
   "SALE",

@@ -7,9 +7,9 @@ import { createProductionBatchFormAction, type ProductionBatchFormState } from "
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function CreateProductionBatchForm({ branches, products }: {
-  branches: { id: string; name: string }[];
+export function CreateProductionBatchForm({ products, productionBranchName }: {
   products: { id: string; name: string }[];
+  productionBranchName: string;
 }) {
   const router = useRouter();
   const [state, action, pending] = useActionState(createProductionBatchFormAction, {} as ProductionBatchFormState);
@@ -19,25 +19,23 @@ export function CreateProductionBatchForm({ branches, products }: {
   }, [router, state.batchId]);
 
   return <form action={action} className="mt-4 grid gap-3 rounded-2xl border bg-white p-5 shadow-sm">
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className="grid gap-1 text-sm font-bold">Sucursal
-        <select className={input} name="branch_id" required>
-          <option value="">Elegí una sucursal…</option>
-          {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-        </select>
-      </label>
+    <p className="text-xs font-bold uppercase tracking-wide text-stone-500">Stock generado en: <span className="text-stone-700">{productionBranchName}</span></p>
+    <div className="grid gap-3 sm:grid-cols-[1fr_10rem]">
       <label className="grid gap-1 text-sm font-bold">Producto / insumo de origen
         <select className={input} name="source_product_id" required>
           <option value="">Elegí un producto…</option>
           {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
         </select>
       </label>
+      <label className="grid gap-1 text-sm font-bold">Cantidad de unidades (opcional)
+        <input className={input} min="1" name="input_unit_count" placeholder="5" step="1" type="number" />
+      </label>
     </div>
     <label className="grid gap-1 text-sm font-bold">Descripción (opcional)
       <input className={input} maxLength={200} name="description" placeholder="Media res de cerdo #1" />
     </label>
     <div className="grid gap-3 sm:grid-cols-2">
-      <label className="grid gap-1 text-sm font-bold">Peso de entrada (kg)
+      <label className="grid gap-1 text-sm font-bold">Peso de entrada total (kg)
         <input className={input} min="0.001" name="input_weight_kg" placeholder="20" required step="0.001" type="number" />
       </label>
       <label className="grid gap-1 text-sm font-bold">Costo de compra por kg

@@ -69,6 +69,14 @@ function percentageToBasisPointsAllowZero(value: string, label: string, maximumB
   return Number(basisPoints);
 }
 
+function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
+  const sellable = formData.get("is_sellable") === "on";
+  const rawMaterial = formData.get("is_raw_material") === "on";
+  if (rawMaterial && sellable) return "BOTH";
+  if (rawMaterial) return "RAW_MATERIAL";
+  return "SELLABLE";
+}
+
 function slugify(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -125,19 +133,21 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
     const rawCost = text(formData, "cost");
     const rawProfit = text(formData, "profit_markup");
     if (Boolean(rawCost) !== Boolean(rawProfit)) throw new Error("Completá costo y margen de ganancia para activar el precio automático");
+    const productId = text(formData, "product_id");
     await rpcOrThrow("save_product", {
-      p_product_id: text(formData, "product_id"), p_category_id: text(formData, "category_id"),
+      p_product_id: productId, p_category_id: text(formData, "category_id"),
       p_name: name, p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
       p_active: formData.get("active") === "on"
     });
+    await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
 
     if (rawCost && rawProfit) {
       const costCents = pesosToCents(rawCost);
       const profitMarkupBps = percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n);
       if (costCents !== Number(text(formData, "current_cost_cents") || 0) || profitMarkupBps !== Number(text(formData, "current_profit_markup_bps") || -1)) {
         await rpcOrThrow("save_product_pricing", {
-          p_product_id: text(formData, "product_id"), p_cost_cents: costCents, p_profit_markup_bps: profitMarkupBps
+          p_product_id: productId, p_cost_cents: costCents, p_profit_markup_bps: profitMarkupBps
         });
       }
     }
@@ -158,14 +168,21 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     const name = text(formData, "name");
     const rawCost = text(formData, "cost");
     const rawProfit = text(formData, "profit_markup");
-    if (!rawCost || !rawProfit) throw new Error("Completá costo y margen de ganancia");
-    await rpcOrThrow("create_product_with_pricing", {
+    const role = inventoryRole(formData);
+    // A pure raw material (Desposte input, never sold directly) has no list price to form: its
+    // cost is captured per Desposte batch instead. Any sellable role still needs cost + margin,
+    // same as before.
+    if (role !== "RAW_MATERIAL" && (!rawCost || !rawProfit)) throw new Error("Completá costo y margen de ganancia");
+    const productId = await rpcOrThrow("create_product_with_pricing", {
       p_category_id: text(formData, "category_id"), p_name: name,
       p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on",
-      p_cost_cents: pesosToCents(rawCost),
-      p_profit_markup_bps: percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n)
+      // exactOptionalPropertyTypes rejects an explicit `undefined` value for an optional key, so a
+      // raw material with no pricing omits these keys entirely rather than setting them to undefined.
+      ...(rawCost ? { p_cost_cents: pesosToCents(rawCost) } : {}),
+      ...(rawProfit ? { p_profit_markup_bps: percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n) } : {})
     });
+    await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: role });
     revalidatePath("/admin/products");
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/promotions");
@@ -456,15 +473,27 @@ export async function voidSettlementFormAction(_: SettlementFormState, formData:
 
 export interface ProductionBatchFormState { error?: string; batchId?: string }
 
+function optionalUnitCount(formData: FormData): number | undefined {
+  const raw = text(formData, "input_unit_count");
+  return raw ? unitsToInteger(raw) : undefined;
+}
+
 export async function createProductionBatchFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
   try {
+    const inputUnitCount = optionalUnitCount(formData);
+    const description = text(formData, "description");
+    const notes = text(formData, "notes");
+    // No p_branch_id: the batch always lands in the organization's configured production branch
+    // (normally Central). Fran never picks a branch here — see SetProductionBranchForm for the
+    // one place that default is configured. exactOptionalPropertyTypes rejects an explicit
+    // `undefined` for an optional key, so these are omitted entirely when empty.
     const batchId = await rpcOrThrow("create_production_batch", {
-      p_branch_id: text(formData, "branch_id"),
       p_source_product_id: text(formData, "source_product_id"),
       p_input_weight_grams: kilogramsToGrams(text(formData, "input_weight_kg")),
       p_cost_per_kg_cents: pesosToCents(text(formData, "cost_per_kg")),
-      p_description: text(formData, "description") || null,
-      p_notes: text(formData, "notes") || null
+      ...(inputUnitCount !== undefined ? { p_input_unit_count: inputUnitCount } : {}),
+      ...(description ? { p_description: description } : {}),
+      ...(notes ? { p_notes: notes } : {})
     });
     revalidatePath("/admin/production");
     return { batchId };
@@ -476,13 +505,17 @@ export async function createProductionBatchFormAction(_: ProductionBatchFormStat
 export async function updateProductionBatchHeaderFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
   const batchId = text(formData, "batch_id");
   try {
+    const inputUnitCount = optionalUnitCount(formData);
+    const description = text(formData, "description");
+    const notes = text(formData, "notes");
     await rpcOrThrow("update_production_batch_header", {
       p_batch_id: batchId,
       p_source_product_id: text(formData, "source_product_id"),
       p_input_weight_grams: kilogramsToGrams(text(formData, "input_weight_kg")),
       p_cost_per_kg_cents: pesosToCents(text(formData, "cost_per_kg")),
-      p_description: text(formData, "description") || null,
-      p_notes: text(formData, "notes") || null
+      ...(inputUnitCount !== undefined ? { p_input_unit_count: inputUnitCount } : {}),
+      ...(description ? { p_description: description } : {}),
+      ...(notes ? { p_notes: notes } : {})
     });
     revalidatePath("/admin/production");
     return { batchId };
@@ -524,5 +557,51 @@ export async function completeProductionBatchFormAction(_: ProductionBatchFormSt
     return { batchId };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo finalizar el desposte", batchId };
+  }
+}
+
+export async function deleteProductionBatchAction(formData: FormData) {
+  await rpcOrThrow("delete_production_batch", { p_batch_id: text(formData, "batch_id") });
+  revalidatePath("/admin/production");
+  redirect("/admin/production");
+}
+
+export interface ProductionBranchFormState { error?: string; successToken?: string }
+
+export async function setProductionBranchFormAction(_: ProductionBranchFormState, formData: FormData): Promise<ProductionBranchFormState> {
+  try {
+    await rpcOrThrow("set_production_branch", { p_branch_id: text(formData, "branch_id") });
+    revalidatePath("/admin/production");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar la sucursal de producción" };
+  }
+}
+
+export interface StockTransferFormState { error?: string; transferId?: string }
+
+export async function createStockTransferFormAction(_: StockTransferFormState, formData: FormData): Promise<StockTransferFormState> {
+  try {
+    const productIds = formData.getAll("product_id").map(String);
+    const quantities = formData.getAll("quantity_kg").map(String);
+    const items = productIds
+      .map((productId, index) => ({ productId, quantityRaw: quantities[index] ?? "" }))
+      .filter((row) => row.productId)
+      .map((row) => ({ product_id: row.productId, quantity_grams: kilogramsToGrams(row.quantityRaw) }));
+    if (!items.length) throw new Error("Agregá al menos un producto para transferir");
+    const notes = text(formData, "notes");
+
+    const transferId = await rpcOrThrow("create_stock_transfer", {
+      p_source_branch_id: text(formData, "source_branch_id"),
+      p_destination_branch_id: text(formData, "destination_branch_id"),
+      p_items: items,
+      ...(notes ? { p_notes: notes } : {})
+    });
+    revalidatePath("/admin/transfers");
+    revalidatePath("/admin/stock");
+    revalidatePath("/admin/branch-stock");
+    return { transferId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo registrar la transferencia" };
   }
 }

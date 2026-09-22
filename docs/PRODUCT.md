@@ -103,7 +103,8 @@ Principios:
 - stock y reposición;
 - rendiciones;
 - rentabilidad;
-- Desposte/Producción: transformar un insumo comprado por peso en productos de catálogo más merma, con costo asignado por valor relativo de venta y rentabilidad proyectada (información administrativa, no expuesta en el POS; ver D-031 y `docs/DOMAIN_RULES.md`);
+- Desposte/Producción: transformar un insumo comprado por peso en productos de catálogo más merma, con costo asignado por valor relativo de venta y rentabilidad proyectada (información administrativa, no expuesta en el POS; ver D-031 y `docs/DOMAIN_RULES.md`), usando materias primas diferenciadas de productos de venta (`inventory_role`) y una sucursal habitual de producción configurable (normalmente Central);
+- Distribución: transferir stock ya producido entre sucursales de la misma organización, atómico y con historial (ver D-034);
 - personal y dispositivos;
 - configuración;
 - auditoría.

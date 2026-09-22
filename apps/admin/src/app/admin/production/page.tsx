@@ -4,8 +4,10 @@ import Link from "next/link";
 import { AddProductionBatchOutputForm } from "../../../components/add-production-batch-output-form";
 import { CancelProductionBatchButton } from "../../../components/cancel-production-batch-button";
 import { CreateProductionBatchForm } from "../../../components/create-production-batch-form";
+import { DeleteProductionBatchButton } from "../../../components/delete-production-batch-button";
 import { EditProductionBatchHeaderForm } from "../../../components/edit-production-batch-header-form";
 import { FinalizeProductionBatchButton } from "../../../components/finalize-production-batch-button";
+import { SetProductionBranchForm } from "../../../components/set-production-branch-form";
 import { requireAdminContext } from "../../../lib/admin";
 import { createPerfLogger } from "../../../lib/perf";
 import {
@@ -52,14 +54,19 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const statusFilter = value("status") as ProductionBatchStatus | "";
 
   const supabase = await createClient();
-  const [batchesResult, branchesResult, productsResult] = await Promise.all([
-    perf.measure("batches", supabase.rpc("list_production_batches", { p_branch_id: null, p_status: statusFilter || null, p_limit: 50 })),
+  const [batchesResult, branchesResult, productsResult, settingsResult] = await Promise.all([
+    perf.measure("batches", supabase.rpc("list_production_batches", { p_limit: 50, ...(statusFilter ? { p_status: statusFilter } : {}) })),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
-    perf.measure("products", supabase.from("products").select("id, name, sku").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name"))
+    perf.measure("products", supabase.from("products").select("id, name, sku, inventory_role").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name")),
+    perf.measure("productionBranch", supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).single())
   ]);
   const batches = jsonArray<ProductionBatchListItem>(batchesResult.data);
   const branches = branchesResult.data ?? [];
   const products = productsResult.data ?? [];
+  const productionBranchId = settingsResult.data?.production_branch_id ?? null;
+  const productionBranch = branches.find((branch) => branch.id === productionBranchId) ?? null;
+  const sourceProducts = products.filter((product) => product.inventory_role === "RAW_MATERIAL" || product.inventory_role === "BOTH");
+  const sellableProducts = products.filter((product) => product.inventory_role === "SELLABLE" || product.inventory_role === "BOTH");
 
   const detailResult = batchId
     ? await perf.measure("detail", supabase.rpc("get_production_batch_detail", { p_batch_id: batchId }))
@@ -71,10 +78,16 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
     : { data: null, error: null };
   const yieldSummary = yieldSummaryResult.data as unknown as ProductionYieldSummary | null;
 
-  const error = batchesResult.error ?? branchesResult.error ?? productsResult.error ?? detailResult.error;
+  const error = batchesResult.error ?? branchesResult.error ?? productsResult.error ?? settingsResult.error ?? detailResult.error;
   perf.flush();
 
-  const outputProducts = detail ? products.filter((product) => product.id !== detail.batch.sourceProductId) : products;
+  // The dropdown for an existing batch must always include its current source/outputs even if
+  // their inventory_role was changed after the batch was created, so an old batch never renders
+  // with a selector that silently drops its own current value.
+  const editSourceProducts = detail && !sourceProducts.some((product) => product.id === detail.batch.sourceProductId)
+    ? [...sourceProducts, { id: detail.batch.sourceProductId, name: detail.batch.sourceProductName, sku: null, inventory_role: "RAW_MATERIAL" as const }]
+    : sourceProducts;
+  const outputProducts = (detail ? sellableProducts.filter((product) => product.id !== detail.batch.sourceProductId) : sellableProducts);
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Producción</p>
@@ -82,6 +95,12 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
     <p className="mt-2 text-stone-600">Transformar un insumo comprado por peso en productos del catálogo, con costo asignado por valor relativo de venta y rentabilidad proyectada.</p>
     {error ? <p className="mt-5 rounded-xl bg-red-50 p-4 text-red-800">No se pudo cargar Desposte: {error.message}</p> : null}
     {batchId && !detail && !error ? <p className="mt-5 rounded-xl bg-amber-50 p-4 text-amber-900">El desposte solicitado no existe o no pertenece a tu organización. <Link className="font-bold underline" href="/admin/production">Volver al listado</Link></p> : null}
+
+    <details className="mt-5 rounded-xl bg-white p-4 shadow-sm" open={!productionBranch}>
+      <summary className="cursor-pointer text-sm font-bold text-stone-700">Sucursal habitual de producción{productionBranch ? `: ${productionBranch.name}` : ""}</summary>
+      {!productionBranch ? <p className="mt-3 text-sm text-stone-600">Todavía no configuraste una sucursal habitual de producción. Ahí es donde el desposte va a generar stock por defecto, sin preguntar cada vez (normalmente donde llegan las materias primas, como Central). Elegí una sucursal y guardá para poder crear despostes.</p> : null}
+      <SetProductionBranchForm branches={branches} currentBranchId={productionBranchId} />
+    </details>
 
     {!batchId && !isNew ? <section className="mt-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -92,7 +111,7 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
             key={filter.value || "all"}
           >{filter.label}</Link>)}
         </div>
-        <Link className="rounded-lg bg-rose-800 px-4 py-2 font-bold text-white hover:bg-rose-700" href="/admin/production?new=1">+ Nuevo desposte</Link>
+        {productionBranch ? <Link className="rounded-lg bg-rose-800 px-4 py-2 font-bold text-white hover:bg-rose-700" href="/admin/production?new=1">+ Nuevo desposte</Link> : null}
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
@@ -127,7 +146,9 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
     {isNew ? <section className="mt-6">
       <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/production">← Volver al listado</Link>
       <h2 className="mt-2 text-2xl font-black">Nuevo desposte</h2>
-      <CreateProductionBatchForm branches={branches} products={products} />
+      {productionBranch
+        ? <CreateProductionBatchForm productionBranchName={productionBranch.name} products={sourceProducts} />
+        : <p className="mt-4 rounded-xl bg-amber-50 p-4 text-amber-900">Configurá primero una sucursal habitual de producción (arriba) para poder crear un desposte.</p>}
     </section> : null}
 
     {detail ? <section className="mt-6">
@@ -145,12 +166,13 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
           <section className="rounded-2xl border bg-white p-5 shadow-sm">
             <h3 className="font-black">Datos de entrada</h3>
             {detail.batch.status === "DRAFT" ? (
-              <EditProductionBatchHeaderForm batch={detail.batch} products={products} />
+              <EditProductionBatchHeaderForm batch={detail.batch} products={editSourceProducts} />
             ) : (
               <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
                 <div><dt className="text-stone-500">Insumo</dt><dd className="font-bold">{detail.batch.sourceProductName}</dd></div>
                 <div><dt className="text-stone-500">Descripción</dt><dd className="font-bold">{detail.batch.description ?? "—"}</dd></div>
                 <div><dt className="text-stone-500">Peso de entrada</dt><dd className="font-bold">{formatWeight(detail.batch.inputWeightGrams)}</dd></div>
+                <div><dt className="text-stone-500">Cantidad de unidades</dt><dd className="font-bold">{detail.batch.inputUnitCount ?? "—"}</dd></div>
                 <div><dt className="text-stone-500">Costo/kg</dt><dd className="font-bold">{formatCurrency(BigInt(detail.batch.costPerKgCents))}</dd></div>
                 <div><dt className="text-stone-500">Notas</dt><dd className="font-bold">{detail.batch.notes ?? "—"}</dd></div>
               </dl>
@@ -226,9 +248,16 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
 
           {detail.batch.status === "DRAFT" ? <section className="rounded-2xl border bg-white p-5 shadow-sm">
             <FinalizeProductionBatchButton batchId={detail.batch.id} disabled={!detail.summary.canFinalize} />
-            <div className="mt-3"><CancelProductionBatchButton batchId={detail.batch.id} /></div>
+            <div className="mt-3 flex items-center justify-between"><CancelProductionBatchButton batchId={detail.batch.id} /><DeleteProductionBatchButton batchId={detail.batch.id} /></div>
           </section> : null}
-          {detail.batch.status === "COMPLETED" ? <p className="rounded-2xl border bg-white p-5 text-sm text-stone-500 shadow-sm">Finalizado el {dateTime(detail.batch.completedAt ?? detail.batch.createdAt, context.timezone)} por {detail.batch.completedByName ?? "—"}.</p> : null}
+          {detail.batch.status === "COMPLETED" ? <section className="rounded-2xl border bg-white p-5 shadow-sm">
+            <p className="text-sm text-stone-500">Finalizado el {dateTime(detail.batch.completedAt ?? detail.batch.createdAt, context.timezone)} por {detail.batch.completedByName ?? "—"}.</p>
+            <p className="mt-2 font-bold">{formatWeight(detail.summary.producedWeightGrams)} incorporados al stock de {detail.batch.branchName}.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white hover:bg-rose-700" href={`/admin/transfers?fromBatch=${detail.batch.id}`}>Distribuir ahora</Link>
+              <Link className="rounded-lg border px-4 py-2 text-sm font-bold text-stone-600 hover:bg-stone-50" href="/admin/production">Terminar</Link>
+            </div>
+          </section> : null}
           {detail.batch.status === "CANCELLED" ? <p className="rounded-2xl border bg-white p-5 text-sm text-stone-500 shadow-sm">Cancelado el {dateTime(detail.batch.cancelledAt ?? detail.batch.createdAt, context.timezone)} por {detail.batch.cancelledByName ?? "—"}.</p> : null}
         </div>
       </div>

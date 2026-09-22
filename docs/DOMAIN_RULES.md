@@ -203,6 +203,33 @@ Un `production_batch` transforma un insumo de origen (peso, gramos enteros) en m
 
 Igual que WASTE/ADJUSTMENT_NEGATIVE, el stock resultante puede quedar negativo; no se clampea.
 
+### Materia prima vs producto de venta
+
+Un producto puede ser `RAW_MATERIAL` (sólo insumo de desposte), `SELLABLE` (sólo catálogo/POS, valor por defecto de todo producto existente) o `BOTH`.
+
+- El selector de insumo de un desposte sólo ofrece productos `RAW_MATERIAL`/`BOTH`, activos y por peso.
+- El selector de outputs de un desposte sólo ofrece productos `SELLABLE`/`BOTH`, activos y por peso.
+- Un producto `RAW_MATERIAL` puro no necesita costo/margen de venta configurado (no se forma un precio de lista para algo que no se vende directo); su costo se registra en cada desposte donde se usa como insumo.
+- Cambiar el rol de un producto no reescribe despostes ya creados: los outputs ya guardados de un lote en borrador no se invalidan retroactivamente si el rol del producto cambia después.
+
+### Sucursal habitual de producción
+
+`organizations.production_branch_id` es la sucursal donde un desposte genera stock por defecto cuando no se indica una explícitamente (normalmente Central, donde llegan las materias primas). No existe una sucursal ficticia "Depósito"; Central sigue siendo una sucursal comercial real (ver D-011 y D-033). Si no hay sucursal productiva configurada, crear un desposte sin indicar sucursal se bloquea con un mensaje claro; no se asume ninguna por defecto.
+
+### Distribución / transferencias entre sucursales
+
+Una transferencia mueve stock ya existente de una sucursal origen a una sucursal destino, dentro de la misma organización. No es lo mismo que un desposte: un desposte transforma insumo en productos; una transferencia sólo mueve stock ya producido. No se combinan en una sola operación: primero todo el resultado de un desposte queda en la sucursal productiva, después se distribuye.
+
+- Reutiliza el ledger existente `stock_movements` con los tipos `TRANSFER_OUT` (negativo, origen) y `TRANSFER_IN` (positivo, destino), ya definidos en el enum desde el sprint de ventas pero sin usar hasta ahora. No se crea un segundo modelo de inventario.
+- Alcance de este sprint: sólo productos `WEIGHT`. No mezclar kg y unidades en una misma transferencia (ver "Unidades y precisión").
+- Origen y destino deben ser sucursales distintas de la misma organización.
+- Un mismo producto no puede repetirse en los ítems de una misma transferencia.
+- Debe validarse que la sucursal de origen tenga stock suficiente para cada ítem antes de aplicar la transferencia; la validación crítica vive en el servidor (RPC), no sólo en la UI.
+- Es atómica: si cualquier ítem falla (stock insuficiente, producto inválido), no se aplica ningún movimiento de esa transferencia. La atomicidad la da que toda la operación corre dentro de una única función de base de datos (una excepción revierte la transacción completa), no una lógica de compensación manual en la aplicación.
+- El stock global de un producto se conserva siempre: lo que baja en origen sube exactamente igual en destino.
+- Queda historial suficiente para auditar: organización, sucursal origen, sucursal destino, fecha, usuario, productos, cantidades, notas opcionales. No se modela todavía una recepción en dos etapas (confirmar llegada en destino); la transferencia queda aplicada de forma inmediata y atómica.
+- Es una operación administrativa: mismos permisos que Desposte (`stock.write`/`stock.read`, ya existentes), nunca otorgados al rol `employee`.
+
 ## Control horario
 
 - el empleado marca entrada/salida;

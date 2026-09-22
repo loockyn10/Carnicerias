@@ -41,24 +41,66 @@ Pendiente:
 - Confirmar `cargo check`/build contra `i686-unknown-linux-gnu` con el
   crate `serialport` agregado (requiere Docker o GitHub Actions).
 
-## P1 — Validar Desposte / Producción contra Postgres real
+## P1 — Validar Desposte / Producción / materias primas / Distribución contra Postgres real
 
-Implementado en el sprint 2026-09-22 (ver `docs/CURRENT_STATE.md`): tablas,
+Implementado en los sprints 2026-09-22 (ver `docs/CURRENT_STATE.md`): tablas,
 RLS, RPCs, integración con `stock_movements`, cálculos de dominio, UI en
-Admin (`/admin/production`, no en el POS — ver D-031) y tests (Vitest +
-pgTAP) escritos y revisados manualmente. Docker Desktop no llegó a estar
-operativo en ninguna sesión de este sprint.
+Admin (`/admin/production`, `/admin/transfers`, no en el POS — ver D-031) y
+tests (Vitest + pgTAP) escritos y revisados manualmente. Docker Desktop no
+llegó a estar operativo en ninguna sesión hasta ahora.
 
 Pendiente:
 
-- Ejecutar `pnpm db:reset && pnpm db:test` (68 aserciones en
-  `supabase/tests/production_batches.test.sql`) en un entorno con
-  Docker/CI Linux funcional.
+- Ejecutar `pnpm db:reset && pnpm db:test` (`supabase/tests/production_batches.test.sql`,
+  103 aserciones; `supabase/tests/stock_transfers.test.sql`, 49 aserciones) en un
+  entorno con Docker/CI Linux funcional.
 - Regenerar `packages/database/src/database.types.ts` con `pnpm db:types`
-  (se editó a mano en esta sesión) y confirmar que coincide con el schema real.
-- Smoke manual en Admin (`/admin/production`): crear un desposte, agregar/quitar
-  outputs, finalizar, verificar listado e historial, y confirmar que el rol
-  `employee` no puede acceder.
+  (se editó a mano en varias sesiones) y confirmar que coincide con el schema real.
+- Confirmar con `supabase migration list --linked` si 024–027 llegaron a
+  aplicarse al remoto antes de asumir que están pendientes.
+- Smoke manual en Admin: crear un desposte con varias medias res
+  (`input_unit_count`), agregar/quitar outputs, editar y eliminar un
+  borrador, finalizar, configurar la sucursal productiva desde cero (caso
+  "no configurada todavía"), marcar un producto como materia prima desde
+  `/admin/products` y confirmar que aparece/desaparece de los selectores
+  correspondientes, y hacer una transferencia real Central → otra sucursal
+  desde `/admin/transfers` (incluida "Distribuir ahora" desde un desposte
+  recién finalizado). Confirmar que el rol `employee` no puede acceder a
+  ninguna de las dos pantallas.
+
+## P1 — `exactOptionalPropertyTypes` rompe `pnpm typecheck`/`pnpm build` de `@carnicerias/admin`
+
+Descubierto el 2026-09-22 al normalizar la codificación de
+`packages/database/src/database.types.ts` (estaba guardado en UTF-16LE en el
+árbol de trabajo, probablemente por una redirección de PowerShell de una
+sesión anterior; se convirtió a UTF-8 para poder editarlo con confianza, sin
+cambiar su contenido). `tsconfig.base.json` tiene `exactOptionalPropertyTypes: true`
+desde el commit inicial del repositorio (confirmado con `git log`); no es un
+flag nuevo. El problema es preexistente, no introducido por el sprint de
+materias primas/Distribución: varios RPC pasan `null` explícito a
+argumentos opcionales tipados sin `| null`, lo que esa opción rechaza.
+
+Afectados (confirmado con `pnpm --filter @carnicerias/admin typecheck` y
+`build`, ninguno tocado por el sprint de materias primas/Distribución):
+`saveCategoryAction`, `saveProductAction` (sin ningún caller en la UI),
+`setPriceAction`, `recordPurchaseAction`, `recordReplenishmentFormAction`,
+`recordWasteAction`, `recordAdjustmentAction`, `manageMemberAction`,
+`createPosEmployeeAction`/`updatePosEmployeeAction` en
+`apps/admin/src/app/admin/actions.ts`, y las páginas `/admin/analytics`,
+`/admin/employees`, `/admin/settlements`, `/admin/timekeeping`.
+
+No corregir en bloque: al menos `setPriceAction` usa `p_price_cents: null`
+con un significado propio ("cerrar el precio sin fijar uno nuevo") distinto
+de omitir el argumento, así que una corrección mecánica global sería
+insegura. Cada sitio necesita revisión puntual de qué espera su RPC. El
+código del sprint de materias primas/Distribución no tiene este problema
+(usa omisión condicional de claves, verificado con `pnpm --filter
+@carnicerias/admin typecheck`/`lint` limpios en los archivos que agrega o
+modifica).
+
+Pendiente: revisar cada sitio listado arriba contra su RPC/función real y
+decidir, caso por caso, si el valor correcto es omitir la clave o ampliar el
+tipo del argumento para aceptar `null` explícitamente.
 
 ## P2/P3 — Capacidades opcionales según negocio
 

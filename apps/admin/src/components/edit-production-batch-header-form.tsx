@@ -12,6 +12,7 @@ export function EditProductionBatchHeaderForm({ batch, products }: {
     sourceProductId: string;
     description: string | null;
     inputWeightGrams: number;
+    inputUnitCount: number | null;
     costPerKgCents: number;
     notes: string | null;
   };
@@ -22,7 +23,7 @@ export function EditProductionBatchHeaderForm({ batch, products }: {
   return <form
     action={action}
     className="mt-4 grid gap-3"
-    key={`${batch.sourceProductId}-${String(batch.inputWeightGrams)}-${String(batch.costPerKgCents)}-${batch.description ?? ""}-${batch.notes ?? ""}`}
+    key={`${batch.sourceProductId}-${String(batch.inputWeightGrams)}-${String(batch.inputUnitCount)}-${String(batch.costPerKgCents)}-${batch.description ?? ""}-${batch.notes ?? ""}`}
   >
     <input name="batch_id" type="hidden" value={batch.id} />
     <div className="grid gap-3 sm:grid-cols-2">
@@ -35,9 +36,12 @@ export function EditProductionBatchHeaderForm({ batch, products }: {
         <input className={input} defaultValue={batch.description ?? ""} maxLength={200} name="description" />
       </label>
     </div>
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className="grid gap-1 text-sm font-bold">Peso de entrada (kg)
+    <div className="grid gap-3 sm:grid-cols-3">
+      <label className="grid gap-1 text-sm font-bold">Peso de entrada total (kg)
         <input className={input} defaultValue={batch.inputWeightGrams / 1_000} min="0.001" name="input_weight_kg" required step="0.001" type="number" />
+      </label>
+      <label className="grid gap-1 text-sm font-bold">Cantidad de unidades (opcional)
+        <input className={input} defaultValue={batch.inputUnitCount ?? ""} min="1" name="input_unit_count" step="1" type="number" />
       </label>
       <label className="grid gap-1 text-sm font-bold">Costo de compra por kg
         <input className={input} defaultValue={(batch.costPerKgCents / 100).toString()} inputMode="decimal" name="cost_per_kg" required />

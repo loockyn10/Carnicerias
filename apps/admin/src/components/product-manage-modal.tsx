@@ -10,7 +10,7 @@ import { ProductPricingFields } from "./product-pricing-fields";
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
 interface ProductManageModalProps {
-  product: { id: string; categoryId: string | null; name: string; slug: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean };
+  product: { id: string; categoryId: string | null; name: string; slug: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean; inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH" };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
   categories: { id: string; name: string }[];
@@ -57,6 +57,13 @@ export function ProductManageModal({ product, price, promotion, categories, pric
           <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} defaultValue={product.name} name="name" required /></label>
           <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} defaultValue={product.categoryId ?? ""} name="category_id" required>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label></div>
           <ProductPricingFields cashDiscountBps={cashDiscountBps} costCents={pricing?.costCents ?? null} currentPriceCents={price?.cents ?? null} profitMarkupBps={pricing?.profitMarkupBps ?? null} unitType={product.unitType} />
+          <div className="rounded-lg bg-stone-50 p-3">
+            <p className="text-sm font-bold">Se usa como</p>
+            <div className="mt-2 flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-2"><input defaultChecked={product.inventoryRole === "SELLABLE" || product.inventoryRole === "BOTH"} name="is_sellable" type="checkbox" /> Producto de venta</label>
+              <label className="flex items-center gap-2"><input defaultChecked={product.inventoryRole === "RAW_MATERIAL" || product.inventoryRole === "BOTH"} name="is_raw_material" type="checkbox" /> Materia prima (insumo de desposte)</label>
+            </div>
+          </div>
           <div className="rounded-lg bg-stone-50 p-3"><p className="text-sm font-bold">Promoción</p><p className="mt-1 text-sm text-stone-600">{promotion?.label ?? "Sin promoción activa"}</p><Link className="mt-2 inline-block text-sm font-bold text-rose-800 hover:underline" href={promotionHref}>{promotion ? "Editar promoción" : "Crear promoción"}</Link></div>
           <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" ref={activeRef} type="checkbox" /> Producto activo</label>
           {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}

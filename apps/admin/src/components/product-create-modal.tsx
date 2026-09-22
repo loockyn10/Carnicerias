@@ -9,7 +9,10 @@ const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 export function ProductCreateModal({ categories, cashDiscountBps }: { categories: { id: string; name: string }[]; cashDiscountBps: number }) {
   const [open, setOpen] = useState(false);
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
+  const [isSellable, setIsSellable] = useState(true);
+  const [isRawMaterial, setIsRawMaterial] = useState(false);
   const [state, action, pending] = useActionState(createProductModalAction, {} as ProductModalState);
+  const requiresPricing = isSellable || !isRawMaterial;
   useEffect(() => { if (state.success) setOpen(false); }, [state.success]);
   return <>
     <button className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" onClick={() => setOpen(true)} type="button">+ Nuevo producto</button>
@@ -19,7 +22,14 @@ export function ProductCreateModal({ categories, cashDiscountBps }: { categories
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
         <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} name="category_id" required><option value="">Seleccionar</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
         <label className="grid gap-1 text-sm font-medium">Unidad<select className={input} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}><option value="WEIGHT">Peso</option><option value="UNIT">Unidad</option></select></label>
-        <ProductPricingFields cashDiscountBps={cashDiscountBps} costCents={null} currentPriceCents={null} profitMarkupBps={null} required unitType={unitType} />
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-sm font-bold">Se usa como</p>
+          <div className="mt-2 flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2"><input checked={isSellable} name="is_sellable" onChange={(event) => setIsSellable(event.target.checked)} type="checkbox" /> Producto de venta</label>
+            <label className="flex items-center gap-2"><input checked={isRawMaterial} name="is_raw_material" onChange={(event) => setIsRawMaterial(event.target.checked)} type="checkbox" /> Materia prima (insumo de desposte)</label>
+          </div>
+        </div>
+        {requiresPricing ? <ProductPricingFields cashDiscountBps={cashDiscountBps} costCents={null} currentPriceCents={null} profitMarkupBps={null} required unitType={unitType} /> : <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-600">Una materia prima no necesita precio de venta: su costo se registra en cada desposte.</p>}
         <input name="slug" type="hidden" value="" /><label className="flex items-center gap-2 text-sm"><input defaultChecked name="active" type="checkbox" /> Producto activo</label>
         {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}
         <div className="mt-2 flex justify-end gap-2"><button className="rounded-lg px-4 py-2 text-sm font-bold text-stone-600" onClick={() => setOpen(false)} type="button">Cancelar</button><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Creando…" : "Crear producto"}</button></div>

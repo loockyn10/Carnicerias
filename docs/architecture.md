@@ -94,6 +94,12 @@ Al finalizar un lote (`DRAFT → COMPLETED`, irreversible salvo una futura rever
 
 La UI vive enteramente en Admin (`/admin/production`, patrón Server Component + Server Actions en `apps/admin/src/app/admin/actions.ts`, igual que rendiciones/stock), no en el POS: es información administrativa (costo, costo asignado, márgenes), no operativa de mostrador (ver D-031). Los permisos `production.read`/`production.write` son exclusivos del rol `admin`.
 
+### Materias primas, sucursal productiva y Distribución
+
+`products.inventory_role` (`RAW_MATERIAL` | `SELLABLE` | `BOTH`, default `SELLABLE`) distingue qué productos puede ofrecer el selector de insumo de un desposte de los que puede ofrecer el selector de outputs, sin un catálogo paralelo. `organizations.production_branch_id` (mismo patrón que `replenishment_target_days`: columna simple, leída directo por el cliente, escrita por una RPC dedicada, `set_production_branch`) es la sucursal donde un desposte genera stock cuando no se indica una explícitamente; normalmente Central, que sigue siendo una sucursal comercial real, no una ficticia (ver D-011, D-033). `create_production_batch`/`update_production_batch_header` ganaron parámetros (`p_branch_id` ahora opcional, `p_input_unit_count`); como Postgres identifica una función por su firma de tipos, agregar parámetros a mitad de la lista no es compatible con `CREATE OR REPLACE FUNCTION`, así que la migración `202609220026` hace `DROP FUNCTION` de las versiones anteriores y las recrea.
+
+Distribución (`stock_transfers`/`stock_transfer_items`, migración `202609220027`) mueve stock ya producido entre sucursales de la misma organización, típicamente desde Central después de un desposte. Reutiliza `stock_movements` con `TRANSFER_OUT`/`TRANSFER_IN` — tipos que existen en el enum desde `202609100003` pero no se habían usado — sin crear un segundo modelo de inventario. `create_stock_transfer` es una única función `plpgsql`: cualquier excepción (stock insuficiente, producto inválido, sucursales iguales) revierte todo lo que esa llamada ya insertó, dándole atomicidad real de base de datos sin lógica de compensación en la aplicación. La validación de stock suficiente toma el mismo lock consultivo por `(sucursal, producto)` que usa `record_stock_operation`, antes de leer el stock disponible, para ser segura ante escrituras concurrentes. Alcance de este sprint: sólo productos `WEIGHT`, sin confirmación de recepción en dos etapas. Mismos permisos que Desposte (`stock.write`/`stock.read`), nunca otorgados a `employee`. UI en `/admin/transfers`, con un enlace "Distribuir ahora" desde un desposte `COMPLETED` que precompleta origen y líneas con sus outputs.
+
 ## Stock, reposición, rendiciones y analítica
 
 - `stock_movements` es la fuente de verdad del stock teórico.
@@ -107,7 +113,7 @@ La UI vive enteramente en Admin (`/admin/production`, patrón Server Component +
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–022 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–027 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
 
 ## PWA y balanza
 
