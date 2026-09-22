@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { createStockTransferFormAction, type StockTransferFormState } from "../app/admin/actions";
@@ -19,7 +18,6 @@ export function TransferForm({ branches, products, initialSourceBranchId, initia
   initialSourceBranchId?: string | undefined;
   initialItems?: { productId: string; weightGrams: number }[] | undefined;
 }) {
-  const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, action, pending] = useActionState(createStockTransferFormAction, {} as StockTransferFormState);
   const [rows, setRows] = useState<Row[]>(() =>
@@ -32,9 +30,8 @@ export function TransferForm({ branches, products, initialSourceBranchId, initia
     if (state.transferId && !state.error) {
       formRef.current?.reset();
       setRows([newRow()]);
-      router.refresh();
     }
-  }, [router, state.error, state.transferId]);
+  }, [state.error, state.transferId]);
 
   const addRow = () => setRows((current) => [...current, newRow()]);
   const removeRow = (key: string) => setRows((current) => (current.length > 1 ? current.filter((row) => row.key !== key) : current));

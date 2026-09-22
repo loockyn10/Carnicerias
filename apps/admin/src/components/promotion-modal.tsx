@@ -56,7 +56,6 @@ export function PromotionModal({ trigger, initialOpen = false, initialProductId 
     if (!state.successToken) return;
     setOpen(false);
     router.replace("/admin/promotions");
-    router.refresh();
   }, [router, state.successToken]);
 
   const retire = () => {

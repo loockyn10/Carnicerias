@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { manageProductAction, type ProductManageState } from "../app/admin/actions";
@@ -19,7 +18,6 @@ interface ProductManageModalProps {
 }
 
 export function ProductManageModal({ product, price, promotion, categories, pricing, cashDiscountBps }: ProductManageModalProps) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -35,8 +33,7 @@ export function ProductManageModal({ product, price, promotion, categories, pric
   useEffect(() => {
     if (!state.successToken) return;
     setOpen(false);
-    router.refresh();
-  }, [router, state.successToken]);
+  }, [state.successToken]);
 
   const promotionHref = promotion ? `/admin/promotions?edit=${promotion.id}` : `/admin/promotions?create=1&product=${product.id}`;
 

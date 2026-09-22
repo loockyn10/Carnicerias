@@ -1,7 +1,6 @@
 "use client";
 
 import { formatWeight } from "@carnicerias/business-logic";
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useMemo, useState } from "react";
 
 import {
@@ -38,9 +37,7 @@ function groupedTotals(rows: ReplenishmentRow[]) {
 }
 
 function TargetCoverageForm({ targetDays }: { targetDays: number }) {
-  const router = useRouter();
   const [state, action, pending] = useActionState(setReplenishmentTargetDaysFormAction, {} as ReplenishmentFormState);
-  useEffect(() => { if (state.successToken) router.refresh(); }, [router, state.successToken]);
   return <form action={action} className="flex flex-wrap items-end gap-3 rounded-2xl border bg-white p-4 shadow-sm">
     <label className="grid gap-1 text-sm font-bold">Objetivo de cobertura
       <span className="flex items-center gap-2"><input className={`${input} w-24`} defaultValue={targetDays} max="30" min="0.01" name="target_days" required step="0.01" type="number" /> días</span>
@@ -52,13 +49,11 @@ function TargetCoverageForm({ targetDays }: { targetDays: number }) {
 }
 
 function RestockDialog({ row, onClose }: { row: ReplenishmentRow; onClose: () => void }) {
-  const router = useRouter();
   const [state, action, pending] = useActionState(recordReplenishmentFormAction, {} as ReplenishmentFormState);
   useEffect(() => {
     if (!state.successToken) return;
-    router.refresh();
     onClose();
-  }, [onClose, router, state.successToken]);
+  }, [onClose, state.successToken]);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", closeOnEscape);

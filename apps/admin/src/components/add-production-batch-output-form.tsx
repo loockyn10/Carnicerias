@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef } from "react";
 
 import { setProductionBatchOutputFormAction, type ProductionBatchFormState } from "../app/admin/actions";
@@ -8,16 +7,14 @@ import { setProductionBatchOutputFormAction, type ProductionBatchFormState } fro
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
 export function AddProductionBatchOutputForm({ batchId, products }: { batchId: string; products: { id: string; name: string }[] }) {
-  const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, action, pending] = useActionState(setProductionBatchOutputFormAction, {} as ProductionBatchFormState);
 
   useEffect(() => {
     if (state.batchId && !state.error) {
       formRef.current?.reset();
-      router.refresh();
     }
-  }, [router, state.batchId, state.error]);
+  }, [state.batchId, state.error]);
 
   return <form action={action} className="mt-3 flex flex-wrap items-end gap-3 rounded-xl border border-dashed border-stone-300 p-3" ref={formRef}>
     <input name="batch_id" type="hidden" value={batchId} />

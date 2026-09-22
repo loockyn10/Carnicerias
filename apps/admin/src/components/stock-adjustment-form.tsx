@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { recordAdjustmentFormAction, type StockAdjustmentState } from "../app/admin/actions";
@@ -8,7 +7,6 @@ import { recordAdjustmentFormAction, type StockAdjustmentState } from "../app/ad
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
 export function StockAdjustmentForm({ branches, products }: { branches: { id: string; name: string }[]; products: { id: string; name: string }[] }) {
-  const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const submittingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
@@ -19,9 +17,8 @@ export function StockAdjustmentForm({ branches, products }: { branches: { id: st
     setSubmitting(false);
     if (state.successToken) {
       formRef.current?.reset();
-      router.refresh();
     }
-  }, [router, state.error, state.successToken]);
+  }, [state.error, state.successToken]);
 
   return <form action={action} className="mt-4 grid gap-3" onSubmit={(event) => {
     if (submittingRef.current) {

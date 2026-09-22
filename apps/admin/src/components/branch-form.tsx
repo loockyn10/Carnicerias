@@ -16,9 +16,8 @@ export function BranchForm({ branch }: BranchFormProps) {
   const [state, action, pending] = useActionState(saveBranchFormAction, {} as BranchFormState);
 
   useEffect(() => {
-    if (!state.branchId || state.error) return;
-    if (branch) router.refresh();
-    else router.push(`/admin/branches/${state.branchId}`);
+    if (!state.branchId || state.error || branch) return;
+    router.push(`/admin/branches/${state.branchId}`);
   }, [branch, router, state.branchId, state.error]);
 
   return <form action={action} className="grid gap-4">

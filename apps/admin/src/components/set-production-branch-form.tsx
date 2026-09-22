@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useActionState, useEffect } from "react";
+import { useActionState } from "react";
 
 import { setProductionBranchFormAction, type ProductionBranchFormState } from "../app/admin/actions";
 
@@ -11,12 +10,7 @@ export function SetProductionBranchForm({ branches, currentBranchId }: {
   branches: { id: string; name: string }[];
   currentBranchId: string | null;
 }) {
-  const router = useRouter();
   const [state, action, pending] = useActionState(setProductionBranchFormAction, {} as ProductionBranchFormState);
-
-  useEffect(() => {
-    if (state.successToken) router.refresh();
-  }, [router, state.successToken]);
 
   return <form action={action} className="mt-3 flex flex-wrap items-end gap-3">
     <label className="grid gap-1 text-sm font-bold">Sucursal
