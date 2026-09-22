@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { SettlementConfirmationForm } from "../../../components/settlement-confirmation-form";
 import { VoidSettlementForm } from "../../../components/void-settlement-form";
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createPerfLogger } from "../../../lib/perf";
 import {
@@ -19,6 +20,11 @@ import { createClient } from "../../../lib/supabase/server";
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 const localDateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+const VENTAS_TABS = [
+  { label: "Historial", href: "/admin/sales" },
+  { label: "Rendiciones", href: "/admin/settlements" },
+  { label: "Rentabilidad", href: "/admin/analytics" }
+];
 
 function dateTime(iso: string, timeZone: string) {
   return new Date(iso).toLocaleString("es-AR", { timeZone, dateStyle: "short", timeStyle: "short" });
@@ -77,6 +83,7 @@ export default async function SettlementsPage({ searchParams }: { searchParams: 
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Control de caja</p><h1 className="mt-1 text-3xl font-black">Rendiciones</h1><p className="mt-2 text-stone-600">Cierres explícitos por sucursal con snapshot histórico.</p>
+    <SectionTabs tabs={VENTAS_TABS} />
     {error ? <p className="mt-5 rounded-xl bg-red-50 p-4 text-red-800">No se pudieron cargar las rendiciones: {error.message}</p> : null}
     {detailId && !selectedHistory && !error ? <p className="mt-5 rounded-xl bg-amber-50 p-4 text-amber-900">La rendición solicitada no existe o no pertenece a tu organización. <Link className="font-bold underline" href="/admin/settlements">Volver al historial</Link></p> : null}
 

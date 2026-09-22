@@ -4,7 +4,14 @@ import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
 import { createPerfLogger } from "../../../lib/perf";
 import { StockAdjustmentForm } from "../../../components/stock-adjustment-form";
+import { SectionTabs } from "../../../components/section-tabs";
 import { recordPurchaseAction, recordWasteAction, setStockPolicyAction } from "../actions";
+
+const STOCK_TABS = [
+  { label: "Operaciones", href: "/admin/stock" },
+  { label: "Por sucursal", href: "/admin/branch-stock" },
+  { label: "Reposición", href: "/admin/replenishment" }
+];
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 const reasonLabels: Record<string, string> = { DISCARD: "Descarte", EXPIRY: "Vencimiento", TRIMMING: "Recorte", DETERIORATION: "Deterioro", INVENTORY_DIFFERENCE: "Diferencia de inventario", OTHER: "Otro" };
@@ -32,7 +39,8 @@ export default async function StockPage() {
   perf.mark("transform", transformStartedAt); perf.flush();
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-10">
-    <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Inventario</p><h1 className="mt-1 text-3xl font-black">Operaciones de stock</h1><p className="mt-2 text-stone-600">El actual se deriva del ledger. Las compras, mermas y ajustes agregan movimientos auditados. Para comparar stock entre sucursales rápidamente, ver <a className="font-semibold text-rose-800 hover:underline" href="/admin/branch-stock">Stock por sucursal</a>.</p>
+    <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Inventario</p><h1 className="mt-1 text-3xl font-black">Operaciones de stock</h1><p className="mt-2 text-stone-600">El actual se deriva del ledger. Las compras, mermas y ajustes agregan movimientos auditados.</p>
+    <SectionTabs tabs={STOCK_TABS} />
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
     <section className="mt-7 overflow-hidden rounded-2xl border bg-white shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-stone-50"><tr><th className="p-3">Sucursal</th><th className="p-3">Producto</th><th className="p-3">Actual</th><th className="p-3">Mínimo</th><th className="p-3">Objetivo</th><th className="p-3">Sugerido</th><th className="p-3">Estado</th></tr></thead><tbody>{(stockResult.data ?? []).map((row) => <tr className="border-t" key={`${row.branch_id}-${row.product_id}`}><td className="p-3">{row.branch_name}</td><td className="p-3 font-bold">{row.product_name}</td><td className="p-3">{formatWeight(row.current_stock_grams)}</td><td className="p-3">{formatWeight(row.minimum_stock_grams)}</td><td className="p-3">{formatWeight(row.target_stock_grams)}</td><td className="p-3">{formatWeight(row.suggested_replenishment_grams)}</td><td className={`p-3 font-black ${row.stock_status === "CRITICAL" ? "text-red-700" : row.stock_status === "LOW" ? "text-amber-700" : "text-emerald-700"}`}>{row.stock_status === "CRITICAL" ? "CRÍTICO" : row.stock_status === "LOW" ? "BAJO" : "NORMAL"}</td></tr>)}</tbody></table></div></section>
 

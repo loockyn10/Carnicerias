@@ -13,12 +13,18 @@ import {
 } from "../../../lib/analytics";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
+import { SectionTabs } from "../../../components/section-tabs";
 
 const input = "min-w-0 rounded-lg border border-stone-300 bg-white px-3 py-2";
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const presets = new Set(["today", "7d", "30d", "custom"]);
 const sorts = new Set<AnalyticsSort>(["profit", "profitability", "revenue", "quantity", "unitProfit"]);
+const VENTAS_TABS = [
+  { label: "Historial", href: "/admin/sales" },
+  { label: "Rendiciones", href: "/admin/settlements" },
+  { label: "Rentabilidad", href: "/admin/analytics" }
+];
 
 function money(value: number | null, positive = false) {
   if (value === null) return "No disponible";
@@ -88,6 +94,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-8">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Análisis comercial</p><h1 className="mt-1 text-3xl font-black">Rentabilidad</h1><p className="mt-2 text-stone-600">Ganancia bruta basada exclusivamente en el costo histórico registrado en cada venta.</p>
+    <SectionTabs tabs={VENTAS_TABS} />
 
     <form className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-6">
       <select className={input} defaultValue={preset} name="period"><option value="today">Hoy</option><option value="7d">7 días</option><option value="30d">30 días</option><option value="custom">Personalizado</option></select>

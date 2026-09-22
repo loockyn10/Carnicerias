@@ -1,5 +1,6 @@
 import { formatCurrency } from "@carnicerias/business-logic";
 
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createPerfLogger } from "../../../lib/perf";
 import { toOrganizationLocalInput } from "../../../lib/settlements";
@@ -11,6 +12,11 @@ import {
   setHourlyRateAction,
   updatePosEmployeeAction
 } from "../actions";
+
+const EMPLEADOS_TABS = [
+  { label: "Empleados", href: "/admin/employees" },
+  { label: "Horas trabajadas", href: "/admin/timekeeping" }
+];
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
@@ -35,6 +41,7 @@ export default async function EmployeesPage() {
   return <main className="mx-auto max-w-7xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Personal</p>
     <h1 className="mt-1 text-3xl font-black">Empleados</h1>
+    <SectionTabs tabs={EMPLEADOS_TABS} />
     <p className="mt-2 max-w-3xl text-stone-600">Los operadores del POS son empleados internos: no necesitan email, contraseña ni una cuenta individual de Supabase Auth. La sucursal de trabajo la determina cada dispositivo.</p>
     {pageError ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{pageError.message}</p> : null}
 

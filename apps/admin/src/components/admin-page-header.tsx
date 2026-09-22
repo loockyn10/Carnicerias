@@ -12,6 +12,7 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/branch-stock": { title: "Stock por sucursal", description: "Buscar un producto y comparar stock entre sucursales." },
   "/admin/replenishment": { title: "Qué hay que reponer", description: "Consolidado para organizar compras y reposición." },
   "/admin/production": { title: "Desposte", description: "Transformar insumos comprados en productos de catálogo y registrar el rendimiento." },
+  "/admin/transfers": { title: "Distribución", description: "Mover stock ya producido entre sucursales." },
   "/admin/products": { title: "Productos", description: "Catálogo y precios vigentes." },
   "/admin/analytics": { title: "Rentabilidad", description: "Ganancia bruta comercial por producto y sucursal." },
   "/admin/promotions": { title: "Promociones", description: "Descuentos y reglas comerciales." },
@@ -20,6 +21,7 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/timekeeping": { title: "Horas trabajadas", description: "Fichajes, revisiones y pago estimado por horas." },
   "/admin/devices": { title: "Dispositivos POS", description: "Terminales autorizadas para operar." },
   "/admin/audit": { title: "Auditoría", description: "Trazabilidad de los últimos eventos." },
+  "/admin/settings": { title: "Configuración", description: "Dispositivos, avisos y auditoría." },
   "/admin/attention": { title: "Centro de atención", description: "Problemas y movimientos relevantes por prioridad." }
 };
 

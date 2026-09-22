@@ -1,8 +1,15 @@
 import { BranchStockMatrix, type BranchStockMatrixBranch } from "../../../components/branch-stock-matrix";
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { buildBranchStockRows, type BranchStockProductMeta } from "../../../lib/branch-stock";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
+
+const STOCK_TABS = [
+  { label: "Operaciones", href: "/admin/stock" },
+  { label: "Por sucursal", href: "/admin/branch-stock" },
+  { label: "Reposición", href: "/admin/replenishment" }
+];
 
 export default async function BranchStockPage() {
   const perf = createPerfLogger("/admin/branch-stock");
@@ -30,6 +37,7 @@ export default async function BranchStockPage() {
       <main className="mx-auto max-w-7xl p-5 sm:p-10">
         <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Multisucursal</p>
         <h1 className="mt-1 text-3xl font-black">Stock por sucursal</h1>
+        <SectionTabs tabs={STOCK_TABS} />
         <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">No se pudo cargar el stock: {error.message}</p>
       </main>
     );
@@ -70,6 +78,7 @@ export default async function BranchStockPage() {
     <main className="mx-auto max-w-7xl p-5 sm:p-10">
       <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Multisucursal</p>
       <h1 className="mt-1 text-3xl font-black">Stock por sucursal</h1>
+      <SectionTabs tabs={STOCK_TABS} />
       <p className="mt-2 text-stone-600">
         Buscá un producto y compará el stock conocido por el sistema en cada sucursal. Una sucursal con ventas
         offline todavía no sincronizadas puede mostrar stock desactualizado.

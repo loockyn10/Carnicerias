@@ -2,8 +2,15 @@ import Link from "next/link";
 
 import { PromotionModal, type PromotionValue } from "../../../components/promotion-modal";
 import { StatusBadge } from "../../../components/admin-ui";
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
+
+const PRODUCTOS_TABS = [
+  { label: "Productos", href: "/admin/products" },
+  { label: "Precios", href: "/admin/products?tab=pricing" },
+  { label: "Promociones", href: "/admin/promotions" }
+];
 
 interface Discount { id: string; product_id: string; branch_id: string | null; minimum_grams: number; discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discount_value: number; active: boolean; valid_from: string; valid_until: string | null }
 interface CommercialClient { from: (table: string) => { select: (columns: string) => { eq: (column: string, value: string) => { order: (column: string, options?: { ascending?: boolean }) => Promise<{ data: Discount[] | null; error: { message: string } | null }> } } } }
@@ -34,6 +41,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Promociones</p><h1 className="mt-1 text-3xl font-black tracking-tight">Promociones</h1><p className="mt-2 text-stone-600">Descuentos por peso vigentes y programados.</p></div><PromotionModal branches={branches} initialOpen={value("create") === "1"} initialProductId={value("product")} products={weightProducts} trigger="+ Nueva promoción" /></div>
+    <SectionTabs tabs={PRODUCTOS_TABS} />
     {editedDiscount ? <PromotionModal branches={branches} initialOpen products={weightProducts} promotion={promotionValue(editedDiscount)} /> : null}
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
     <section className="mt-7 divide-y rounded-xl bg-white shadow-sm">{discounts.map((discount) => <article className="flex flex-wrap items-center justify-between gap-4 p-4" key={discount.id}><div><h2 className="font-bold">{productNames.get(discount.product_id)}</h2><p className="mt-1 text-sm text-stone-600">{discount.discount_type === "PERCENTAGE" ? `${(discount.discount_value / 100).toLocaleString("es-AR")}%` : `$${(discount.discount_value / 100).toLocaleString("es-AR")}/kg`} desde {(discount.minimum_grams / 1000).toLocaleString("es-AR")} kg · {discount.branch_id ? branchNames.get(discount.branch_id) : "Todas las sucursales"}</p></div><div className="flex items-center gap-3"><StatusBadge tone={discount.active ? "success" : "neutral"}>{discount.active ? "Activa" : "Inactiva"}</StatusBadge><Link className="rounded-lg border px-3 py-2 text-sm font-bold" href={`/admin/promotions?edit=${discount.id}`}>Editar</Link></div></article>)}{!discounts.length ? <p className="p-8 text-center text-stone-500">Todavía no hay promociones.</p> : null}</section>

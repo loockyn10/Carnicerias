@@ -1,8 +1,14 @@
 import { formatCurrency } from "@carnicerias/business-logic";
 
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
 import { correctShiftAction, setHourlyRateAction, setMaxShiftHoursAction } from "../actions";
+
+const EMPLEADOS_TABS = [
+  { label: "Empleados", href: "/admin/employees" },
+  { label: "Horas trabajadas", href: "/admin/timekeeping" }
+];
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 interface Shift { id: string; employeeId: string; employeeName: string; branchId: string; branchName: string; clockInAt: string; clockOutAt: string | null; clockInSource: string; clockOutSource: string | null; status: string; durationSeconds: number; estimatedCents: number; rateComplete: boolean }
@@ -38,8 +44,11 @@ export default async function TimekeepingPage({ searchParams }: { searchParams: 
   const dateTime = (date: string) => new Date(date).toLocaleString("es-AR", { timeZone: context.timezone, dateStyle: "short", timeStyle: "short" });
 
   return <main className="mx-auto max-w-7xl p-5 sm:p-8">
-    {error ? <p className="rounded-xl bg-red-50 p-4 text-red-800">{error.message}</p> : null}
-    <form className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
+    <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Personal</p>
+    <h1 className="mt-1 text-3xl font-black">Horas trabajadas</h1>
+    <SectionTabs tabs={EMPLEADOS_TABS} />
+    {error ? <p className="mt-5 rounded-xl bg-red-50 p-4 text-red-800">{error.message}</p> : null}
+    <form className="mt-5 grid gap-3 rounded-2xl border bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
       <input className={input} defaultValue={from} name="from" type="date" /><input className={input} defaultValue={to} name="to" type="date" />
       <select className={input} defaultValue={employee ?? ""} name="employee"><option value="">Todos los empleados</option>{employeeMembers.map((member) => <option key={member.profile_id} value={member.profile_id}>{member.display_name}</option>)}</select>
       <select className={input} defaultValue={branch ?? ""} name="branch"><option value="">Todas las sucursales</option>{(branches ?? []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>

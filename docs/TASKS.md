@@ -26,6 +26,29 @@ Pendiente:
 - Agregar `loading.tsx` por ruta si después de la corrección de región alguna pantalla puntual sigue sintiéndose sin feedback (hoy sólo existe en `/admin` y el modal de sucursal).
 - Investigar los fallos preexistentes del suite pgTAP hallados al correrlo por primera vez (`internal_pos_employees`, `online_pos`, `operational_pilot`) — no relacionados con este sprint, task de seguimiento ya creada.
 
+## P1 — Smoke visual de la navegación Admin reorganizada (sidebar + tabs)
+
+Implementado 2026-09-22 (ver `docs/CURRENT_STATE.md`, "Navegación Admin (sidebar + tabs)"):
+sidebar consolidado a 9 entradas, tabs reusables en Ventas/Stock/Productos/Empleados,
+`/admin/settings`, detalle de sucursal sin la pestaña "Operación" (contenido real
+reubicado en Resumen/Stock). `pnpm typecheck`/`lint`/`test`/`build` OK.
+
+Pendiente (requiere credenciales de una cuenta admin real o Docker/CI Linux para
+levantar Supabase local — ninguno disponible en esta sesión, no se intentó adivinar
+credenciales):
+
+- Recorrer con sesión autenticada: sidebar, Inicio, Sucursales, detalle de sucursal
+  (Resumen con Editar datos/Estado, Stock con Mermas/Reingresos, Ventas), Ventas
+  con sus 3 tabs, Stock con sus 3 tabs, Productos con sus 3 tabs (incluida Precios
+  vía `?tab=pricing`), Empleados con sus 2 tabs, Configuración, y navegación a
+  Dispositivos/Avisos/Auditoría.
+- Confirmar que el sidebar marca el grupo correcto estando en una subruta (p. ej.
+  Rentabilidad → sidebar marca "Ventas"; Auditoría → sidebar marca "Configuración").
+- Confirmar que ningún link quedó roto y que las rutas existentes
+  (`/admin/settlements`, `/admin/analytics`, `/admin/branch-stock`,
+  `/admin/replenishment`, `/admin/promotions`, `/admin/timekeeping`,
+  `/admin/devices`, `/admin/announcements`, `/admin/audit`) siguen funcionando tal cual.
+
 ## P2 — PWA Admin
 
 - Manifest, iconos, installability y modo standalone.

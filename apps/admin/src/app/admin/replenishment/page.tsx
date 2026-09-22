@@ -1,8 +1,15 @@
 import { ReplenishmentDashboard } from "../../../components/replenishment-dashboard";
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createPerfLogger } from "../../../lib/perf";
 import { calculateReplenishment } from "../../../lib/replenishment";
 import { createClient } from "../../../lib/supabase/server";
+
+const STOCK_TABS = [
+  { label: "Operaciones", href: "/admin/stock" },
+  { label: "Por sucursal", href: "/admin/branch-stock" },
+  { label: "Reposición", href: "/admin/replenishment" }
+];
 
 export default async function ReplenishmentPage() {
   const perf = createPerfLogger("/admin/replenishment");
@@ -42,6 +49,7 @@ export default async function ReplenishmentPage() {
   return <main className="mx-auto max-w-7xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Operación diaria</p>
     <h1 className="mt-1 text-3xl font-black">Qué llevar hoy</h1>
+    <SectionTabs tabs={STOCK_TABS} />
     <p className="mt-2 text-stone-600">Prioridad calculada con stock teórico, objetivos configurados y ventas completadas de los últimos 7 días.</p>
     <ReplenishmentDashboard branches={branchesResult.data ?? []} rows={rows} targetDays={targetDays} />
   </main>;

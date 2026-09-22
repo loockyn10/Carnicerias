@@ -4,10 +4,17 @@ import { ProductCreateModal } from "../../../components/product-create-modal";
 import { ProductManageModal } from "../../../components/product-manage-modal";
 import { PricingSettingsModal } from "../../../components/pricing-settings-modal";
 import { StatusBadge } from "../../../components/admin-ui";
+import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
 import { createPerfLogger } from "../../../lib/perf";
 import { saveCategoryAction } from "../actions";
+
+const PRODUCTOS_TABS = [
+  { label: "Productos", href: "/admin/products" },
+  { label: "Precios", href: "/admin/products?tab=pricing" },
+  { label: "Promociones", href: "/admin/promotions" }
+];
 
 interface Discount { id: string; product_id: string; branch_id: string | null; minimum_grams: number; discount_type: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discount_value: number; active: boolean; valid_from: string; valid_until: string | null }
 interface CommercialClient { from: (table: string) => { select: (columns: string) => { eq: (column: string, value: string) => { order: (column: string, options?: { ascending?: boolean }) => Promise<{ data: Discount[] | null; error: { message: string } | null }> } } } }
@@ -24,6 +31,8 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const q = value("q").toLocaleLowerCase("es");
   const category = value("category");
   const status = value("status") || "active";
+  const pricingTabOpen = value("tab") === "pricing";
+  const activeTab = pricingTabOpen ? "/admin/products?tab=pricing" : "/admin/products";
   const supabase = await createClient();
   const commercial = supabase as unknown as CommercialClient;
   const [categoriesResult, productsResult, pricesResult, discountsResult, costsResult, pricingResult, cashResult] = await Promise.all([
@@ -60,7 +69,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const products = allProducts.filter((product) => (!q || product.name.toLocaleLowerCase("es").includes(q) || (product.sku ?? "").toLocaleLowerCase("es").includes(q)) && (!category || product.category_id === category) && (status === "all" || status === "active" && product.active || status === "inactive" && !product.active));
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><div className="flex gap-2"><PricingSettingsModal affectedProducts={pricingByProduct.size} cashDiscountBps={cashDiscountBps} skippedProducts={allProducts.filter((item)=>item.active&&!pricingByProduct.has(item.id)).length} /><ProductCreateModal cashDiscountBps={cashDiscountBps} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} /></div></div>
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal cashDiscountBps={cashDiscountBps} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} /></div>
+    <SectionTabs active={activeTab} tabs={PRODUCTOS_TABS} />
+    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Descuento por medio de pago elegible, usado para calcular el precio de lista de todos los productos.</p><div className="mt-4"><PricingSettingsModal affectedProducts={pricingByProduct.size} cashDiscountBps={cashDiscountBps} skippedProducts={allProducts.filter((item)=>item.active&&!pricingByProduct.has(item.id)).length} /></div></section> : null}
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
     <form className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-[1fr_12rem_10rem_auto]"><input className={input} defaultValue={value("q")} name="q" placeholder="Buscar producto o SKU…" /><select className={input} defaultValue={category} name="category"><option value="">Todas las categorías</option>{categories.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select className={input} defaultValue={status} name="status"><option value="active">Activos</option><option value="inactive">Inactivos</option><option value="all">Todos</option></select><button className="rounded-lg border border-stone-300 px-4 py-2 text-sm font-bold">Filtrar</button></form>
     <section className="mt-5 overflow-hidden rounded-xl bg-white shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="border-b border-stone-200 bg-stone-50 text-stone-500"><tr><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Precio vigente</th><th className="p-4">Estado</th><th className="p-4 text-right">Acciones</th></tr></thead><tbody>{products.map((product) => {
