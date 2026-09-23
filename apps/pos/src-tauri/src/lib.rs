@@ -15,6 +15,9 @@ const DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/003_discount_
 const CASH_DISCOUNT_SNAPSHOT_SCHEMA: &str = include_str!("../migrations/004_cash_discount_snapshots.sql");
 const CATEGORY_COLORS_SCHEMA: &str = include_str!("../migrations/005_category_colors.sql");
 const POS_OPERATORS_TIMEKEEPING_SCHEMA: &str = include_str!("../migrations/006_pos_operators_timekeeping.sql");
+const WEIGHT_DISCOUNT_PACK_MODE_SCHEMA: &str = include_str!("../migrations/007_weight_discount_pack_mode.sql");
+const PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA: &str = include_str!("../migrations/008_product_category_assignments.sql");
+const UNIT_SALE_SUPPORT_SCHEMA: &str = include_str!("../migrations/009_unit_sale_support.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -48,12 +51,22 @@ struct LocalCatalogRow {
     category_name: String,
     category_color_hex: Option<String>,
     category_sort_order: i64,
+    category_ids: Vec<String>,
     product_id: String,
     product_name: String,
     product_sku: Option<String>,
     unit_type: String,
     price_per_kg_cents: String,
     price_valid_from: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalCategoryRow {
+    id: String,
+    name: String,
+    color_hex: Option<String>,
+    sort_order: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +80,8 @@ struct CatalogPullRow {
     category_color_hex: Option<String>,
     category_sort_order: i64,
     category_active: bool,
+    #[serde(default)]
+    category_ids: Vec<String>,
     product_id: String,
     product_name: String,
     product_sku: Option<String>,
@@ -74,6 +89,15 @@ struct CatalogPullRow {
     product_active: bool,
     price_per_kg_cents: String,
     price_valid_from: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogDirectoryCategory {
+    id: String,
+    name: String,
+    color_hex: Option<String>,
+    sort_order: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,11 +113,27 @@ struct CatalogPullPayload {
     role_name: String,
     catalog: Vec<CatalogPullRow>,
     removed_product_ids: Vec<String>,
+    #[serde(default)]
+    categories: Vec<CatalogDirectoryCategory>,
 }
+
+fn default_threshold_mode() -> String { "THRESHOLD".to_string() }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CommercialDiscount { id: String, product_id: String, branch_id: Option<String>, minimum_grams: i64, discount_type: String, discount_value: String }
+struct CommercialDiscount {
+    id: String,
+    product_id: String,
+    branch_id: Option<String>,
+    #[serde(default = "default_threshold_mode")]
+    promotion_mode: String,
+    minimum_grams: Option<i64>,
+    discount_type: Option<String>,
+    discount_value: Option<String>,
+    #[serde(default)] pack_quantity_grams: Option<i64>,
+    #[serde(default)] pack_quantity_units: Option<i64>,
+    #[serde(default)] pack_price_cents: Option<String>,
+}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalAnnouncement { id: String, title: String, message: String, r#type: String, priority: i64, branch_id: Option<String> }
@@ -102,7 +142,18 @@ struct LocalAnnouncement { id: String, title: String, message: String, r#type: S
 struct LocalCommercialConfig { cash_discount_bps: i64, discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalDiscount { id: String, product_id: String, branch_id: Option<String>, minimum_grams: i64, discount_type: String, discount_value: String }
+struct LocalDiscount {
+    id: String,
+    product_id: String,
+    branch_id: Option<String>,
+    promotion_mode: String,
+    minimum_grams: Option<i64>,
+    discount_type: Option<String>,
+    discount_value: Option<String>,
+    pack_quantity_grams: Option<i64>,
+    pack_quantity_units: Option<i64>,
+    pack_price_cents: Option<String>,
+}
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommercialConfig { #[serde(default)] cash_discount_bps: i64, discounts: Vec<CommercialDiscount>, announcements: Vec<LocalAnnouncement> }
@@ -113,12 +164,14 @@ struct OfflineSaleItem {
     id: String,
     product_id: String,
     product_name_snapshot: String,
-    weight_grams: i64,
+    #[serde(default)] weight_grams: Option<i64>,
+    #[serde(default)] quantity_units: Option<i64>,
     price_per_kg_cents: String,
     #[serde(default)] original_price_per_kg_cents: Option<String>,
     #[serde(default)] discount_rule_id: Option<String>,
     #[serde(default)] discount_type: Option<String>,
     #[serde(default)] discount_value: Option<String>,
+    #[serde(default)] promotion_mode: Option<String>,
     #[serde(default)] discount_cents: Option<String>,
     #[serde(default)] cash_discount_bps: Option<String>,
     #[serde(default)] cash_discount_cents: Option<String>,
@@ -308,6 +361,36 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.execute("insert into schema_migrations(version, applied_at) values (6, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    let pack_mode_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 7)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !pack_mode_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(WEIGHT_DISCOUNT_PACK_MODE_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (7, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let category_assignments_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 8)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !category_assignments_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (8, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    let unit_sale_support_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 9)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !unit_sale_support_applied {
+        // This migration drops and rebuilds local_sales/local_sale_items (see the file's own
+        // header comment for why: relaxing CHECK constraints that SQLite can't ALTER directly,
+        // without losing existing rows). `pragma foreign_keys` is a documented no-op while a
+        // transaction is open, so it must be toggled here, OUTSIDE transaction.execute_batch —
+        // toggling it from inside the migration's own SQL (inside the transaction below) would
+        // silently do nothing, and the DROP TABLE would then fail against any existing row that
+        // references the table being dropped.
+        connection.execute_batch("pragma foreign_keys = off;").map_err(|error| error.to_string())?;
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(UNIT_SALE_SUPPORT_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (9, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        connection.execute_batch("pragma foreign_keys = on;").map_err(|error| error.to_string())?;
+    }
 
     let timestamp = now();
     connection
@@ -389,6 +472,21 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
     let branch_name: String = connection
         .query_row("select branch_name from local_device where singleton = 1 and branch_id = ?1", [&branch_id], |row| row.get(0))
         .map_err(|_| "Device is not assigned to this branch".to_string())?;
+
+    // Every category a product is assigned to (principal included) — fetched once up front and
+    // merged in below, instead of a per-row subquery.
+    let mut category_ids_by_product: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut assignments = connection
+        .prepare("select product_id, category_id from catalog_product_categories order by product_id")
+        .map_err(|error| error.to_string())?;
+    let assignment_rows = assignments
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for pair in assignment_rows {
+        let (product_id, category_id) = pair.map_err(|error| error.to_string())?;
+        category_ids_by_product.entry(product_id).or_default().push(category_id);
+    }
+
     let mut statement = connection
         .prepare(
             "select p.organization_id, cp.branch_id, c.id, c.name, c.color_hex, c.sort_order,
@@ -402,21 +500,45 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([&branch_id], |row| {
+            let product_id: String = row.get(6)?;
+            let principal_category_id: String = row.get(2)?;
+            let category_ids = category_ids_by_product
+                .get(&product_id)
+                .cloned()
+                .unwrap_or_else(|| vec![principal_category_id.clone()]);
             Ok(LocalCatalogRow {
                 organization_id: row.get(0)?,
                 branch_id: row.get(1)?,
                 branch_name: branch_name.clone(),
-                category_id: row.get(2)?,
+                category_id: principal_category_id,
                 category_name: row.get(3)?,
                 category_color_hex: row.get(4)?,
                 category_sort_order: row.get(5)?,
-                product_id: row.get(6)?,
+                category_ids,
+                product_id,
                 product_name: row.get(7)?,
                 product_sku: row.get(8)?,
                 unit_type: row.get(9)?,
                 price_per_kg_cents: row.get::<_, i64>(10)?.to_string(),
                 price_valid_from: row.get(11)?,
             })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_local_categories(state: State<'_, DatabaseState>) -> Result<Vec<LocalCategoryRow>, String> {
+    // The POS tab directory: every category the last pull marked active (see apply_catalog_pull —
+    // a full "mark all inactive, then upsert this pull's directory as active" replace each sync),
+    // independent of any product's principal category.
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let mut statement = connection
+        .prepare("select id, name, color_hex, sort_order from catalog_categories where active = 1 order by sort_order, name")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(LocalCategoryRow { id: row.get(0)?, name: row.get(1)?, color_hex: row.get(2)?, sort_order: row.get(3)? })
         })
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
@@ -450,18 +572,34 @@ fn apply_catalog_pull(
             .map_err(|error| error.to_string())?;
     }
 
-    for row in &pull.catalog {
-        let price = parse_i64(&row.price_per_kg_cents, "pricePerKgCents")?;
+    // Category DIRECTORY (POS tab source): always a full current snapshot, independent of the
+    // incremental product cursor (a small table, cheap to fully resend every pull). Deliberately
+    // NOT derived from catalog_products' own category_id anymore: a category used only as a
+    // secondary ("también aparece en") assignment must still get a tab, and this is the only
+    // place that guarantees that.
+    //
+    // Mark-all-inactive-then-upsert, NOT delete-then-reinsert: catalog_products.category_id has a
+    // hard FK to catalog_categories(id), and a product that this pull marks inactive via
+    // removed_product_ids above is NOT deleted (same "deactivate, never delete" convention as the
+    // rest of this file) — its row can still reference a category that just dropped out of the
+    // fresh directory. Deleting that category row would violate the FK. Flipping `active` instead
+    // never removes a row, so it can never violate that reference; get_local_categories below
+    // filters on active = 1, which is exactly this pull's fresh directory.
+    transaction.execute("update catalog_categories set active = 0, updated_at = ?1", params![timestamp]).map_err(|error| error.to_string())?;
+    for category in &pull.categories {
         transaction
             .execute(
                 "insert into catalog_categories(id, organization_id, name, color_hex, sort_order, active, updated_at)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 on conflict(id) do update set name = excluded.name, sort_order = excluded.sort_order,
-                   color_hex = excluded.color_hex, active = excluded.active, updated_at = excluded.updated_at",
-                params![row.category_id, row.organization_id, row.category_name, row.category_color_hex, row.category_sort_order,
-                        if row.category_active { 1_i64 } else { 0_i64 }, timestamp],
+                 values (?1, ?2, ?3, ?4, ?5, 1, ?6)
+                 on conflict(id) do update set name = excluded.name, color_hex = excluded.color_hex,
+                   sort_order = excluded.sort_order, active = 1, updated_at = excluded.updated_at",
+                params![category.id, pull.organization_id, category.name, category.color_hex, category.sort_order, timestamp],
             )
             .map_err(|error| error.to_string())?;
+    }
+
+    for row in &pull.catalog {
+        let price = parse_i64(&row.price_per_kg_cents, "pricePerKgCents")?;
         transaction
             .execute(
                 "insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at)
@@ -472,6 +610,23 @@ fn apply_catalog_pull(
                         row.unit_type, if row.product_active { 1_i64 } else { 0_i64 }, timestamp],
             )
             .map_err(|error| error.to_string())?;
+
+        // Full membership set for this product, delivered on every pull that touches it (not a
+        // delta) — replace what's stored for just this product, same idempotent pattern as the
+        // rest of this function.
+        let category_ids = if row.category_ids.is_empty() { vec![row.category_id.clone()] } else { row.category_ids.clone() };
+        transaction
+            .execute("delete from catalog_product_categories where product_id = ?1", params![row.product_id])
+            .map_err(|error| error.to_string())?;
+        for category_id in &category_ids {
+            transaction
+                .execute(
+                    "insert into catalog_product_categories(product_id, category_id) values (?1, ?2) on conflict(product_id, category_id) do nothing",
+                    params![row.product_id, category_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
         transaction
             .execute(
                 "insert into catalog_prices(product_id, branch_id, price_per_kg_cents, valid_from, synced_at)
@@ -495,7 +650,15 @@ fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialCo
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     transaction.execute("delete from local_weight_discounts", []).map_err(|error| error.to_string())?;
     transaction.execute("delete from local_announcements", []).map_err(|error| error.to_string())?;
-    for discount in config.discounts { transaction.execute("insert into local_weight_discounts(id,product_id,branch_id,minimum_grams,discount_type,discount_value) values(?1,?2,?3,?4,?5,?6)", params![discount.id,discount.product_id,discount.branch_id,discount.minimum_grams,discount.discount_type,parse_i64(&discount.discount_value,"discountValue")?]).map_err(|error| error.to_string())?; }
+    for discount in config.discounts {
+        let discount_value = discount.discount_value.as_deref().map(|value| parse_i64(value, "discountValue")).transpose()?;
+        let pack_price_cents = discount.pack_price_cents.as_deref().map(|value| parse_i64(value, "packPriceCents")).transpose()?;
+        transaction.execute(
+            "insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,minimum_grams,discount_type,discount_value,pack_quantity_grams,pack_quantity_units,pack_price_cents) values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![discount.id, discount.product_id, discount.branch_id, discount.promotion_mode, discount.minimum_grams,
+                    discount.discount_type, discount_value, discount.pack_quantity_grams, discount.pack_quantity_units, pack_price_cents]
+        ).map_err(|error| error.to_string())?;
+    }
     for notice in config.announcements { transaction.execute("insert into local_announcements(id,title,message,type,priority,branch_id) values(?1,?2,?3,?4,?5,?6)", params![notice.id,notice.title,notice.message,notice.r#type,notice.priority,notice.branch_id]).map_err(|error| error.to_string())?; }
     if !(0..10_000).contains(&config.cash_discount_bps) { return Err("Invalid cash discount configuration".to_string()); }
     set_metadata(&transaction, "cash_discount_bps", &config.cash_discount_bps.to_string(), &now())?;
@@ -505,8 +668,14 @@ fn apply_commercial_config(state: State<'_, DatabaseState>, config: CommercialCo
 #[tauri::command]
 fn get_local_commercial_config(state: State<'_, DatabaseState>) -> Result<LocalCommercialConfig, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
-    let mut discounts = connection.prepare("select id,product_id,branch_id,minimum_grams,discount_type,discount_value from local_weight_discounts order by minimum_grams desc, branch_id is not null desc").map_err(|e| e.to_string())?;
-    let discounts = discounts.query_map([], |r| Ok(LocalDiscount { id:r.get(0)?, product_id:r.get(1)?, branch_id:r.get(2)?, minimum_grams:r.get(3)?, discount_type:r.get(4)?, discount_value:r.get::<_,i64>(5)?.to_string() })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    let mut discounts = connection.prepare("select id,product_id,branch_id,promotion_mode,minimum_grams,discount_type,discount_value,pack_quantity_grams,pack_quantity_units,pack_price_cents from local_weight_discounts order by minimum_grams desc, branch_id is not null desc").map_err(|e| e.to_string())?;
+    let discounts = discounts.query_map([], |r| Ok(LocalDiscount {
+        id: r.get(0)?, product_id: r.get(1)?, branch_id: r.get(2)?, promotion_mode: r.get(3)?,
+        minimum_grams: r.get(4)?, discount_type: r.get(5)?,
+        discount_value: r.get::<_, Option<i64>>(6)?.map(|value| value.to_string()),
+        pack_quantity_grams: r.get(7)?, pack_quantity_units: r.get(8)?,
+        pack_price_cents: r.get::<_, Option<i64>>(9)?.map(|value| value.to_string()),
+    })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let mut notices = connection.prepare("select id,title,message,type,priority,branch_id from local_announcements order by priority desc").map_err(|e|e.to_string())?;
     let announcements = notices.query_map([], |r| Ok(LocalAnnouncement { id:r.get(0)?, title:r.get(1)?, message:r.get(2)?, r#type:r.get(3)?, priority:r.get(4)?, branch_id:r.get(5)? })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let cash_discount_bps = metadata(&connection, "cash_discount_bps")?.and_then(|value| value.parse().ok()).unwrap_or(0);
@@ -705,44 +874,132 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
         let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
         let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
-        if item.weight_grams <= 0 || !(0..10_000).contains(&cash_discount_bps) || (!payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0) {
+        if !(0..10_000).contains(&cash_discount_bps) || (!payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0) {
             return Err("Invalid local sale calculation".to_string());
         }
-        let expected = price
-            .checked_mul(item.weight_grams)
-            .and_then(|value| value.checked_add(500))
-            .map(|value| value / 1000)
-            .ok_or_else(|| "Sale amount overflow".to_string())?;
-        let normal_subtotal = original_price.checked_mul(item.weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
         let cash_price = original_price.checked_mul(10_000 - cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-        let cash_subtotal = cash_price.checked_mul(item.weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
         let has_new_pricing = item.cash_discount_bps.is_some() || item.promotion_discount_cents.is_some();
-        match item.discount_type.as_deref() {
-            Some("PERCENTAGE") => {
-                let value = item.discount_value.as_deref().ok_or_else(|| "Missing percentage promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
-                if !(1..=10_000).contains(&value) { return Err("Invalid percentage promotion".to_string()); }
-                let rounded = cash_price.checked_mul(10_000 - value).and_then(|amount| amount.checked_add(5_000)).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                let legacy = cash_price.checked_mul(10_000 - value).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                if price != rounded && (has_new_pricing || price != legacy) { return Err("Percentage promotion snapshot is inconsistent".to_string()); }
+        let product_unit_type: &str;
+
+        match (item.weight_grams, item.quantity_units) {
+            (Some(weight_grams), None) => {
+                product_unit_type = "WEIGHT";
+                if weight_grams <= 0 { return Err("Invalid local sale calculation".to_string()); }
+                let expected = price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let normal_subtotal = original_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let cash_subtotal = cash_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
+                    // Pack line: subtotal is the pack's own fixed total, not a per-kg rate applied
+                    // to the weighed grams, so the generic "subtotal == price*weight/1000" identity
+                    // does not hold here (final_price is only a derived per-kg equivalent for
+                    // display/reporting). Re-validated against local_weight_discounts, same sanity
+                    // guard as the server (pack price must not exceed list price for the actual
+                    // weighed amount).
+                    if item.discount_type.is_some() || item.discount_value.is_some() {
+                        return Err("Offline pack promotion metadata is inconsistent".to_string());
+                    }
+                    let rule_id = item.discount_rule_id.as_deref().ok_or_else(|| "Missing pack promotion id".to_string())?;
+                    let pack_price: i64 = transaction
+                        .query_row(
+                            "select pack_price_cents from local_weight_discounts where id = ?1 and product_id = ?2 and promotion_mode = 'PACK_FIXED_TOTAL'",
+                            params![rule_id, item.product_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|_| "Offline pack promotion is unknown".to_string())?;
+                    if pack_price > normal_subtotal || subtotal != pack_price {
+                        return Err("Offline pack promotion is inconsistent".to_string());
+                    }
+                    let expected_promotion_discount = (cash_subtotal - subtotal).max(0);
+                    if cash_discount_cents != normal_subtotal - cash_subtotal
+                        || promotion_discount_cents != expected_promotion_discount
+                        || discount_cents != normal_subtotal - subtotal
+                    {
+                        return Err("Invalid local sale calculation".to_string());
+                    }
+                } else {
+                    match item.discount_type.as_deref() {
+                        Some("PERCENTAGE") => {
+                            let value = item.discount_value.as_deref().ok_or_else(|| "Missing percentage promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
+                            if !(1..=10_000).contains(&value) { return Err("Invalid percentage promotion".to_string()); }
+                            let rounded = cash_price.checked_mul(10_000 - value).and_then(|amount| amount.checked_add(5_000)).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                            let legacy = cash_price.checked_mul(10_000 - value).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                            if price != rounded && (has_new_pricing || price != legacy) { return Err("Percentage promotion snapshot is inconsistent".to_string()); }
+                        }
+                        Some("FIXED_PRICE_PER_KG") => {
+                            let value = item.discount_value.as_deref().ok_or_else(|| "Missing fixed-price promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
+                            if price != value || price > cash_price { return Err("Fixed-price promotion snapshot is inconsistent".to_string()); }
+                        }
+                        Some(_) => return Err("Unsupported promotion type".to_string()),
+                        None if price != cash_price => return Err("Undiscounted snapshot is inconsistent".to_string()),
+                        None => {}
+                    }
+                    if subtotal != expected || cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != cash_discount_cents + promotion_discount_cents {
+                        return Err("Invalid local sale calculation".to_string());
+                    }
+                }
+                computed_weight = computed_weight.checked_add(weight_grams).ok_or_else(|| "Sale weight overflow".to_string())?;
             }
-            Some("FIXED_PRICE_PER_KG") => {
-                let value = item.discount_value.as_deref().ok_or_else(|| "Missing fixed-price promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
-                if price != value || price > cash_price { return Err("Fixed-price promotion snapshot is inconsistent".to_string()); }
+            (None, Some(quantity_units)) => {
+                // UNIT line: no per-kg division, quantities multiply directly. THRESHOLD
+                // promotions never apply to UNIT (WEIGHT-only by design, see save_weight_discount)
+                // — the only supported promotion here is PACK_FIXED_TOTAL, applied in exact
+                // multiples of the pack's quantity, with any remainder at the normal cash price
+                // (mirrors calculateUnitPackSalePricing exactly). UNIT lines contribute nothing to
+                // the sale's total WEIGHT (that total stays a pure weight tally).
+                product_unit_type = "UNIT";
+                if quantity_units <= 0 { return Err("Invalid local sale calculation".to_string()); }
+                if item.discount_type.is_some() || item.discount_value.is_some() {
+                    return Err("Offline unit sale discount metadata is inconsistent".to_string());
+                }
+                let normal_subtotal = original_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let cash_subtotal = cash_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
+                    let rule_id = item.discount_rule_id.as_deref().ok_or_else(|| "Missing pack promotion id".to_string())?;
+                    let (pack_quantity, pack_price): (i64, i64) = transaction
+                        .query_row(
+                            "select pack_quantity_units, pack_price_cents from local_weight_discounts where id = ?1 and product_id = ?2 and promotion_mode = 'PACK_FIXED_TOTAL'",
+                            params![rule_id, item.product_id],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .map_err(|_| "Offline pack promotion is unknown".to_string())?;
+                    if pack_quantity <= 0 { return Err("Offline pack promotion is unknown".to_string()); }
+                    if pack_price > original_price.checked_mul(pack_quantity).ok_or_else(|| "Sale amount overflow".to_string())? {
+                        return Err("Offline pack promotion is inconsistent".to_string());
+                    }
+                    let whole_packs = quantity_units / pack_quantity;
+                    let remainder = quantity_units % pack_quantity;
+                    let expected_subtotal = pack_price.checked_mul(whole_packs)
+                        .and_then(|value| cash_price.checked_mul(remainder).and_then(|rest| value.checked_add(rest)))
+                        .ok_or_else(|| "Sale amount overflow".to_string())?;
+                    if subtotal != expected_subtotal {
+                        return Err("Offline pack promotion is inconsistent".to_string());
+                    }
+                    let expected_promotion_discount = (cash_subtotal - subtotal).max(0);
+                    if cash_discount_cents != normal_subtotal - cash_subtotal
+                        || promotion_discount_cents != expected_promotion_discount
+                        || discount_cents != normal_subtotal - subtotal
+                    {
+                        return Err("Invalid local sale calculation".to_string());
+                    }
+                } else {
+                    if subtotal != cash_subtotal || price != cash_price {
+                        return Err("Undiscounted snapshot is inconsistent".to_string());
+                    }
+                    if cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != 0 || discount_cents != cash_discount_cents {
+                        return Err("Invalid local sale calculation".to_string());
+                    }
+                }
             }
-            Some(_) => return Err("Unsupported promotion type".to_string()),
-            None if price != cash_price => return Err("Undiscounted snapshot is inconsistent".to_string()),
-            None => {}
+            _ => return Err("A sale item must have exactly one of weightGrams or quantityUnits".to_string()),
         }
-        if subtotal != expected || cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != cash_discount_cents + promotion_discount_cents {
-            return Err("Invalid local sale calculation".to_string());
-        }
+
         let catalog_matches: bool = transaction
             .query_row(
                 "select exists(
                    select 1 from catalog_products p join catalog_prices cp on cp.product_id = p.id
-                   where p.id = ?1 and p.active = 1 and cp.branch_id = ?2 and cp.price_per_kg_cents = ?3
+                   where p.id = ?1 and p.active = 1 and p.unit_type = ?2 and cp.branch_id = ?3 and cp.price_per_kg_cents = ?4
                  )",
-                params![item.product_id, sale.branch_id, original_price],
+                params![item.product_id, product_unit_type, sale.branch_id, original_price],
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
@@ -750,7 +1007,6 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
             return Err(format!("Product {} is unavailable or its local price changed", item.product_id));
         }
         computed_total = computed_total.checked_add(subtotal).ok_or_else(|| "Sale total overflow".to_string())?;
-        computed_weight = computed_weight.checked_add(item.weight_grams).ok_or_else(|| "Sale weight overflow".to_string())?;
     }
 
     if parse_i64(&sale.total_cents, "totalCents")? != computed_total
@@ -781,10 +1037,10 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let profit_snapshot = item.profit_markup_bps_snapshot.as_deref().map(|value| parse_i64(value, "profitMarkupBpsSnapshot")).transpose()?;
         transaction
             .execute(
-                "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams,
-                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
-                params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams,
-                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, sale.created_at],
+                "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams, quantity_units,
+                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, promotion_mode, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams, item.quantity_units,
+                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, item.promotion_mode, sale.created_at],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -1061,6 +1317,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_local_runtime,
             get_local_catalog,
+            get_local_categories,
             apply_catalog_pull,
             apply_commercial_config,
             get_local_commercial_config,
@@ -1111,15 +1368,72 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 6);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'promotion_mode'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'quantity_units'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_weight_discounts') where name = 'pack_price_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from sqlite_master where type='table' and name='catalog_product_categories'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select color_hex from catalog_categories where id='color-category'", [], |row| row.get::<_,String>(0)).unwrap(), "#E99BAD");
         assert!(payment_method_receives_discount("CASH"));
         assert!(payment_method_receives_discount("TRANSFER"));
         assert!(payment_method_receives_discount("OTHER"));
         assert!(!payment_method_receives_discount("DEBIT"));
         assert!(!payment_method_receives_discount("CREDIT"));
+    }
+
+    #[test]
+    fn unit_sale_migration_preserves_preexisting_local_sale_history() {
+        // The real upgrade scenario: a device already has confirmed local sales (under the old,
+        // WEIGHT-only local_sales/local_sale_items schema) before migration 9 ever runs. Applying
+        // it must rebuild both tables (relaxing total_weight_grams's CHECK and weight_grams's
+        // NOT NULL) WITHOUT losing that existing row — this is the scenario the table-rebuild
+        // pattern (vs. a destructive drop+recreate) exists to protect.
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("pragma foreign_keys = on; create table if not exists schema_migrations (version integer primary key, applied_at text not null);").unwrap();
+        for (version, schema) in [
+            (1, INITIAL_SCHEMA), (2, COMMERCIAL_SCHEMA), (3, DISCOUNT_SNAPSHOT_SCHEMA),
+            (4, CASH_DISCOUNT_SNAPSHOT_SCHEMA), (5, CATEGORY_COLORS_SCHEMA), (6, POS_OPERATORS_TIMEKEEPING_SCHEMA),
+            (7, WEIGHT_DISCOUNT_PACK_MODE_SCHEMA), (8, PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA),
+        ] {
+            let transaction = connection.transaction().unwrap();
+            transaction.execute_batch(schema).unwrap();
+            transaction.execute("insert into schema_migrations(version, applied_at) values (?1, ?2)", params![version, now()]).unwrap();
+            transaction.commit().unwrap();
+        }
+        // Pre-existing confirmed sale under the OLD (pre-migration-9) schema.
+        connection.execute(
+            "insert into local_sales(id, organization_id, branch_id, profile_id, device_id, status, total_cents, total_weight_grams, created_at, completed_at)
+             values ('old-sale', 'org', 'branch', 'profile', 'device', 'COMPLETED', 123400, 1000, '2026-09-01T00:00:00Z', '2026-09-01T00:00:01Z')",
+            [],
+        ).unwrap();
+        connection.execute(
+            "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams, price_per_kg_cents, subtotal_cents, created_at)
+             values ('old-item', 'old-sale', 'old-product', 'Asado', 1000, 123400, 123400, '2026-09-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        // Now bring the connection up to date — this is where migration 9's rebuild runs.
+        initialize_connection(&mut connection).unwrap();
+
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
+        assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
+        assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
+        // The rebuilt schema now genuinely accepts a UNIT row (nullable weight_grams, new
+        // quantity_units, and a sale whose total weight is legitimately zero).
+        connection.execute(
+            "insert into local_sales(id, organization_id, branch_id, profile_id, device_id, status, total_cents, total_weight_grams, created_at, completed_at)
+             values ('unit-sale', 'org', 'branch', 'profile', 'device', 'COMPLETED', 28000, 0, '2026-09-23T00:00:00Z', '2026-09-23T00:00:01Z')",
+            [],
+        ).unwrap();
+        connection.execute(
+            "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, quantity_units, price_per_kg_cents, subtotal_cents, created_at)
+             values ('unit-item', 'unit-sale', 'hamburguesa', 'Hamburguesa', 40, 700, 28000, '2026-09-23T00:00:00Z')",
+            [],
+        ).unwrap();
+        assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'unit-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 40);
     }
 
     #[test]
@@ -1137,8 +1451,8 @@ mod tests {
             organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
             status: "COMPLETED".into(), total_cents: "1235000".into(), total_weight_grams: "1000".into(),
             created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
-            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: 1000,
-                price_per_kg_cents: "1235000".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), discount_cents: Some("209444".into()),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
+                price_per_kg_cents: "1235000".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("209444".into()),
                 cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("144444".into()), promotion_discount_cents: Some("65000".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1235000".into() }],
             payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1235000".into() },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
@@ -1148,6 +1462,159 @@ mod tests {
         transaction.commit().unwrap();
         assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
         assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 65000);
+    }
+
+    fn pack_sale_fixture(connection: &Connection) -> (String, OfflineSalePayload) {
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',10000,'2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_price_cents) values('pack-1','product',null,'PACK_FIXED_TOTAL',18000)", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id: device_id.clone(),
+            status: "COMPLETED".into(), total_cents: "18000".into(), total_weight_grams: "2050".into(),
+            created_at: "2026-09-23T00:00:00Z".into(), completed_at: "2026-09-23T00:00:00Z".into(),
+            items: vec![OfflineSaleItem {
+                id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(2050), quantity_units: None,
+                price_per_kg_cents: "8780".into(), original_price_per_kg_cents: Some("10000".into()),
+                discount_rule_id: Some("pack-1".into()), discount_type: None, discount_value: None, promotion_mode: Some("PACK_FIXED_TOTAL".into()),
+                discount_cents: Some("2500".into()), cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("2050".into()),
+                promotion_discount_cents: Some("450".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "18000".into()
+            }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "18000".into() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-2050".into(), occurred_at: "2026-09-23T00:00:00Z".into() }]
+        };
+        (device_id, sale)
+    }
+
+    #[test]
+    fn pack_sale_charges_fixed_total_regardless_of_weighed_grams() {
+        // "Vacío: 2kg por $18.000" sold as a real 2.050kg piece — subtotal must be exactly the
+        // pack's configured total (18000), not a per-kg rate applied to the weighed grams.
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let (_, sale) = pack_sale_fixture(&connection);
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 18000);
+        assert_eq!(connection.query_row("select promotion_mode from local_sale_items", [], |row| row.get::<_, Option<String>>(0)).unwrap(), Some("PACK_FIXED_TOTAL".to_string()));
+    }
+
+    #[test]
+    fn pack_sale_rejects_a_price_above_list_for_the_weighed_amount() {
+        // A tiny 100g weighed amount makes the $180 pack total exceed even the full list price
+        // for that little a piece (10000c/kg * 0.1kg = 1000c) — must be rejected, not silently
+        // accepted as a below-cost "discount".
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let (_, mut sale) = pack_sale_fixture(&connection);
+        sale.items[0].weight_grams = Some(100);
+        sale.stock_movements[0].quantity_grams = "-100".into();
+        let transaction = connection.transaction().unwrap();
+        let result = insert_sale(&transaction, &sale);
+        assert!(result.is_err());
+    }
+
+    fn unit_sale_device(connection: &Connection) -> String {
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('hamburguesa','org','category','Hamburguesa',null,'UNIT',1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('hamburguesa','branch',800,'2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
+        connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap()
+    }
+
+    fn unit_sale_item(quantity: i64, subtotal: i64, discount_cents: i64, promotion_discount_cents: i64, pack_rule_id: Option<&str>) -> OfflineSaleItem {
+        OfflineSaleItem {
+            id: Uuid::new_v4().to_string(), product_id: "hamburguesa".into(), product_name_snapshot: "Hamburguesa".into(),
+            weight_grams: None, quantity_units: Some(quantity),
+            price_per_kg_cents: "800".into(), original_price_per_kg_cents: Some("800".into()),
+            discount_rule_id: pack_rule_id.map(|id| id.to_string()),
+            discount_type: None, discount_value: None,
+            promotion_mode: pack_rule_id.map(|_| "PACK_FIXED_TOTAL".to_string()),
+            discount_cents: Some(discount_cents.to_string()), cash_discount_bps: Some("0".into()),
+            cash_discount_cents: Some("0".into()), promotion_discount_cents: Some(promotion_discount_cents.to_string()),
+            cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: subtotal.to_string(),
+        }
+    }
+
+    fn unit_sale_payload(device_id: String, quantity: i64, subtotal: i64, item: OfflineSaleItem) -> OfflineSalePayload {
+        OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
+            status: "COMPLETED".into(), total_cents: subtotal.to_string(), total_weight_grams: "0".into(),
+            created_at: "2026-09-23T00:00:00Z".into(), completed_at: "2026-09-23T00:00:00Z".into(),
+            items: vec![item],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: subtotal.to_string() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "hamburguesa".into(), quantity_grams: (-quantity).to_string(), occurred_at: "2026-09-23T00:00:00Z".into() }],
+        }
+    }
+
+    #[test]
+    fn unit_sale_charges_quantity_times_normal_price() {
+        // "Hamburguesa": $800/u sin descuento — 3 unidades = $2.400 (misma secuencia comercial:
+        // lista -> descuento por pago -> promoción -> final, sin balanza ni gramos involucrados).
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = unit_sale_payload(device_id, 3, 2400, unit_sale_item(3, 2400, 0, 0, None));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 2400);
+        assert_eq!(connection.query_row("select quantity_units from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(connection.query_row("select weight_grams from local_sale_items", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
+        assert_eq!(connection.query_row("select total_weight_grams from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 0, "a pure-UNIT sale has zero total weight, no longer rejected by the old > 0 check");
+    }
+
+    #[test]
+    fn unit_pack_sale_applies_exact_multiples() {
+        // 40 hamburguesas con pack "40 por $28.000": exactamente 1 pack, sin resto.
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',40,28000)", []).unwrap();
+        // normal_subtotal = 40*800 = 32000; pack subtotal = 28000; discount = 4000.
+        let sale = unit_sale_payload(device_id, 40, 28000, unit_sale_item(40, 28000, 4000, 4000, Some("pack-1")));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 28000);
+    }
+
+    #[test]
+    fn unit_pack_sale_applies_one_pack_plus_remainder_at_normal_price() {
+        // 45 hamburguesas: 1 pack de 40 ($28.000) + 5 x $800 normal = $32.000 — el ejemplo exacto
+        // del pedido.
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',40,28000)", []).unwrap();
+        // normal_subtotal = 45*800 = 36000; pack subtotal = 28000 + 5*800 = 32000; discount = 4000.
+        let sale = unit_sale_payload(device_id, 45, 32000, unit_sale_item(45, 32000, 4000, 4000, Some("pack-1")));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 32000);
+    }
+
+    #[test]
+    fn unit_sale_below_pack_size_gets_no_discount() {
+        // 39 hamburguesas con pack "40 por $28.000" configurado: no llega al pack, se cobra a
+        // precio normal sin inventar descuento parcial.
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',40,28000)", []).unwrap();
+        let sale = unit_sale_payload(device_id, 39, 31200, unit_sale_item(39, 31200, 0, 0, None));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 31200);
     }
 
     #[test]

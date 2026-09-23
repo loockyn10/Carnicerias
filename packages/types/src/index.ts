@@ -78,12 +78,23 @@ export interface TicketLine {
   id: EntityId;
   productId: EntityId;
   productName: string;
+  /** 0 for a UNIT line (see quantityUnits) — never used to represent a real UNIT quantity, so the
+   * ticket's total weight stays a pure weight tally unaffected by UNIT lines. */
   weightGrams: number;
+  /** Set only for a UNIT line (a WEIGHT line never has this). No balanza/weight input involved —
+   * this is an integer count the operator types/steps through. */
+  quantityUnits?: number;
+  /** Reused generically as "price per kg" (WEIGHT) or "price per unit" (UNIT) — same convention
+   * product_prices.price_cents already uses, see docs/ARCHITECTURE.md "Precio e historia". */
   pricePerKgCents: bigint;
   originalPricePerKgCents?: bigint;
   discountRuleId?: string | null;
   discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
   discountValue?: bigint | null;
+  /** Set to "PACK_FIXED_TOTAL" when this line was sold as a pack (fixed total price for the whole
+   * line, independent of the real weighed grams — see calculateWeightPackSalePricing). Absent/null
+   * for a normal or threshold-discounted line. */
+  promotionMode?: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
   discountCents?: bigint;
   cashDiscountBps?: bigint;
   cashDiscountCents?: bigint;

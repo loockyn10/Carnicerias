@@ -86,7 +86,29 @@ Los roles son filas, los permisos son capacidades y `role_permissions` los vincu
 
 Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso usan cents y gramos enteros; porcentajes usan basis points y redondeo half-up. Los ítems de venta guardan snapshots suficientes de lista, costo, markup, descuento por pago, promoción y subtotal final.
 
-Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo. El dominio, pricing y analytics contemplan `UNIT` (incluidos outputs de desposte por unidad, ver más abajo), pero la venta POS completa actualmente sólo soporta `WEIGHT`.
+Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo. El dominio, pricing, analytics y venta POS contemplan `UNIT` de punta a punta (ver "Venta POS `UNIT`" más abajo), incluidos outputs de desposte por unidad.
+
+## Promociones pack, corrección de forma de venta y multicategoría
+
+`product_weight_discounts` (migración `202609230031`) gana `promotion_mode` (`THRESHOLD` | `PACK_FIXED_TOTAL`, ver D-039 y `docs/DOMAIN_RULES.md`). `save_weight_discount` extiende su firma con parámetros opcionales al final (mismo patrón de compatibilidad ya usado en el repo), sin tocar el camino `THRESHOLD` existente. `complete_discounted_sale`/`sync_offline_sale` ganan un camino paralelo para una línea pack (precio total fijo, no escala con el peso), validado igual online y offline; el snapshot en `sale_items`/`local_sale_items` usa una columna nueva `promotion_mode` (no se tocó el enum `weight_discount_type` existente, para no arriesgar un `ALTER TYPE ... ADD VALUE` sobre un tipo ya usado por filas reales). El POS (`apps/pos/src/App.tsx`) ofrece un toggle "Vender como pack" cuando el producto `WEIGHT` tiene un pack activo (el pack `UNIT` se aplica automáticamente, ver más abajo); Rust (`insert_sale` en `lib.rs`) re-valida la consistencia del pack contra `local_weight_discounts` antes de persistir.
+
+`save_product` (migración `202609230032`) agrega una guarda: cambiar `unit_type` de un producto con historial operativo (ventas, stock, producción, cualquier promoción) se rechaza; sin ese historial, el cambio se permite igual que siempre (ver D-040). Nueva RPC `get_products_with_unit_type_history` le permite a `/admin/products` deshabilitar el selector por adelantado para los productos que la guarda igual rechazaría.
+
+`product_category_assignments` (migración `202609230033`, ver D-041/D-043) agrega multicategoría sin reemplazar `products.category_id` (sigue siendo la categoría principal). `set_product_categories` reconcilia ambos atómicamente. `pull_pos_state` y `get_pos_catalog` (esta última recreada vía `DROP FUNCTION`/`CREATE FUNCTION`, ya que una función `RETURNS TABLE` no puede ganar una columna con `CREATE OR REPLACE`) agregan `categoryIds` al payload de catálogo; SQLite gana una tabla espejo `catalog_product_categories` (migración SQLite `008`) poblada por `apply_catalog_pull` con un barrido acotado al producto tocado en cada pull (no una tabla completa). El filtro de categoría del POS (`apps/pos/src/lib/catalog.ts`, con tests propios) considera todas las categorías asignadas.
+
+**Directorio de categorías del POS** (agregado a la migración `202609230033` en la misma sesión, antes de que se aplicara ningún entorno): las tabs ya no se infieren de qué producto es principal de cada categoría. `get_pos_categories(p_branch_id)` (nuevo RPC) devuelve id/nombre/color/orden de cada categoría con al menos una asignación real (principal o secundaria); `pull_pos_state` incluye el mismo set completo bajo la clave `categories`. SQLite refleja esto en `catalog_categories` (tabla ya existente en la migración `008`, ahora poblada por `apply_catalog_pull` marcando todo inactivo y dando de alta el set fresco — nunca `DELETE`, para no romper la FK de un producto local desactivado que aún referencia una categoría vieja); `get_local_categories` (comando Tauri nuevo) la expone al frontend. `apps/pos/src/lib/catalog.ts` (`buildCategoryTabs`) construye las tabs desde este directorio en vez de derivarlas de `products`, resolviendo la limitación original de D-041 (una categoría 100%-secundaria ahora sí genera su propia tab).
+
+Precios y Promociones (`Productos → Precios`, `Productos → Promociones`) ganaron un buscador cliente-side (sin roundtrip adicional, el dataset ya está cargado) sobre un helper de normalización compartido, `apps/admin/src/lib/text-search.ts` (extraído del que ya usaba `/admin/branch-stock`).
+
+## Venta POS `UNIT` end-to-end (D-042)
+
+Migración `202609230034_unit_sale_support.sql` (Postgres) y `009_unit_sale_support.sql` (SQLite), agregadas como migraciones nuevas porque son alcance genuinamente nuevo (a diferencia de las tres de arriba, que se editaron en el lugar por no estar aplicadas todavía).
+
+`sale_items` gana `quantity_units` (columna separada de `weight_grams`, ambas nullable, `CHECK` exige exactamente una de las dos — no se reutilizó `weight_grams` porque el dominio prohíbe mezclar kg/unidades en un campo sin separar). `stock_movements.quantity_grams` sí se reutiliza como contador de unidades con signo para una venta `UNIT`, mismo precedente que `PRODUCTION_YIELD` (D-038). SQLite reconstruye `local_sales`/`local_sale_items` con el patrón de rebuild no destructivo ya usado en el repo (tabla `_new`, copia de filas existentes, `DROP`+`RENAME`) porque ambas tablas tienen historial de ventas real; el toggle de `pragma foreign_keys` se hace en Rust **fuera** de la transacción de la migración (SQLite ignora ese pragma dentro de una transacción abierta — bug real encontrado por un test de esta sesión, ver `docs/CURRENT_STATE.md`).
+
+`complete_discounted_sale`/`sync_offline_sale` (Postgres) e `insert_sale` (Rust) ganan una rama `quantity_units` paralela a la de `weight_grams`, con la misma fórmula de pack que ya existía para `UNIT` en `packages/business-logic` (múltiplos exactos + resto a precio normal). El frontend (`apps/pos/src/App.tsx`) deja de filtrar el catálogo a sólo `WEIGHT`; un producto `UNIT` abre un stepper de cantidad (no la balanza) y reutiliza el mismo motor de precio (`computeWeightLine`/`computeUnitLine`, funciones puras que llaman a `calculateSalePricing`/`calculateUnitPackSalePricing` de `packages/business-logic`) sin duplicar la secuencia lista → descuento por pago → promoción → final.
+
+**Compatibilidad con RPCs preexistentes**: `get_profitability_analytics`, `get_replenishment_plan`, `cancel_sale` y `get_admin_dashboard` (de sprints anteriores) ya leían `sale_items.weight_grams` asumiendo que también podía contener una cantidad `UNIT`; se reemplazaron (`CREATE OR REPLACE FUNCTION`, misma firma, dentro de la migración `202609230034`) usando `coalesce(weight_grams, quantity_units)` donde antes asumían sólo peso. Sin este fix, `cancel_sale` crashea con NOT NULL al anular una venta con línea `UNIT` — detalle en D-042.
 
 ## Desposte / Producción
 
@@ -117,7 +139,7 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–027 y SQLite 001–006. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–033 y SQLite 001–008. El estado remoto sigue pendiente de verificación autenticada.
 
 ## PWA y balanza
 

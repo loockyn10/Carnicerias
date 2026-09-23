@@ -416,3 +416,71 @@ ejecutarse.
 irreversible sobre datos reales; automatizarlo (migración, RPC, botón)
 crearía una superficie de borrado accidental que no se justifica para algo
 que ocurre una sola vez por instalación. Ver `docs/PRE_PRODUCTION_RESET.md`.
+
+---
+
+## D-039 — Promociones: PACK_FIXED_TOTAL junto a THRESHOLD
+
+**Status:** Active
+
+`product_weight_discounts` gana `promotion_mode` (`THRESHOLD` | `PACK_FIXED_TOTAL`, default `THRESHOLD`). THRESHOLD es exactamente el modelo anterior (porcentaje/precio fijo por kg desde una cantidad mínima), sin cambios de comportamiento ni de columnas. PACK_FIXED_TOTAL es una cantidad concreta a precio total fijo (ej. "Vacío 2kg por $18.000", "Hamburguesa 40u por $28.000"): columnas nuevas `pack_quantity_grams`/`pack_quantity_units` (una sola, según `unit_type` del producto, mismo patrón que `production_batch_outputs`) y `pack_price_cents`. No es un umbral "desde X": no escala con la cantidad, no admite tolerancia inventada. `save_weight_discount` (migración `202609230031`) ganó parámetros opcionales al final, sin romper la firma existente.
+
+Decisiones de negocio confirmadas por el usuario:
+- **WEIGHT**: el pack cobra su precio total configurado sin importar el peso real pesado (una pieza prearmada nunca da el peso nominal exacto); el peso real sigue registrándose para stock/trazabilidad. Guarda de cordura: el precio del pack no puede superar el precio de **lista** para el peso realmente pesado (nunca compara contra el precio ya descontado por medio de pago); en la práctica no se dispara con la variación real de una pieza prearmada.
+- **UNIT**: aplica automáticamente en múltiplos exactos (80 = 2×40); el resto se vende a precio normal, sin descuento inventado para una cantidad parcial.
+
+El POS de mostrador conecta ambos modos al flujo de venta real (ver D-042 para el detalle de la venta `UNIT`): pack **WEIGHT** vía toggle explícito "Vender como pack" en el modal de peso; pack **UNIT** automático por múltiplos exactos de la cantidad tipeada. `complete_discounted_sale`/`sync_offline_sale`/`insert_sale` (Rust) validan el precio del pack server-side, igual online y offline.
+
+**Motivo:** el negocio real vende piezas prearmadas y packs de cantidad a un precio comercial fijo, no un descuento por kg calculado a mano; forzar ese caso dentro del modelo de umbral hubiera exigido inventar una semántica ("desde 2kg cuesta $9.000/kg") que no es lo que el dueño realmente ofrece.
+
+---
+
+## D-040 — Corregir forma de venta (WEIGHT ↔ UNIT) sólo sin historial operativo
+
+**Status:** Active
+
+`save_product` (migración `202609230032`) bloquea un cambio de `unit_type` si el producto tiene cualquier fila en `sale_items`, `stock_movements`, `production_batch_outputs`/`production_batches.source_product_id`, o `product_weight_discounts` (activa o no). Precio y costo (`product_prices`/`product_costs`) **no** bloquean: son montos sin semántica de peso/unidad propia. Sin historial bloqueante, el cambio se aplica igual que antes (Admin ya lo permitía sin guarda alguna — el único freno real era que el modal de edición mandaba `unit_type` oculto). Ningún dato existente se reinterpreta: 3000 gramos nunca pasa a leerse como 3000 unidades.
+
+**Motivo:** estamos pre-producción, así que corregir un producto creado con el tipo de venta equivocado es especialmente valioso ahora; pero `save_product` ya aceptaba el cambio sin ninguna protección apenas se habilitara el selector en el modal de edición, así que la guarda se agrega en el mismo cambio que habilita ese selector, no después.
+
+---
+
+## D-041 — Un producto puede tener varias categorías; una queda como principal
+
+**Status:** Active
+
+`product_category_assignments` (migración `202609230033`) es el set completo de categorías de un producto; `products.category_id` sigue siendo la categoría **principal** (color/nombre en las pantallas que sólo necesitan una etiqueta, sin cambios ahí). `set_product_categories` reconcilia ambos atómicamente y agrega la principal al set automáticamente si faltara, en vez de rechazar. El filtro por categoría del POS (`pull_pos_state`/`get_pos_catalog`, ambos con `categoryIds` nuevo) considera todas las categorías asignadas; "Todos" no cambia (ya es la lista completa sin iterar por categoría, nunca duplica un producto multicategoría). El filtro de `/admin/products` sigue usando sólo la categoría principal — el pedido sólo exigía multicategoría real en el POS.
+
+**Corrección 2026-09-23 (ver D-043):** la limitación original ("el tab sale de la categoría principal de algún producto, una categoría 100% secundaria no tiene nombre/color propio") quedó resuelta: las tabs ahora vienen de un directorio de categorías explícito (`get_pos_categories`, tabla SQLite `catalog_categories`), no de ningún producto. Una categoría usada sólo como secundaria (ej. Embutidos, si ningún producto la tiene como principal) genera su tab igual, con su propio nombre/color reales.
+
+**Motivo:** D-005/D-010 (no duplicar fuentes de verdad, desactivar en vez de reescribir) aplican igual acá: agregar multicategoría no debía significar dos modelos de "categoría de un producto" corriendo en paralelo sin reconciliación explícita.
+
+---
+
+## D-042 — Venta `UNIT` end-to-end en el POS (online y offline)
+
+**Status:** Active
+
+El POS de mostrador vende productos `UNIT` igual que `WEIGHT`, con el mismo motor comercial (D-008: lista → descuento por medio de pago → promoción → final) y sin balanza: tocar el producto abre un stepper de cantidad entera (`[-] 1 [+]` + input manual, mínimo 1), nunca el flujo de peso. El pack `UNIT` (D-039) se aplica automáticamente por múltiplos exactos de la cantidad tipeada, sin toggle (a diferencia del pack `WEIGHT`, que sí requiere confirmación explícita porque el peso real nunca calza exacto). "Modificar cantidad" edita la línea en el lugar, igual que "Modificar peso" para `WEIGHT`.
+
+Stock: `sale_items` gana `quantity_units` (columna separada de `weight_grams`, ambas nullable, `CHECK` exige exactamente una de las dos — no se reutilizó `weight_grams` para no mezclar semánticas de kg/unidades en un mismo campo sin separar, ver regla de "Unidades y precisión"). `stock_movements.quantity_grams` sí se reutiliza como contador de unidades con signo para una venta `UNIT`, siguiendo el precedente ya existente de `PRODUCTION_YIELD` (D-038) — no se agregó una columna paralela en el ledger. `approx_weight_grams` nunca interviene en el cálculo ni en el stock de una venta `UNIT`.
+
+Funciona igual online (`complete_discounted_sale`) y offline (SQLite `local_sale_items`/`insert_sale`, outbox, `sync_offline_sale`, reintento, idempotencia, recuperación tras reinicio) — mismo validador de negocio replicado en Rust y en SQL, no hay una ruta "sólo online".
+
+**Migraciones:** Postgres `202609230034_unit_sale_support.sql` (columna `sale_items.quantity_units`, `complete_discounted_sale`/`sync_offline_sale` con la rama UNIT, y `CREATE OR REPLACE` de cuatro funciones preexistentes que ya asumían que `weight_grams` podía representar unidades — ver "Compatibilidad con RPCs preexistentes" abajo). SQLite `009_unit_sale_support.sql` (rebuild no destructivo de `local_sales`/`local_sale_items` para relajar `weight_grams`/agregar `quantity_units` preservando historial ya confirmado).
+
+**Compatibilidad con RPCs preexistentes:** `get_profitability_analytics`, `get_replenishment_plan`, `cancel_sale` y `get_admin_dashboard` (todas de sprints anteriores a éste) ya leían `sale_items.weight_grams` asumiendo que ahí vendría también la cantidad de una venta `UNIT`. Separar `quantity_units` en una columna propia las hubiera roto — en particular `cancel_sale`, que habría crasheado con una violación NOT NULL en `stock_movements.quantity_grams` al anular cualquier venta con una línea `UNIT`. Las cuatro se reemplazaron (`CREATE OR REPLACE FUNCTION`, misma firma) usando `coalesce(weight_grams, quantity_units)` donde antes leían sólo `weight_grams`. Limitación cosmética aceptada y documentada: los widgets de "top productos por kg" del dashboard admin siguen etiquetando en kg un valor que para un producto `UNIT` es en realidad su cantidad de unidades; no afecta ranking por ingresos ni rentabilidad (que usan centavos, no gramos).
+
+**Motivo:** el pedido original sólo modeló el pack `UNIT` en Admin/Promociones (D-039) y dejó la venta POS de `UNIT` fuera de alcance explícitamente. Este sprint la pide completa — "no implementar UNIT sólo para el POS conectado" — porque hay productos reales (hamburguesas) que se venden por unidad y hoy son invisibles en el mostrador.
+
+---
+
+## D-043 — Directorio de categorías del POS, independiente de la categoría principal de cualquier producto
+
+**Status:** Active
+
+Las tabs de categoría del POS no se infieren filtrando productos por `category_id` principal. Existe un directorio de categorías explícito y sincronizado: `get_pos_categories(p_branch_id)` (online) y la tabla SQLite `catalog_categories` (offline, poblada desde `categories` en `pull_pos_state`), con id/nombre/color/orden/activa. `apply_catalog_pull` (Rust) reconcilia esta tabla marcando todo inactivo y luego dando de alta el set fresco como activo (nunca `DELETE`, para no violar la FK de un producto local desactivado-no-borrado que todavía referencia una categoría vieja).
+
+Una categoría con al menos una asignación real (`product_category_assignments`, sea principal o secundaria) entra en el directorio y genera su tab con su propio nombre/color, sin depender de si algún producto la tiene como principal. Una categoría sin ninguna asignación puede omitirse. `products.category_id` (categoría principal) sigue existiendo sin cambios para color/etiqueta de la card de un producto individual y para consumidores legacy de una sola categoría — pero deja de ser la única fuente de qué tabs existen.
+
+**Motivo:** corrige una limitación real de D-041 (v1): una categoría usada sólo como secundaria (ej. "Embutidos", si ningún producto la tiene como principal — caso concreto: "Chorizo de cerdo" con principal Cerdo y secundaria Embutidos) no generaba tab propia. El pedido de este sprint lo señaló explícitamente: "no inferir las tabs solamente desde `products.category_id`".

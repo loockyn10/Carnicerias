@@ -1,4 +1,5 @@
 import { stockPriority, type StockPriority } from "./multibranch";
+import { normalizeSearchText } from "./text-search";
 
 export type BranchStockUnit = "WEIGHT" | "UNIT";
 
@@ -63,10 +64,9 @@ export function buildBranchStockRows(
   return [...rowsByProduct.values()].sort((a, b) => a.productName.localeCompare(b.productName, "es"));
 }
 
-/** Case- and accent-insensitive normalization ("vacio" must match "Vacío"). */
-export function normalizeStockSearch(value: string): string {
-  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLocaleLowerCase("es").trim();
-}
+/** Alias kept for existing imports; normalizeSearchText in "./text-search" is the canonical
+ * export shared by every Admin search box (Stock por sucursal, Precios, Promociones). */
+export const normalizeStockSearch = normalizeSearchText;
 
 /** Filters rows by free-text (name or SKU) and an optional category id. */
 export function filterBranchStockRows(

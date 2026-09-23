@@ -6,6 +6,8 @@ import {
   parseWeightToGrams,
   priceForWeight,
   calculateSalePricing,
+  calculateWeightPackSalePricing,
+  calculateUnitPackSalePricing,
   isScaleReadingFresh,
   sumMoney,
   type ScaleKind
@@ -13,6 +15,7 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
+import { buildCategoryTabs, productMatchesCategory, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
@@ -41,12 +44,27 @@ interface CatalogProduct {
   categoryName: string;
   categoryColorHex: string | null;
   categorySortOrder: number;
+  /** Every active category this product is assigned to (principal included) — used only for
+   * multi-category filtering; the card's color/name keep coming from categoryId/Name/ColorHex. */
+  categoryIds: string[];
   productId: string;
   productName: string;
   productSku: string | null;
+  unitType: "WEIGHT" | "UNIT";
   pricePerKgCents: bigint;
 }
-interface DiscountRule { id: string; productId: string; branchId: string | null; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }
+interface DiscountRule {
+  id: string;
+  productId: string;
+  branchId: string | null;
+  promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL";
+  minimumGrams: number | null;
+  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+  discountValue: string | null;
+  packQuantityGrams: number | null;
+  packQuantityUnits: number | null;
+  packPriceCents: string | null;
+}
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
 // Sólo 3 métodos operativos se ofrecen para ventas nuevas. CREDIT/OTHER siguen
@@ -64,6 +82,68 @@ const SHIFT_DURATION_REFRESH_MS = 60_000;
 
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
+}
+
+/** "2 kg por $18.000" para un pack; "15% OFF desde 2 kg" / "$9.000/kg desde 2 kg" para un
+ * threshold — mismo criterio que la lista de Promociones en Admin (nunca precio/kg calculado). */
+function discountBadgeLabel(rule: DiscountRule): string | null {
+  if (rule.promotionMode === "PACK_FIXED_TOTAL") {
+    if (rule.packQuantityGrams == null || rule.packPriceCents == null) return null;
+    return `${(rule.packQuantityGrams / 1_000).toLocaleString("es-AR")} kg por ${formatCurrency(BigInt(rule.packPriceCents))}`;
+  }
+  if (rule.discountType == null || rule.discountValue == null || rule.minimumGrams == null) return null;
+  const value = rule.discountType === "PERCENTAGE" ? `${String(Number(rule.discountValue) / 100)}% OFF` : `${formatCurrency(BigInt(rule.discountValue))}/kg`;
+  return `${value} desde ${formatWeight(rule.minimumGrams)}`;
+}
+
+interface ComputedLine {
+  pricing: ReturnType<typeof calculateSalePricing>;
+  discountRuleId: string | null;
+  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+  discountValue: bigint | null;
+  promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
+}
+
+/** WEIGHT pricing: an explicit pack (sellAsPack, WEIGHT never auto-detects a pack — the real
+ * weighed grams never land exactly on the nominal pack amount) takes priority; otherwise the
+ * usual threshold lookup by weighed grams, unchanged from before packs existed. */
+function computeWeightLine(
+  listPriceCents: bigint, weightGrams: number, sellAsPack: boolean, pack: DiscountRule | null,
+  discounts: DiscountRule[], productId: string, branchId: string, paymentMethod: PaymentMethod, cashDiscountBps: bigint
+): ComputedLine {
+  if (sellAsPack && pack?.packPriceCents != null) {
+    const pricing = calculateWeightPackSalePricing({
+      listPriceCents, weightGrams, paymentMethod, cashDiscountBps, packPriceCents: BigInt(pack.packPriceCents)
+    });
+    return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL" };
+  }
+  const applicableRules = discounts.filter((rule) => rule.promotionMode === "THRESHOLD" && rule.productId === productId && rule.minimumGrams != null)
+    .sort((left, right) => (right.minimumGrams ?? 0) - (left.minimumGrams ?? 0) || Number(right.branchId === branchId) - Number(left.branchId === branchId));
+  const rule = applicableRules.find((candidate) => (candidate.minimumGrams ?? Infinity) <= weightGrams);
+  const promotion = rule?.discountType && rule.discountValue != null ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null;
+  const pricing = calculateSalePricing({ listPriceCents, quantity: weightGrams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps, promotion });
+  return {
+    pricing, discountRuleId: rule?.id ?? null, discountType: rule?.discountType ?? null,
+    discountValue: rule?.discountValue != null ? BigInt(rule.discountValue) : null, promotionMode: null
+  };
+}
+
+/** UNIT pricing: no balanza, no THRESHOLD (WEIGHT-only by design) — a pack applies automatically
+ * on exact multiples of its quantity (no manual toggle, unlike WEIGHT: unit counts are exact, no
+ * scale variance to worry about), with any remainder at the normal cash price. */
+function computeUnitLine(
+  listPriceCents: bigint, quantityUnits: number, pack: DiscountRule | null, paymentMethod: PaymentMethod, cashDiscountBps: bigint
+): ComputedLine {
+  const wholePacks = pack?.packQuantityUnits ? Math.floor(quantityUnits / pack.packQuantityUnits) : 0;
+  if (pack?.packQuantityUnits != null && pack.packPriceCents != null && wholePacks >= 1) {
+    const pricing = calculateUnitPackSalePricing({
+      listPriceCents, quantityUnits, paymentMethod, cashDiscountBps,
+      pack: { id: pack.id, packQuantityUnits: pack.packQuantityUnits, packPriceCents: BigInt(pack.packPriceCents) }
+    });
+    return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL" };
+  }
+  const pricing = calculateSalePricing({ listPriceCents, quantity: quantityUnits, quantityDivisor: 1, paymentMethod, cashDiscountBps, promotion: null });
+  return { pricing, discountRuleId: null, discountType: null, discountValue: null, promotionMode: null };
 }
 
 function formatShiftTime(timestamp: string): string {
@@ -230,6 +310,7 @@ export default function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const [categoryDirectory, setCategoryDirectory] = useState<CategoryDirectoryEntryLike[]>([]);
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [cashDiscountBps, setCashDiscountBps] = useState(0);
@@ -239,6 +320,8 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(null);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [weightInput, setWeightInput] = useState("");
+  const [quantityInput, setQuantityInput] = useState(1);
+  const [sellAsPack, setSellAsPack] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -461,11 +544,12 @@ export default function App() {
       if (desktop) {
         if (localRuntime?.branchId !== branchId) {
           setCatalog([]);
+          setCategoryDirectory([]);
           return;
         }
-        const data = await localDatabase.catalog(branchId);
+        const [data, directory] = await Promise.all([localDatabase.catalog(branchId), localDatabase.categories()]);
         if (controller.signal.aborted) return;
-        setCatalog(data.filter((row) => row.unitType === "WEIGHT").map((row) => ({
+        setCatalog(data.map((row) => ({
           organizationId: row.organizationId,
           branchId: row.branchId,
           branchName: row.branchName,
@@ -473,20 +557,25 @@ export default function App() {
           categoryName: row.categoryName,
           categoryColorHex: row.categoryColorHex,
           categorySortOrder: row.categorySortOrder,
+          categoryIds: row.categoryIds.length ? row.categoryIds : [row.categoryId],
           productId: row.productId,
           productName: row.productName,
           productSku: row.productSku,
+          unitType: row.unitType,
           pricePerKgCents: BigInt(row.pricePerKgCents)
         })));
+        setCategoryDirectory(directory);
         return;
       }
-      const { data, error: catalogError } = await supabase.rpc("get_pos_catalog", {
-        p_branch_id: branchId
-      });
+      const [{ data, error: catalogError }, { data: categoriesData, error: categoriesError }] = await Promise.all([
+        supabase.rpc("get_pos_catalog", { p_branch_id: branchId }),
+        supabase.rpc("get_pos_categories", { p_branch_id: branchId })
+      ]);
         if (catalogError) throw catalogError;
+        if (categoriesError) throw categoriesError;
         if (controller.signal.aborted) return;
         setCatalog(
-          data.filter((row) => row.unit_type === "WEIGHT").map((row) => ({
+          data.map((row) => ({
             organizationId: row.organization_id,
             branchId: row.branch_id,
             branchName: row.branch_name,
@@ -494,12 +583,15 @@ export default function App() {
             categoryName: row.category_name,
             categoryColorHex: row.category_color_hex,
             categorySortOrder: row.category_sort_order,
+            categoryIds: row.category_ids.length ? row.category_ids : [row.category_id],
             productId: row.product_id,
             productName: row.product_name,
             productSku: row.product_sku,
+            unitType: row.unit_type,
             pricePerKgCents: BigInt(row.price_per_kg_cents)
           }))
         );
+        setCategoryDirectory(categoriesData.map((row) => ({ id: row.id, name: row.name, colorHex: row.color_hex, sortOrder: row.sort_order })));
       })()
       .catch((catalogError: unknown) => {
         if (!controller.signal.aborted) {
@@ -707,24 +799,17 @@ export default function App() {
     await runSync();
   }
 
-  const categories = useMemo(() => {
-    const unique = new Map<string, { id: string; name: string; color: string | null; order: number }>();
-    for (const product of catalog) {
-      unique.set(product.categoryId, {
-        id: product.categoryId,
-        name: product.categoryName,
-        color: product.categoryColorHex,
-        order: product.categorySortOrder
-      });
-    }
-    return [...unique.values()].sort((left, right) => left.order - right.order);
-  }, [catalog]);
+  // Los tabs salen del directorio de categorías sincronizado explícitamente (cualquier categoría
+  // activa con al menos un producto asignado, principal o secundaria — ver
+  // apps/pos/src/lib/catalog.ts), no de la categoría principal de un producto en particular. Una
+  // categoría usada sólo como "también aparece en" sigue generando su propio tab.
+  const categories = useMemo(() => buildCategoryTabs(categoryDirectory), [categoryDirectory]);
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase("es-AR");
     return catalog.filter(
       (product) =>
-        (categoryId === "ALL" || product.categoryId === categoryId) &&
+        productMatchesCategory(product, categoryId) &&
         (!normalizedSearch ||
           product.productName.toLocaleLowerCase("es-AR").includes(normalizedSearch) ||
           product.productSku?.toLocaleLowerCase("es-AR").includes(normalizedSearch))
@@ -739,7 +824,10 @@ export default function App() {
     () => ticket.reduce((total, line) => total + line.weightGrams, 0),
     [ticket]
   );
-  const ticketListSubtotal = useMemo(() => sumMoney(ticket.map((line) => priceForWeight(line.originalPricePerKgCents ?? line.pricePerKgCents, line.weightGrams))), [ticket]);
+  const ticketListSubtotal = useMemo(() => sumMoney(ticket.map((line) => {
+    const listPrice = line.originalPricePerKgCents ?? line.pricePerKgCents;
+    return line.quantityUnits != null ? listPrice * BigInt(line.quantityUnits) : priceForWeight(listPrice, line.weightGrams);
+  })), [ticket]);
   const ticketCashDiscount = useMemo(() => sumMoney(ticket.map((line) => line.cashDiscountCents ?? 0n)), [ticket]);
   const ticketPromotionDiscount = useMemo(() => sumMoney(ticket.map((line) => line.promotionDiscountCents ?? 0n)), [ticket]);
 
@@ -749,16 +837,33 @@ export default function App() {
     if (!paymentMethod) return;
     const method = paymentMethod;
     setTicket((current) => current.map((line) => {
-      const pricing = calculateSalePricing({
-        listPriceCents: line.originalPricePerKgCents ?? line.pricePerKgCents,
-        quantity: line.weightGrams,
-        quantityDivisor: 1_000,
-        paymentMethod: method,
-        cashDiscountBps: BigInt(cashDiscountBps),
-        promotion: line.discountType && line.discountValue != null && line.discountRuleId
-          ? { id: line.discountRuleId, discountType: line.discountType, discountValue: line.discountValue }
-          : null
-      });
+      const listPriceCents = line.originalPricePerKgCents ?? line.pricePerKgCents;
+      let pricing: ReturnType<typeof calculateSalePricing>;
+      if (line.quantityUnits != null) {
+        // Línea UNIT: si tenía un pack, hay que recalcularlo contra el rule actual (el precio
+        // total del pack sí puede necesitar re-derivar cash/promo discount con el nuevo método de
+        // pago, aunque el TOTAL del pack en sí no cambie).
+        const pack = line.discountRuleId ? discounts.find((rule) => rule.id === line.discountRuleId) ?? null : null;
+        pricing = computeUnitLine(listPriceCents, line.quantityUnits, pack, method, BigInt(cashDiscountBps)).pricing;
+      } else if (line.promotionMode === "PACK_FIXED_TOTAL" && line.discountRuleId) {
+        // Línea pack WEIGHT: no escala con el peso ni con el descuento por pago (precio total
+        // fijo, ver calculateWeightPackSalePricing) — recalcularla como threshold perdería el
+        // pack al cambiar el método de pago. subtotalCents de una línea pack siempre ES el precio
+        // del pack (nunca cambia con el método de pago), así que sirve directo como
+        // packPriceCents al recalcular.
+        pricing = calculateWeightPackSalePricing({
+          listPriceCents, weightGrams: line.weightGrams, paymentMethod: method,
+          cashDiscountBps: BigInt(cashDiscountBps), packPriceCents: line.subtotalCents
+        });
+      } else {
+        pricing = calculateSalePricing({
+          listPriceCents, quantity: line.weightGrams, quantityDivisor: 1_000, paymentMethod: method,
+          cashDiscountBps: BigInt(cashDiscountBps),
+          promotion: line.discountType && line.discountValue != null && line.discountRuleId
+            ? { id: line.discountRuleId, discountType: line.discountType, discountValue: line.discountValue }
+            : null
+        });
+      }
       return { ...line, pricePerKgCents: pricing.finalPriceCents, cashDiscountBps: pricing.cashDiscountBps,
         cashDiscountCents: pricing.cashDiscountCents, promotionDiscountCents: pricing.promotionDiscountCents,
         discountCents: pricing.discountCents, subtotalCents: pricing.subtotalCents };
@@ -769,40 +874,57 @@ export default function App() {
     setSelectedProduct(product);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
+    setQuantityInput(line?.quantityUnits ?? 1);
+    setSellAsPack(line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
   }
+
+  // Único pack activo del producto seleccionado (la promoción garantiza como máximo uno vigente
+  // por producto/sucursal — ver product_weight_discounts_pack_active_idx).
+  const packRuleForSelectedProduct = useMemo(() => {
+    if (!selectedProduct) return null;
+    return discounts.find((rule) => rule.productId === selectedProduct.productId && rule.promotionMode === "PACK_FIXED_TOTAL"
+      && (rule.branchId === branchId || rule.branchId === null)) ?? null;
+  }, [discounts, selectedProduct, branchId]);
 
   function saveLine(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProduct) return;
 
     try {
-      const grams = parseWeightToGrams(weightInput);
-      const applicableRules = discounts.filter((rule) => rule.productId === selectedProduct.productId)
-        .sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-      const rule = applicableRules.find((candidate) => candidate.minimumGrams <= grams);
       // Todavía puede no haber método de pago elegido en este punto: se usa un
       // placeholder neutro sólo para completar el cálculo internamente — no se
       // muestra nada derivado de esto hasta que se elija un método real, y el
       // efecto de arriba recalcula todas las líneas en cuanto eso pase.
-      const applied = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000,
-        paymentMethod: paymentMethod ?? "CASH", cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
-      const line: TicketLine = {
-        id: editingLineId ?? crypto.randomUUID(),
-        productId: selectedProduct.productId,
-        productName: selectedProduct.productName,
-        weightGrams: grams,
-        pricePerKgCents: applied.finalPriceCents,
-        originalPricePerKgCents: selectedProduct.pricePerKgCents,
-        discountRuleId: rule?.id ?? null,
-        discountType: rule?.discountType ?? null,
-        discountValue: rule ? BigInt(rule.discountValue) : null,
-        discountCents: applied.discountCents,
-        cashDiscountBps: applied.cashDiscountBps,
-        cashDiscountCents: applied.cashDiscountCents,
-        promotionDiscountCents: applied.promotionDiscountCents,
-        subtotalCents: applied.subtotalCents
-      };
+      const method = paymentMethod ?? "CASH";
+      const isUnit = selectedProduct.unitType === "UNIT";
+
+      let line: TicketLine;
+      if (isUnit) {
+        if (!Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
+        const computed = computeUnitLine(selectedProduct.pricePerKgCents, quantityInput, packRuleForSelectedProduct, method, BigInt(cashDiscountBps));
+        line = {
+          id: editingLineId ?? crypto.randomUUID(), productId: selectedProduct.productId, productName: selectedProduct.productName,
+          weightGrams: 0, quantityUnits: quantityInput, pricePerKgCents: computed.pricing.finalPriceCents,
+          originalPricePerKgCents: selectedProduct.pricePerKgCents, discountRuleId: computed.discountRuleId,
+          discountType: computed.discountType, discountValue: computed.discountValue, promotionMode: computed.promotionMode,
+          discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
+          cashDiscountCents: computed.pricing.cashDiscountCents, promotionDiscountCents: computed.pricing.promotionDiscountCents,
+          subtotalCents: computed.pricing.subtotalCents
+        };
+      } else {
+        const grams = parseWeightToGrams(weightInput);
+        const pack = sellAsPack ? packRuleForSelectedProduct : null;
+        const computed = computeWeightLine(selectedProduct.pricePerKgCents, grams, sellAsPack, pack, discounts, selectedProduct.productId, branchId, method, BigInt(cashDiscountBps));
+        line = {
+          id: editingLineId ?? crypto.randomUUID(), productId: selectedProduct.productId, productName: selectedProduct.productName,
+          weightGrams: grams, pricePerKgCents: computed.pricing.finalPriceCents, originalPricePerKgCents: selectedProduct.pricePerKgCents,
+          discountRuleId: computed.discountRuleId, discountType: computed.discountType, discountValue: computed.discountValue,
+          promotionMode: computed.promotionMode, discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
+          cashDiscountCents: computed.pricing.cashDiscountCents, promotionDiscountCents: computed.pricing.promotionDiscountCents,
+          subtotalCents: computed.pricing.subtotalCents
+        };
+      }
 
       setTicket((current) =>
         editingLineId
@@ -812,8 +934,10 @@ export default function App() {
       setSelectedProduct(null);
       setEditingLineId(null);
       setWeightInput("");
+      setQuantityInput(1);
+      setSellAsPack(false);
     } catch (weightError) {
-      setError(weightError instanceof Error ? weightError.message : "Peso inválido");
+      setError(weightError instanceof Error ? weightError.message : "Cantidad inválida");
     }
   }
 
@@ -867,13 +991,21 @@ export default function App() {
 
     const { data, error: saleError } = await supabase.rpc("complete_discounted_sale", {
       p_branch_id: branchId,
-      p_items: ticket.map((line) => ({
-        product_id: line.productId,
-        weight_grams: line.weightGrams,
-        expected_price_per_kg_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
-        expected_cash_discount_bps: (line.cashDiscountBps ?? 0n).toString(),
-        expected_final_price_per_kg_cents: line.pricePerKgCents.toString()
-      })),
+      p_items: ticket.map((line) => line.quantityUnits != null
+        ? {
+            product_id: line.productId,
+            quantity_units: line.quantityUnits,
+            expected_price_per_unit_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
+            pack_promotion_id: line.promotionMode === "PACK_FIXED_TOTAL" ? line.discountRuleId : null
+          }
+        : {
+            product_id: line.productId,
+            weight_grams: line.weightGrams,
+            expected_price_per_kg_cents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
+            expected_cash_discount_bps: (line.cashDiscountBps ?? 0n).toString(),
+            expected_final_price_per_kg_cents: line.pricePerKgCents.toString(),
+            pack_promotion_id: line.promotionMode === "PACK_FIXED_TOTAL" ? line.discountRuleId : null
+          }),
       p_payment_method: method
     });
 
@@ -1149,8 +1281,11 @@ export default function App() {
               >
                 <span className="block text-lg font-black">{product.productName}</span>
                 <span className="pos-product-category mt-2 block text-sm text-stone-400">{product.categoryName}</span>
-                <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / kg</small></span>
-                {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{rule.discountType === "PERCENTAGE" ? `${String(Number(rule.discountValue) / 100)}% OFF` : `${formatCurrency(BigInt(rule.discountValue))}/kg`} desde {formatWeight(rule.minimumGrams)}</span>)}
+                <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>
+                {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
+                  const label = discountBadgeLabel(rule);
+                  return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
+                })}
               </button>
             ))}
           </div>
@@ -1184,17 +1319,22 @@ export default function App() {
                       <h3 className="font-black">{line.productName}</h3>
                       {shouldDisplayTicketAmounts(paymentMethod) ? (
                         <>
-                          <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)} × {formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg</p>
+                          <p className="mt-1 text-sm text-stone-400">
+                            {line.quantityUnits != null
+                              ? `${String(line.quantityUnits)} u × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
+                              : `${formatWeight(line.weightGrams)} × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg`}
+                          </p>
+                          {line.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 text-xs font-bold text-amber-300">Promo pack</p> : null}
                           {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
                         </>
                       ) : (
-                        <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)}</p>
+                        <p className="mt-1 text-sm text-stone-400">{line.quantityUnits != null ? `${String(line.quantityUnits)} u` : formatWeight(line.weightGrams)}</p>
                       )}
                     </div>
                     {shouldDisplayTicketAmounts(paymentMethod) ? <strong className="text-lg text-rose-400">{formatCurrency(line.subtotalCents)}</strong> : null}
                   </div>
                   <div className="mt-3 flex gap-3 text-sm font-bold">
-                    <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>Modificar peso</button>
+                    <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>{line.quantityUnits != null ? "Modificar cantidad" : "Modificar peso"}</button>
                     <button className="text-red-400" onClick={() => setTicket((current) => current.filter((candidate) => candidate.id !== line.id))}>Eliminar</button>
                   </div>
                 </article>
@@ -1375,40 +1515,94 @@ export default function App() {
           <form className="pos-modal-panel pos-weight-modal w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{editingLineId ? "Modificar línea" : "Agregar al ticket"}</p>
             <h2 className="mt-2 text-3xl font-black">{selectedProduct.productName}</h2>
-            {shouldDisplayTicketAmounts(paymentMethod) ? <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p> : null}
-            {desktop && scale.config.kind !== "MANUAL" ? (
-              <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
-                <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
-                  {scale.connectionState === "CONNECTED" ? "⚖ Balanza conectada" : scale.connectionState === "CONNECTING" ? "⚖ Conectando…" : "⚖ Balanza desconectada"}
-                </p>
-                {freshScaleReading ? (
-                  <button
-                    type="button"
-                    className="mt-2 flex w-full items-center justify-between rounded-xl bg-stone-800 px-4 py-3 text-left hover:bg-stone-700"
-                    onClick={() => setWeightInput((freshScaleReading.grams / 1_000).toFixed(3).replace(".", ","))}
-                  >
-                    <span className="font-black text-stone-100">{formatWeight(freshScaleReading.grams)}</span>
-                    <span className="text-xs font-bold text-rose-300">Usar este peso</span>
-                  </button>
-                ) : (
-                  <p className="mt-2 text-sm text-stone-500">
-                    {scale.connectionState === "CONNECTED" ? "Esperando una lectura estable…" : "Ingresá el peso manualmente."}
+            {shouldDisplayTicketAmounts(paymentMethod) ? <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / {selectedProduct.unitType === "WEIGHT" ? "kg" : "u"}</p> : null}
+            {selectedProduct.unitType === "WEIGHT" ? (
+              <>
+                {desktop && scale.config.kind !== "MANUAL" ? (
+                  <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
+                    <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
+                      {scale.connectionState === "CONNECTED" ? "⚖ Balanza conectada" : scale.connectionState === "CONNECTING" ? "⚖ Conectando…" : "⚖ Balanza desconectada"}
+                    </p>
+                    {freshScaleReading ? (
+                      <button
+                        type="button"
+                        className="mt-2 flex w-full items-center justify-between rounded-xl bg-stone-800 px-4 py-3 text-left hover:bg-stone-700"
+                        onClick={() => setWeightInput((freshScaleReading.grams / 1_000).toFixed(3).replace(".", ","))}
+                      >
+                        <span className="font-black text-stone-100">{formatWeight(freshScaleReading.grams)}</span>
+                        <span className="text-xs font-bold text-rose-300">Usar este peso</span>
+                      </button>
+                    ) : (
+                      <p className="mt-2 text-sm text-stone-500">
+                        {scale.connectionState === "CONNECTED" ? "Esperando una lectura estable…" : "Ingresá el peso manualmente."}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+                <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">
+                  Peso manual en kg
+                  <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />
+                </label>
+                {packRuleForSelectedProduct?.packQuantityGrams != null && packRuleForSelectedProduct.packPriceCents != null ? (
+                  <label className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-amber-500/60 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-200">
+                    <span>Vender como pack ({(packRuleForSelectedProduct.packQuantityGrams / 1_000).toLocaleString("es-AR")} kg – {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))})</span>
+                    <input checked={sellAsPack} onChange={(event) => setSellAsPack(event.target.checked)} type="checkbox" />
+                  </label>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* UNIT: cantidad entera con [-] [+] + input manual — nunca balanza ni gramos. */}
+                <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">
+                  Cantidad de unidades
+                  <div className="flex items-center gap-3">
+                    <button
+                      className="h-14 w-14 rounded-2xl border border-stone-600 bg-stone-950 text-2xl font-black hover:bg-stone-800 disabled:opacity-40"
+                      disabled={quantityInput <= 1}
+                      onClick={() => setQuantityInput((current) => Math.max(1, current - 1))}
+                      type="button"
+                    >
+                      −
+                    </button>
+                    <input
+                      autoFocus
+                      className="w-full rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-center text-4xl font-black outline-none focus:border-rose-500"
+                      inputMode="numeric"
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value.replace(/[^0-9]/g, ""));
+                        setQuantityInput(Number.isFinite(parsed) && parsed > 0 ? parsed : 1);
+                      }}
+                      value={quantityInput}
+                    />
+                    <button
+                      className="h-14 w-14 rounded-2xl border border-stone-600 bg-stone-950 text-2xl font-black hover:bg-stone-800"
+                      onClick={() => setQuantityInput((current) => current + 1)}
+                      type="button"
+                    >
+                      +
+                    </button>
+                  </div>
+                </label>
+                {packRuleForSelectedProduct?.packQuantityUnits != null && packRuleForSelectedProduct.packPriceCents != null ? (
+                  <p className="mt-3 rounded-2xl border border-amber-500/60 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-200">
+                    Pack: {packRuleForSelectedProduct.packQuantityUnits} u por {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))} — se aplica automáticamente en múltiplos exactos.
                   </p>
-                )}
-              </div>
-            ) : null}
-            <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">
-              Peso manual en kg
-              <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />
-            </label>
+                ) : null}
+              </>
+            )}
             {shouldDisplayTicketAmounts(paymentMethod) ? (
               <div className="mt-5 rounded-2xl bg-stone-950 p-4">
                 {(() => { if (!paymentMethod) return null; try {
-                  const grams = parseWeightToGrams(weightInput);
-                  const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-                  const rule = rules.find((candidate) => candidate.minimumGrams <= grams);
-                  const preview = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
-                  return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
+                  const computed = selectedProduct.unitType === "WEIGHT"
+                    ? computeWeightLine(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), sellAsPack, packRuleForSelectedProduct, discounts, selectedProduct.productId, branchId, paymentMethod, BigInt(cashDiscountBps))
+                    : computeUnitLine(selectedProduct.pricePerKgCents, quantityInput, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps));
+                  const preview = computed.pricing;
+                  return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
+                    {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
+                      {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}
+                      {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
+                    </>}
+                    <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
                 } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
               </div>
             ) : null}

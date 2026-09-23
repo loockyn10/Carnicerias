@@ -180,6 +180,13 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       p_active: formData.get("active") === "on"
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
+    // Categoría principal + adicionales en una sola llamada transaccional: set_product_categories
+    // agrega la principal si faltara en el set marcado, así el formulario no tiene que forzar el
+    // checkbox de la categoría principal para que quede coherente.
+    await rpcOrThrow("set_product_categories", {
+      p_product_id: productId, p_primary_category_id: text(formData, "category_id"),
+      p_category_ids: ids(formData, "category_ids")
+    });
 
     // Precio de venta = decisión manual: se guarda directo, nunca derivado de costo+margen. Sólo
     // escribe si cambió respecto al valor vigente (hidden input), igual que el patrón anterior.
@@ -230,6 +237,10 @@ export async function createProductModalAction(_: ProductModalState, formData: F
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: role });
+    await rpcOrThrow("set_product_categories", {
+      p_product_id: productId, p_primary_category_id: text(formData, "category_id"),
+      p_category_ids: ids(formData, "category_ids")
+    });
     if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
     if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
     revalidatePath("/admin/products");
@@ -299,15 +310,34 @@ async function commercialRpc(name: string, args: Record<string, unknown>) {
 }
 
 async function saveWeightDiscount(formData: FormData) {
-  const discountType = text(formData, "discount_type");
-  if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
-  await commercialRpc("save_weight_discount", {
+  const promotionMode = text(formData, "promotion_mode") || "THRESHOLD";
+  const shared = {
     p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
-    p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
-    p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value")),
-    p_active: formData.get("active") === "on", p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
-    p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null
-  });
+    p_active: formData.get("active") === "on",
+    p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
+    p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null,
+    p_promotion_mode: promotionMode
+  };
+  if (promotionMode === "PACK_FIXED_TOTAL") {
+    // A pack's quantity is expressed in kg or in units depending on the product's own sale
+    // type — the client only ever renders the field that matches, but the server RPC re-checks
+    // it against the real product row regardless (see 202609230031_promotion_pack_fixed_total.sql).
+    const packUnitType = text(formData, "pack_unit_type");
+    await commercialRpc("save_weight_discount", {
+      ...shared,
+      p_pack_quantity_grams: packUnitType === "WEIGHT" ? kilogramsToGrams(text(formData, "pack_quantity_kg")) : null,
+      p_pack_quantity_units: packUnitType === "UNIT" ? unitsToInteger(text(formData, "pack_quantity_units")) : null,
+      p_pack_price_cents: pesosToCents(text(formData, "pack_price"))
+    });
+  } else {
+    const discountType = text(formData, "discount_type");
+    if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
+    await commercialRpc("save_weight_discount", {
+      ...shared,
+      p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
+      p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value"))
+    });
+  }
   revalidatePath("/admin/catalog");
   revalidatePath("/admin/promotions");
   revalidatePath("/admin/products");

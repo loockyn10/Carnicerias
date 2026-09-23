@@ -8,8 +8,9 @@ Este archivo contiene reglas de negocio que no deben reinterpretarse durante una
 - Peso: **integer grams**.
 - No usar floats para dinero.
 - `WEIGHT`: se vende por peso; UI en kg cuando corresponda.
-- `UNIT`: se vende por unidades.
+- `UNIT`: se vende por unidades. Soportado end-to-end en el POS (online y offline): la línea se carga por cantidad entera (mínimo 1), nunca por balanza; `sale_items.quantity_units`/`stock_movements.quantity_grams` (reutilizado como contador de unidades con signo, mismo precedente que `PRODUCTION_YIELD`, ver D-038) registran unidades, nunca gramos. `approx_weight_grams` nunca interviene en stock/venta de `UNIT`.
 - No mezclar kg y unidades en un único total sin separar semánticamente.
+- Corregir la forma de venta (`WEIGHT ↔ UNIT`) de un producto ya creado sólo se permite si no tiene historial operativo (ventas, movimientos de stock, producción, promociones — ver D-040); precio/costo no bloquean por sí solos. Nunca se reinterpreta una cantidad ya registrada (gramos no pasan a leerse como unidades).
 
 ## Estados de venta
 
@@ -63,12 +64,19 @@ Ejemplo:
 
 ## Promociones
 
-Tipos conocidos:
+Dos modalidades (`promotion_mode`), ver D-039:
 
-- porcentaje;
-- precio fijo por kg.
+- **THRESHOLD** (umbral, "desde cierta cantidad"): porcentaje o precio fijo por kg, sin cambios respecto al modelo anterior. Sólo para productos `WEIGHT`.
+- **PACK_FIXED_TOTAL** (pack a precio total, ej. "Vacío 2kg por $18.000", "Hamburguesa 40u por $28.000"): una cantidad concreta (no un umbral) a un precio total fijo, cargado directamente por el administrador — nunca un precio/kg o precio/unidad calculado a mano. Disponible para `WEIGHT` o `UNIT` según el tipo de venta del producto.
 
 Las promociones conservan snapshots suficientes para reconstruir la venta histórica. `PERCENTAGE` se aplica después del descuento por pago. `FIXED_PRICE_PER_KG` fija el precio final por kg y se rechaza si supera el precio posterior al descuento por pago.
+
+Reglas de `PACK_FIXED_TOTAL`:
+
+- **WEIGHT**: el precio total se cobra siempre igual, sin importar el peso real pesado de la pieza (una pieza prearmada nunca da el peso nominal exacto); el peso real sigue registrándose para stock. Único control: el precio del pack no puede superar el precio de **lista** para el peso realmente pesado.
+- **UNIT**: aplica en múltiplos exactos de la cantidad del pack (80 unidades = 2 packs de 40); el resto de unidades se cobra a precio normal, nunca un descuento inventado para una cantidad parcial.
+- Un producto tiene como máximo una promoción `PACK_FIXED_TOTAL` activa por sucursal/global a la vez.
+- El POS de mostrador vende ambos: pack `WEIGHT` (toggle explícito "Vender como pack", peso real siempre registrado) y pack `UNIT` (automático por múltiplos exactos de la cantidad tipeada, sin toggle — no tiene sentido pesar ni elegir, sólo llegar o no al múltiplo).
 
 ## Snapshots históricos
 
@@ -93,6 +101,12 @@ Reglas:
 - no completar historia con costo actual;
 - si una venta no tiene costo snapshot, su facturación puede usarse pero su rentabilidad histórica no debe presentarse como conocida;
 - los productos legacy no deben romper el POS mientras se migran al nuevo modelo.
+
+## Categorías
+
+Un producto tiene una categoría **principal** (`products.category_id`, sigue fijando color/nombre en pantallas que sólo necesitan una etiqueta) y puede además pertenecer a otras categorías (`product_category_assignments`, ver D-041). El POS filtra por cualquiera de las categorías asignadas; "Todos" nunca duplica un producto multicategoría.
+
+Las tabs de categoría del POS **no se infieren desde los productos**: existe un directorio de categorías explícito (`get_pos_categories`/`categories` en `pull_pos_state`, tabla SQLite `catalog_categories`) con id/nombre/color/orden, independiente de qué producto sea principal de cada categoría. Una categoría con al menos una asignación (principal o secundaria) genera su tab con su propio nombre/color; una categoría sin ninguna asignación puede omitirse.
 
 ## Stock
 

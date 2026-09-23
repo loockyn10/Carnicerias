@@ -73,6 +73,36 @@ describe("offline sale envelope", () => {
     });
     expect(payload.items[0]).toMatchObject({ cashDiscountBps: "1000", cashDiscountCents: "144444", promotionDiscountCents: "65000", discountCents: "209444" });
   });
+
+  it("sends a UNIT line with quantityUnits and no weightGrams key at all, and no weight in its stock movement", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "CASH", createId: () => crypto.randomUUID(),
+      // Hamburguesa: 3 x $800 = $2.400, sin balanza ni gramos involucrados.
+      ticket: [{ id: "line", productId: "hamburguesa", productName: "Hamburguesa", weightGrams: 0, quantityUnits: 3,
+        pricePerKgCents: 800n, subtotalCents: 2_400n }]
+    });
+    expect(payload.items[0]).toMatchObject({ quantityUnits: 3, subtotalCents: "2400" });
+    expect(payload.items[0]).not.toHaveProperty("weightGrams");
+    expect(payload.stockMovements[0]?.quantityGrams).toBe("-3");
+    expect(payload.totalWeightGrams).toBe("0");
+  });
+
+  it("mixes a WEIGHT and a UNIT line in the same sale without either contaminating the other's total", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "CASH", createId: () => crypto.randomUUID(),
+      ticket: [
+        { id: "weight-line", productId: "vacio", productName: "Vacío", weightGrams: 1_000, pricePerKgCents: 10_000n, subtotalCents: 10_000n },
+        { id: "unit-line", productId: "hamburguesa", productName: "Hamburguesa", weightGrams: 0, quantityUnits: 3, pricePerKgCents: 800n, subtotalCents: 2_400n }
+      ]
+    });
+    expect(payload.totalCents).toBe("12400");
+    expect(payload.totalWeightGrams).toBe("1000");
+    expect(payload.items[0]).toHaveProperty("weightGrams", 1_000);
+    expect(payload.items[1]).not.toHaveProperty("weightGrams");
+    expect(payload.items[1]).toHaveProperty("quantityUnits", 3);
+  });
 });
 
 describe("outbox retry", () => {

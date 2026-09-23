@@ -4,6 +4,7 @@ import { formatCurrency } from "@carnicerias/business-logic";
 import { useActionState, useEffect, useMemo, useState } from "react";
 
 import { bulkSetProductPricesAction, type BulkPriceState } from "../app/admin/actions";
+import { normalizeSearchText } from "../lib/text-search";
 
 const input = "w-32 rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm";
 
@@ -29,6 +30,7 @@ function parseCents(value: string): number | null {
  */
 export function BulkPriceEditor({ rows }: { rows: BulkPriceRow[] }) {
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState("");
   const [state, action, pending] = useActionState(bulkSetProductPricesAction, {} as BulkPriceState);
 
   useEffect(() => {
@@ -46,8 +48,27 @@ export function BulkPriceEditor({ rows }: { rows: BulkPriceRow[] }) {
     return items;
   }, [edits, rows]);
 
+  // Filtra en el navegador sobre las filas ya cargadas (sin otro roundtrip). `edits` sigue
+  // indexado por row.id, así que ocultar una fila filtrada nunca pierde un cambio pendiente en
+  // ella — sólo cambia qué se muestra, no el estado de edición.
+  const visibleRows = useMemo(() => {
+    const normalized = normalizeSearchText(search);
+    if (!normalized) return rows;
+    return rows.filter((row) => normalizeSearchText(`${row.name} ${row.categoryName}`).includes(normalized));
+  }, [rows, search]);
+
   return <form action={action} className="mt-4">
     <input name="items" type="hidden" value={JSON.stringify(changedItems)} />
+    <label className="mb-3 grid max-w-sm gap-1 text-sm font-medium">
+      Buscar
+      <input
+        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Producto o categoría…"
+        type="search"
+        value={search}
+      />
+    </label>
     <div className="overflow-hidden rounded-xl border">
       <div className="max-h-[60vh] overflow-y-auto">
         <table className="w-full min-w-[640px] text-left text-sm">
@@ -55,7 +76,7 @@ export function BulkPriceEditor({ rows }: { rows: BulkPriceRow[] }) {
             <th className="p-3">Producto</th><th className="p-3">Categoría</th><th className="p-3">Tipo de venta</th>
             <th className="p-3">Precio actual</th><th className="p-3">Nuevo precio</th>
           </tr></thead>
-          <tbody>{rows.map((row) => {
+          <tbody>{visibleRows.map((row) => {
             const suffix = row.unitType === "WEIGHT" ? "/kg" : "/u";
             const raw = edits[row.id] ?? "";
             const isDirty = changedItems.some((item) => item.productId === row.id);
@@ -79,7 +100,7 @@ export function BulkPriceEditor({ rows }: { rows: BulkPriceRow[] }) {
           })}</tbody>
         </table>
       </div>
-      {!rows.length ? <p className="p-8 text-center text-stone-500">No hay productos de venta para cargar precio.</p> : null}
+      {!visibleRows.length ? <p className="p-8 text-center text-stone-500">{rows.length ? "Ningún producto coincide con la búsqueda." : "No hay productos de venta para cargar precio."}</p> : null}
     </div>
     <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm text-stone-500">{changedItems.length > 0 ? `${String(changedItems.length)} precio(s) modificado(s)` : "Sin cambios"}</p>

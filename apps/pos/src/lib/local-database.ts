@@ -6,7 +6,19 @@ import type {
   OutboxRecord
 } from "@carnicerias/sync";
 
-export interface LocalCommercialConfig { cashDiscountBps: number; discounts: { id: string; productId: string; branchId: string | null; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
+export interface LocalDiscountRow {
+  id: string;
+  productId: string;
+  branchId: string | null;
+  promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL";
+  minimumGrams: number | null;
+  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
+  discountValue: string | null;
+  packQuantityGrams: number | null;
+  packQuantityUnits: number | null;
+  packPriceCents: string | null;
+}
+export interface LocalCommercialConfig { cashDiscountBps: number; discounts: LocalDiscountRow[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
 
 export interface LocalRuntime {
   deviceId: string;
@@ -33,12 +45,22 @@ export interface LocalCatalogRow {
   categoryName: string;
   categoryColorHex: string | null;
   categorySortOrder: number;
+  categoryIds: string[];
   productId: string;
   productName: string;
   productSku: string | null;
   unitType: "WEIGHT" | "UNIT";
   pricePerKgCents: string;
   priceValidFrom: string;
+}
+
+/** The POS tab directory row — see get_local_categories / apply_catalog_pull in the Tauri
+ * backend. Independent of any product's principal category. */
+export interface LocalCategoryRow {
+  id: string;
+  name: string;
+  colorHex: string | null;
+  sortOrder: number;
 }
 
 export interface LocalSaleReceipt {
@@ -77,6 +99,7 @@ async function desktopVoid(command: string, args?: Record<string, unknown>): Pro
 export const localDatabase = {
   runtime: () => desktopOnly<LocalRuntime>("get_local_runtime"),
   catalog: (branchId: string) => desktopOnly<LocalCatalogRow[]>("get_local_catalog", { branchId }),
+  categories: () => desktopOnly<LocalCategoryRow[]>("get_local_categories"),
   applyPull: (pull: CatalogPullPayload, profileId: string, userEmail: string) =>
     desktopVoid("apply_catalog_pull", { pull, profileId, userEmail }),
   applyCommercialConfig: (config: unknown) => desktopVoid("apply_commercial_config", { config }),

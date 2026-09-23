@@ -9,7 +9,11 @@ import { ProductPricingFields } from "./product-pricing-fields";
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
 interface ProductManageModalProps {
-  product: { id: string; categoryId: string | null; name: string; slug: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean; inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH" };
+  product: {
+    id: string; categoryId: string | null; categoryIds: string[]; name: string; slug: string;
+    sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean;
+    inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH"; hasUnitTypeHistory: boolean;
+  };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
   categories: { id: string; name: string }[];
@@ -21,6 +25,8 @@ export function ProductManageModal({ product, price, promotion, categories, cost
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
   const activeRef = useRef<HTMLInputElement>(null);
+  const [primaryCategoryId, setPrimaryCategoryId] = useState(product.categoryId ?? "");
+  const [unitType, setUnitType] = useState(product.unitType);
 
   useEffect(() => {
     if (!open) return;
@@ -48,11 +54,33 @@ export function ProductManageModal({ product, price, promotion, categories, cost
       <section aria-labelledby={`manage-product-${product.id}`} aria-modal="true" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-5 text-left shadow-xl" role="dialog">
         <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black" id={`manage-product-${product.id}`}>Administrar producto — {product.name}</h2><p className="mt-1 text-sm text-stone-600">Editá el producto y su precio de venta.</p></div><button aria-label="Cerrar" className="text-xl text-stone-500 hover:text-stone-900" disabled={pending} onClick={() => setOpen(false)} type="button">×</button></div>
         <form action={action} className="mt-5 grid gap-4" ref={formRef}>
-          <input name="product_id" type="hidden" value={product.id} /><input name="slug" type="hidden" value={product.slug} /><input name="unit_type" type="hidden" value={product.unitType} />
+          <input name="product_id" type="hidden" value={product.id} /><input name="slug" type="hidden" value={product.slug} />
           <input name="current_price_cents" type="hidden" value={price?.cents ?? ""} /><input name="current_cost_cents" type="hidden" value={costCents ?? ""} />
           <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} defaultValue={product.name} name="name" required /></label>
-          <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} defaultValue={product.categoryId ?? ""} name="category_id" required>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label></div>
-          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={product.unitType} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm font-medium">Categoría principal<select className={input} name="category_id" onChange={(event) => setPrimaryCategoryId(event.target.value)} required value={primaryCategoryId}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label>
+          </div>
+          <div className="rounded-lg bg-stone-50 p-3">
+            <p className="text-sm font-bold">También aparece en</p>
+            <div className="mt-2 flex flex-wrap gap-4 text-sm">
+              {categories.filter((category) => category.id !== primaryCategoryId).map((category) => (
+                <label className="flex items-center gap-2" key={category.id}>
+                  <input defaultChecked={product.categoryIds.includes(category.id)} name="category_ids" type="checkbox" value={category.id} /> {category.name}
+                </label>
+              ))}
+              {categories.length <= 1 ? <p className="text-stone-500">No hay más categorías para asignar.</p> : null}
+            </div>
+          </div>
+          <label className="grid gap-1 text-sm font-medium">
+            Forma de venta
+            <select className={input} disabled={product.hasUnitTypeHistory} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}>
+              <option value="WEIGHT">Por kg</option>
+              <option value="UNIT">Por unidad</option>
+            </select>
+            {product.hasUnitTypeHistory ? <span className="text-xs text-stone-500">No se puede cambiar: este producto ya tiene ventas, movimientos de stock, producción o promociones asociadas.</span> : null}
+          </label>
+          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>
             <div className="mt-2 flex flex-wrap gap-4 text-sm">

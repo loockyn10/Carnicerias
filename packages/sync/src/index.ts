@@ -25,12 +25,16 @@ export interface OfflineSaleItemPayload {
   id: string;
   productId: string;
   productNameSnapshot: string;
-  weightGrams: number;
+  /** Exactly one of weightGrams/quantityUnits is ever present, matching the product's own
+   * unit_type — see docs/DOMAIN_RULES.md. */
+  weightGrams?: number;
+  quantityUnits?: number;
   pricePerKgCents: string;
   originalPricePerKgCents?: string;
   discountRuleId?: string | null;
   discountType?: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
   discountValue?: string | null;
+  promotionMode?: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
   discountCents?: string;
   cashDiscountBps?: string;
   cashDiscountCents?: string;
@@ -119,6 +123,10 @@ export interface CatalogPullRow {
   categoryColorHex: string | null;
   categorySortOrder: number;
   categoryActive: boolean;
+  /** Every active category this product is assigned to (principal included). categoryId/Name/
+   * ColorHex above stay the PRINCIPAL category — still the single source for the product card's
+   * color/label; categoryIds is only used for multi-category filtering. */
+  categoryIds: string[];
   productId: string;
   productName: string;
   productSku: string | null;
@@ -126,6 +134,16 @@ export interface CatalogPullRow {
   productActive: boolean;
   pricePerKgCents: string;
   priceValidFrom: string;
+}
+
+/** The POS category tab directory: every active category with at least one product assignment
+ * (principal or "también aparece en"), independent of any single product's principal category —
+ * a category used only as a secondary assignment still gets an entry here. */
+export interface CatalogCategoryDirectoryEntry {
+  id: string;
+  name: string;
+  colorHex: string | null;
+  sortOrder: number;
 }
 
 export interface CatalogPullPayload {
@@ -137,6 +155,7 @@ export interface CatalogPullPayload {
   branchName: string;
   branchActive: boolean;
   deviceStatus: "ACTIVE" | "DISABLED";
+  categories: CatalogCategoryDirectoryEntry[];
   roleName: string;
   catalog: CatalogPullRow[];
   removedProductIds: string[];
@@ -151,16 +170,20 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
   const timestamp = (input.now ?? new Date()).toISOString();
   const saleId = createId();
   const eventId = createId();
-  const items = input.ticket.map((line) => ({
+  const items: OfflineSaleItemPayload[] = input.ticket.map((line) => ({
     id: createId(),
     productId: line.productId,
     productNameSnapshot: line.productName,
-    weightGrams: line.weightGrams,
+    // Exactly one of the two, matching the product's own unit_type — never both, never neither
+    // (the omitted key is genuinely absent, not present-with-undefined, so it never reaches the
+    // wire at all once JSON-serialized).
+    ...(line.quantityUnits != null ? { quantityUnits: line.quantityUnits } : { weightGrams: line.weightGrams }),
     pricePerKgCents: line.pricePerKgCents.toString(),
     originalPricePerKgCents: (line.originalPricePerKgCents ?? line.pricePerKgCents).toString(),
     discountRuleId: line.discountRuleId ?? null,
     discountType: line.discountType ?? null,
     discountValue: line.discountValue?.toString() ?? null,
+    promotionMode: line.promotionMode ?? null,
     discountCents: (line.discountCents ?? 0n).toString(),
     cashDiscountBps: (line.cashDiscountBps ?? 0n).toString(),
     cashDiscountCents: (line.cashDiscountCents ?? 0n).toString(),
@@ -195,7 +218,10 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     stockMovements: items.map((item) => ({
       id: createId(),
       productId: item.productId,
-      quantityGrams: (-BigInt(item.weightGrams)).toString(),
+      // Reuses this same generic "quantity" column as a signed unit count for a UNIT line — same
+      // precedent already set by PRODUCTION_YIELD for a UNIT desposte output, not a new
+      // convention introduced here.
+      quantityGrams: (-BigInt(item.quantityUnits ?? item.weightGrams ?? 0)).toString(),
       occurredAt: timestamp
     }))
   };

@@ -63,9 +63,13 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const stockByProduct = new Map(stock.map((row) => [row.product_id, row]));
   const urgent = stock.filter((row) => row.priority.rank < 2);
   const normalStock = stock.filter((row) => row.priority.rank === 2).length;
-  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number; subtotal_cents: number; discount_cents: number }[];
+  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number | null; subtotal_cents: number; discount_cents: number }[];
   const productTotals = new Map<string, { name: string; grams: number; cents: number }>();
-  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams; total.cents += item.subtotal_cents; productTotals.set(item.product_id, total); }
+  // weight_grams is null for a UNIT sale item — this widget only ranks by revenue (cents), so a
+  // UNIT product's "grams" here stays 0 rather than crashing; it just isn't reflected in this
+  // particular weight tally (kept out of scope: this is a small informational widget, not the
+  // rentabilidad/analytics ranking, which already ranks purely by revenue/cost cents).
+  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams ?? 0; total.cents += item.subtotal_cents; productTotals.set(item.product_id, total); }
   const topProducts = [...productTotals.values()].sort((a, b) => b.cents - a.cents).slice(0, 5);
   const todaySales = new Set((weekSalesResult.data ?? []).filter((sale) => (sale.completed_at ?? "") >= localDayStart(context.timezone)).map((sale) => sale.id));
   const todayDiscounts = items.filter((item) => todaySales.has(item.sale_id)).reduce((sum, item) => sum + item.discount_cents, 0);

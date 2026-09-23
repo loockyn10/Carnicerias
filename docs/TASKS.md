@@ -143,9 +143,63 @@ Pendiente:
   desposte con outputs mixtos WEIGHT+UNIT (cabeza entera + un corte por kg) y confirmar que
   Rentabilidad/ficha de producto muestran el costo estimado recién asignado.
 
+## P1 — Validar Promociones pack / corrección WEIGHT-UNIT / multicategoría / venta POS UNIT contra Postgres real
+
+Implementado 2026-09-23 en dos rondas (ver `docs/CURRENT_STATE.md` y
+D-039/D-040/D-041/D-042/D-043 en `docs/DECISIONS.md`):
+
+- Ronda 1: promoción `PACK_FIXED_TOTAL` (WEIGHT y UNIT, modelada en
+  Admin/Promociones), guarda de cambio de forma de venta en `save_product`,
+  multicategoría (`product_category_assignments`/`set_product_categories`).
+  Migraciones `202609230031`–`202609230033` y SQLite `007`–`008`.
+- Ronda 2: venta `UNIT` end-to-end en el POS (online y offline, D-042);
+  directorio de categorías explícito para que una categoría sólo-secundaria
+  también genere tab (D-043); fix de compatibilidad en cuatro RPCs
+  preexistentes que asumían `weight_grams` para todo (incluye el fix de un
+  crash real en `cancel_sale` al anular una venta con línea UNIT). Como las
+  migraciones de ronda 1 todavía no estaban aplicadas, se **editaron
+  directamente** en vez de parchear con una migración nueva; sólo la venta
+  UNIT (genuinamente nuevo alcance) se agregó como migración nueva:
+  `202609230034_unit_sale_support.sql` y SQLite `009_unit_sale_support.sql`.
+
+Docker Desktop no estuvo operativo en ninguna de las dos rondas. La parte
+offline (Rust/SQLite) sí se validó contra un motor real en ambas rondas:
+`cargo test` 33/33 OK (28 de ronda 1 + 5 nuevos de UNIT/pack/migración en
+ronda 2, incluido un test que detectó y confirmó el fix de un bug real de
+`pragma foreign_keys` dentro de una transacción SQLite). `pnpm check`
+(typecheck + lint + test) OK en los 7 proyectos del monorepo en ambas rondas.
+
+Pendiente:
+
+- Ejecutar `pnpm db:reset && pnpm db:test` (`supabase/tests/promotions_pack.test.sql`,
+  `product_unit_type_guard.test.sql`, `product_multi_category.test.sql`,
+  `unit_sale_support.test.sql`) en un entorno con Docker/CI Linux funcional.
+- Regenerar `packages/database/src/database.types.ts` con `pnpm db:types` (se
+  editó a mano en ambas rondas) y revisar
+  `packages/database/src/database.rpc-null-overrides.ts` contra el resultado.
+- Confirmar con `supabase migration list --linked` si 031–034 llegaron a
+  aplicarse al remoto.
+- Smoke manual en Admin: crear un pack WEIGHT ("Vacío 2kg/$18.000") y un pack
+  UNIT ("Hamburguesa 40u/$28.000"), confirmar que ambos productos aparecen en
+  el selector de Promociones; probar los buscadores de Precios y Promociones;
+  cambiar la forma de venta de un producto sin historial (debe permitir) y de
+  uno con ventas/stock (debe bloquear con mensaje claro); asignar categoría
+  principal + adicionales a un producto (ej. Chorizo de cerdo → Cerdo +
+  Embutidos) y confirmar en Admin y en el POS que aparece filtrando por
+  cualquiera de sus categorías, una sola vez en "Todos", y que Embutidos
+  genera su propia tab aunque ningún producto la tenga como principal.
+- Smoke manual en POS (con hardware/build desktop real): vender un producto
+  WEIGHT con pack activo (cobra el total fijo sin importar el peso real
+  pesado) y un producto UNIT normal y en pack (40→1 pack, 45→1 pack + 5
+  normal = $32.000, 39→sin pack), online y offline (reinicio + sync);
+  cancelar una venta con línea UNIT y confirmar que la reversión de stock es
+  correcta (antes de este sprint esto crasheaba en el servidor).
+- Confirmar que el nombre "Hamburguesa" reportado como ausente de Promociones
+  era realmente `unit_type='UNIT'` (no se pudo verificar contra datos reales
+  en ninguna sesión, ver diagnóstico en `docs/CURRENT_STATE.md`).
+
 ## P2/P3 — Capacidades opcionales según negocio
 
-- Completar venta POS `UNIT` si se vuelve necesaria comercialmente.
 - Conservar como evidencia el timestamp/intento de clock-out offline anómalo, manteniendo el turno en `REQUIRES_REVIEW`.
 - Reversión/ajuste de un desposte ya finalizado (hoy sólo puede cancelarse un borrador; ver D-030).
 - Evaluar si `apps/admin/src/components/branch-detail.tsx` ("ingresos recientes") debería incluir `PRODUCTION_YIELD` junto a PURCHASE/RETURN/ADJUSTMENT_POSITIVE/TRANSFER_IN.

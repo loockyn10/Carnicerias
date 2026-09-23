@@ -1374,17 +1374,60 @@ export type Database = {
           },
         ]
       }
+      product_category_assignments: {
+        Row: {
+          category_id: string
+          created_at: string
+          id: string
+          organization_id: string
+          product_id: string
+        }
+        Insert: {
+          category_id: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          product_id: string
+        }
+        Update: {
+          category_id?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_category_assignments_category_id_organization_id_fkey"
+            columns: ["category_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "product_category_assignments_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       product_weight_discounts: {
         Row: {
           active: boolean
           branch_id: string | null
           created_at: string
-          discount_type: Database["public"]["Enums"]["weight_discount_type"]
-          discount_value: number
+          discount_type: Database["public"]["Enums"]["weight_discount_type"] | null
+          discount_value: number | null
           id: string
-          minimum_grams: number
+          minimum_grams: number | null
           organization_id: string
+          pack_price_cents: number | null
+          pack_quantity_grams: number | null
+          pack_quantity_units: number | null
           product_id: string
+          promotion_mode: Database["public"]["Enums"]["promotion_mode"]
           updated_at: string
           valid_from: string
           valid_until: string | null
@@ -1393,12 +1436,16 @@ export type Database = {
           active?: boolean
           branch_id?: string | null
           created_at?: string
-          discount_type: Database["public"]["Enums"]["weight_discount_type"]
-          discount_value: number
+          discount_type?: Database["public"]["Enums"]["weight_discount_type"] | null
+          discount_value?: number | null
           id?: string
-          minimum_grams: number
+          minimum_grams?: number | null
           organization_id: string
+          pack_price_cents?: number | null
+          pack_quantity_grams?: number | null
+          pack_quantity_units?: number | null
           product_id: string
+          promotion_mode?: Database["public"]["Enums"]["promotion_mode"]
           updated_at?: string
           valid_from?: string
           valid_until?: string | null
@@ -1407,12 +1454,16 @@ export type Database = {
           active?: boolean
           branch_id?: string | null
           created_at?: string
-          discount_type?: Database["public"]["Enums"]["weight_discount_type"]
-          discount_value?: number
+          discount_type?: Database["public"]["Enums"]["weight_discount_type"] | null
+          discount_value?: number | null
           id?: string
-          minimum_grams?: number
+          minimum_grams?: number | null
           organization_id?: string
+          pack_price_cents?: number | null
+          pack_quantity_grams?: number | null
+          pack_quantity_units?: number | null
           product_id?: string
+          promotion_mode?: Database["public"]["Enums"]["promotion_mode"]
           updated_at?: string
           valid_from?: string
           valid_until?: string | null
@@ -1796,9 +1847,11 @@ export type Database = {
           product_name_snapshot: string
           profit_markup_bps_snapshot: number | null
           promotion_discount_cents: number
+          promotion_mode: Database["public"]["Enums"]["promotion_mode"] | null
+          quantity_units: number | null
           sale_id: string
           subtotal_cents: number
-          weight_grams: number
+          weight_grams: number | null
         }
         Insert: {
           branch_id: string
@@ -1821,9 +1874,11 @@ export type Database = {
           product_name_snapshot: string
           profit_markup_bps_snapshot?: number | null
           promotion_discount_cents?: number
+          promotion_mode?: Database["public"]["Enums"]["promotion_mode"] | null
+          quantity_units?: number | null
           sale_id: string
           subtotal_cents: number
-          weight_grams: number
+          weight_grams?: number | null
         }
         Update: {
           branch_id?: string
@@ -1846,9 +1901,11 @@ export type Database = {
           product_name_snapshot?: string
           profit_markup_bps_snapshot?: number | null
           promotion_discount_cents?: number
+          promotion_mode?: Database["public"]["Enums"]["promotion_mode"] | null
+          quantity_units?: number | null
           sale_id?: string
           subtotal_cents?: number
-          weight_grams?: number
+          weight_grams?: number | null
         }
         Relationships: [
           {
@@ -2634,6 +2691,7 @@ export type Database = {
           branch_name: string
           category_color_hex: string
           category_id: string
+          category_ids: string[]
           category_name: string
           category_sort_order: number
           organization_id: string
@@ -2644,6 +2702,10 @@ export type Database = {
           product_sku: string
           unit_type: Database["public"]["Enums"]["unit_type"]
         }[]
+      }
+      get_pos_categories: {
+        Args: { p_branch_id: string }
+        Returns: { color_hex: string; id: string; name: string; sort_order: number }[]
       }
       get_pos_commercial_config: {
         Args: { p_branch_id: string }
@@ -2666,6 +2728,10 @@ export type Database = {
       get_production_yield_summary: {
         Args: { p_limit?: number; p_source_product_id: string }
         Returns: Json
+      }
+      get_products_with_unit_type_history: {
+        Args: never
+        Returns: string[]
       }
       get_profitability_analytics: {
         Args: {
@@ -2880,11 +2946,15 @@ export type Database = {
         Args: {
           p_active: boolean
           p_branch_id: string
-          p_discount_type: string
-          p_discount_value: number
+          p_discount_type?: string
+          p_discount_value?: number
           p_id: string
-          p_minimum_grams: number
+          p_minimum_grams?: number
+          p_pack_price_cents?: number
+          p_pack_quantity_grams?: number
+          p_pack_quantity_units?: number
           p_product_id: string
+          p_promotion_mode?: string
           p_valid_from: string
           p_valid_until?: string
         }
@@ -2931,6 +3001,14 @@ export type Database = {
       }
       set_product_inventory_role: {
         Args: { p_inventory_role: string; p_product_id: string }
+        Returns: undefined
+      }
+      set_product_categories: {
+        Args: {
+          p_category_ids: string[]
+          p_primary_category_id: string
+          p_product_id: string
+        }
         Returns: undefined
       }
       set_product_price: {
@@ -3032,6 +3110,7 @@ export type Database = {
       pos_device_status: "ACTIVE" | "DISABLED"
       product_inventory_role: "RAW_MATERIAL" | "SELLABLE" | "BOTH"
       production_batch_status: "DRAFT" | "COMPLETED" | "CANCELLED"
+      promotion_mode: "THRESHOLD" | "PACK_FIXED_TOTAL"
       sale_status: "DRAFT" | "COMPLETED" | "CANCELLED" | "REFUNDED"
       settlement_status: "CONFIRMED" | "VOIDED"
       stock_movement_type:
@@ -3194,6 +3273,7 @@ export const Constants = {
       pos_device_status: ["ACTIVE", "DISABLED"],
       product_inventory_role: ["RAW_MATERIAL", "SELLABLE", "BOTH"],
       production_batch_status: ["DRAFT", "COMPLETED", "CANCELLED"],
+      promotion_mode: ["THRESHOLD", "PACK_FIXED_TOTAL"],
       sale_status: ["DRAFT", "COMPLETED", "CANCELLED", "REFUNDED"],
       settlement_status: ["CONFIRMED", "VOIDED"],
       stock_movement_type: [

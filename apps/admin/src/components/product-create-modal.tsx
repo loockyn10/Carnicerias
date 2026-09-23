@@ -11,6 +11,7 @@ export function ProductCreateModal({ categories }: { categories: { id: string; n
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
   const [isRawMaterial, setIsRawMaterial] = useState(false);
+  const [primaryCategoryId, setPrimaryCategoryId] = useState("");
   const [state, action, pending] = useActionState(createProductModalAction, {} as ProductModalState);
   const requiresPricing = isSellable || !isRawMaterial;
   useEffect(() => { if (state.success) setOpen(false); }, [state.success]);
@@ -20,7 +21,18 @@ export function ProductCreateModal({ categories }: { categories: { id: string; n
       <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black">Nuevo producto</h2><p className="mt-1 text-sm text-stone-600">Cargá el precio de venta manualmente.</p></div><button className="text-stone-500 hover:text-stone-900" onClick={() => setOpen(false)} type="button">Cerrar</button></div>
       <form action={action} className="mt-5 grid gap-3">
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
-        <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} name="category_id" required><option value="">Seleccionar</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label>
+          <label className="grid gap-1 text-sm font-medium">Categoría principal<select className={input} name="category_id" onChange={(event) => setPrimaryCategoryId(event.target.value)} required value={primaryCategoryId}><option value="">Seleccionar</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+        </div>
+        {primaryCategoryId && categories.length > 1 ? <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-sm font-bold">También aparece en</p>
+          <div className="mt-2 flex flex-wrap gap-4 text-sm">
+            {categories.filter((category) => category.id !== primaryCategoryId).map((category) => (
+              <label className="flex items-center gap-2" key={category.id}><input name="category_ids" type="checkbox" value={category.id} /> {category.name}</label>
+            ))}
+          </div>
+        </div> : null}
         <label className="grid gap-1 text-sm font-medium">Unidad<select className={input} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}><option value="WEIGHT">Peso</option><option value="UNIT">Unidad</option></select></label>
         <div className="rounded-lg bg-stone-50 p-3">
           <p className="text-sm font-bold">Se usa como</p>

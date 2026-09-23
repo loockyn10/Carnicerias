@@ -80,3 +80,99 @@ export function calculateSalePricing(input: {
     discountCents: cashDiscountCents + promotionDiscountCents
   };
 }
+
+/**
+ * PACK_FIXED_TOTAL on a WEIGHT product (e.g. "Vacío: 2kg por $18.000"): a real
+ * pre-cut piece never weighs the nominal pack amount exactly, so the pack
+ * charges its configured total regardless of the actual weighed grams — the
+ * weight is still what feeds stock. This is intentionally NOT a threshold: it
+ * never scales with quantity. Only sanity-checked against the LIST price for
+ * the weighed amount (never against the cash-discounted price), so it can
+ * never be a worse deal than buying that same piece unweighted at full list
+ * price — in practice this never triggers for a real pack's natural weight
+ * variance. Mirrors complete_discounted_sale's PACK_FIXED_TOTAL branch
+ * exactly (same rounding, same clamped promotionDiscountCents) so the
+ * server-side snapshot and this pure calculation always agree.
+ */
+export function calculateWeightPackSalePricing(input: {
+  listPriceCents: bigint;
+  weightGrams: number;
+  paymentMethod: PaymentMethod;
+  cashDiscountBps: bigint;
+  packPriceCents: bigint;
+}): SalePricing {
+  const { listPriceCents, weightGrams, paymentMethod, packPriceCents } = input;
+  if (listPriceCents <= 0n || !Number.isSafeInteger(weightGrams) || weightGrams <= 0) {
+    throw new RangeError("Invalid sale quantity or price");
+  }
+  if (packPriceCents <= 0n) throw new RangeError("Invalid pack price");
+  validateBasisPoints(input.cashDiscountBps);
+  const cashDiscountBps = isDiscountEligiblePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
+  const cashPriceCents = divideRoundHalfUp(listPriceCents * (10_000n - cashDiscountBps), 10_000n);
+  const listSubtotalCents = divideRoundHalfUp(listPriceCents * BigInt(weightGrams), 1_000n);
+  if (packPriceCents > listSubtotalCents) {
+    throw new RangeError("Pack price exceeds list price for the weighed amount");
+  }
+  const cashSubtotalCents = divideRoundHalfUp(cashPriceCents * BigInt(weightGrams), 1_000n);
+  const subtotalCents = packPriceCents;
+  const finalPriceCents = divideRoundHalfUp(subtotalCents * 1_000n, BigInt(weightGrams));
+  const cashDiscountCents = listSubtotalCents - cashSubtotalCents;
+  const rawPromotionDiscountCents = cashSubtotalCents - subtotalCents;
+  const promotionDiscountCents = rawPromotionDiscountCents > 0n ? rawPromotionDiscountCents : 0n;
+  return {
+    listPriceCents, cashPriceCents, finalPriceCents, listSubtotalCents, cashSubtotalCents,
+    subtotalCents, cashDiscountBps, cashDiscountCents, promotionDiscountCents,
+    discountCents: listSubtotalCents - subtotalCents
+  };
+}
+
+export interface UnitPackPromotion {
+  id: string;
+  packQuantityUnits: number;
+  packPriceCents: bigint;
+}
+
+/**
+ * PACK_FIXED_TOTAL on a UNIT product (e.g. "Hamburguesa: 40 unidades por
+ * $28.000"): unlike the WEIGHT pack, unit counts are exact, so whole packs
+ * apply automatically on exact multiples (80 = 2x40) and any remainder sells
+ * at the normal (cash-discounted) per-unit price — never a partial/invented
+ * discount for the remainder. Not wired into the POS sale flow yet (POS does
+ * not sell UNIT products at all — see docs/TASKS.md); kept as a pure,
+ * independently tested function ready for when that ships.
+ */
+export function calculateUnitPackSalePricing(input: {
+  listPriceCents: bigint;
+  quantityUnits: number;
+  paymentMethod: PaymentMethod;
+  cashDiscountBps: bigint;
+  pack: UnitPackPromotion;
+}): SalePricing {
+  const { listPriceCents, quantityUnits, paymentMethod, pack } = input;
+  if (listPriceCents <= 0n || !Number.isSafeInteger(quantityUnits) || quantityUnits <= 0) {
+    throw new RangeError("Invalid sale quantity or price");
+  }
+  if (!Number.isSafeInteger(pack.packQuantityUnits) || pack.packQuantityUnits <= 0 || pack.packPriceCents <= 0n) {
+    throw new RangeError("Invalid pack configuration");
+  }
+  const packListEquivalentCents = listPriceCents * BigInt(pack.packQuantityUnits);
+  if (pack.packPriceCents > packListEquivalentCents) {
+    throw new RangeError("Pack price exceeds list price for its quantity");
+  }
+  validateBasisPoints(input.cashDiscountBps);
+  const cashDiscountBps = isDiscountEligiblePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
+  const cashPriceCents = divideRoundHalfUp(listPriceCents * (10_000n - cashDiscountBps), 10_000n);
+  const wholePacks = Math.floor(quantityUnits / pack.packQuantityUnits);
+  const remainderUnits = quantityUnits - wholePacks * pack.packQuantityUnits;
+  const listSubtotalCents = listPriceCents * BigInt(quantityUnits);
+  const cashSubtotalCents = cashPriceCents * BigInt(quantityUnits);
+  const subtotalCents = pack.packPriceCents * BigInt(wholePacks) + cashPriceCents * BigInt(remainderUnits);
+  const cashDiscountCents = listSubtotalCents - cashSubtotalCents;
+  const rawPromotionDiscountCents = cashSubtotalCents - subtotalCents;
+  const promotionDiscountCents = rawPromotionDiscountCents > 0n ? rawPromotionDiscountCents : 0n;
+  return {
+    listPriceCents, cashPriceCents, finalPriceCents: subtotalCents, listSubtotalCents, cashSubtotalCents,
+    subtotalCents, cashDiscountBps, cashDiscountCents, promotionDiscountCents,
+    discountCents: listSubtotalCents - subtotalCents
+  };
+}
