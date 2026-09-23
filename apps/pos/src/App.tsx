@@ -13,6 +13,7 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
+import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
@@ -152,10 +153,11 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
   const [selected, setSelected] = useState(operators[0]?.profileId ?? "");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (!selected && operators[0]) setSelected(operators[0].profileId); }, [operators, selected]);
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(null);
+    event.preventDefault(); setBusy(true); setError(null); setDiagnostics(null);
     try {
       if (!/^\d{4,6}$/.test(pin)) throw new Error("Ingresá un PIN de 4 a 6 dígitos");
       if (online) {
@@ -166,7 +168,12 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
         await onAuthenticated(await localDatabase.cacheVerifiedOperator(verified, pin));
       } else await onAuthenticated(await localDatabase.verifyLocalOperator(selected, pin));
       setPin("");
-    } catch (loginError) { setError(loginError instanceof Error ? loginError.message : "No se pudo validar el PIN"); }
+    } catch (loginError) {
+      const caught = describeCaughtValue(loginError);
+      console.error("[pos] pin_validation_failed", { online, profileId: selected, diagnostics: caught });
+      setError(resolveErrorMessage(loginError, "No se pudo validar el PIN"));
+      setDiagnostics(formatDiagnostics(caught));
+    }
     finally { setBusy(false); }
   }
   return (
@@ -190,7 +197,16 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
             <button className="rounded-xl bg-rose-600 px-4 py-3 font-black disabled:opacity-50" disabled={busy || !selected || !operators.find((item) => item.profileId === selected)?.hasPin}>{busy ? "Validando…" : online ? "Entrar" : "Entrar offline"}</button>
           </form>
         )}
-        {error ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{error}</p> : null}
+        {error ? (
+          <div className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">
+            <p>{error}</p>
+            {diagnostics ? (
+              <p className="mt-1 break-all text-xs text-red-300">
+                <span className="font-bold uppercase tracking-wide">Diagnóstico PIN v2</span> · {diagnostics}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </main>
   );
