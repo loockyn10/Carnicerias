@@ -49,12 +49,15 @@ interface CatalogProduct {
 interface DiscountRule { id: string; productId: string; branchId: string | null; minimumGrams: number; discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG"; discountValue: string }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
-const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
-  { value: "CASH", label: "Efectivo" },
-  { value: "TRANSFER", label: "Transferencia" },
-  { value: "DEBIT", label: "Débito" },
-  { value: "CREDIT", label: "Crédito" },
-  { value: "OTHER", label: "Otro" }
+// Sólo 3 métodos operativos se ofrecen para ventas nuevas. CREDIT/OTHER siguen
+// siendo valores válidos de PaymentMethod (ventas históricas, no se migran),
+// simplemente no se exponen en este selector. DEBIT y CREDIT hoy tienen el
+// mismo comportamiento comercial (sin descuento por pago), así que "Tarjeta"
+// usa DEBIT como representación interna — no se crea un método CARD nuevo.
+const PAYMENT_METHOD_BUTTONS: { value: PaymentMethod; label: string; activeClass: string }[] = [
+  { value: "CASH", label: "Efectivo", activeClass: "border-emerald-400 bg-emerald-950 text-emerald-100 ring-2 ring-emerald-400/60" },
+  { value: "TRANSFER", label: "Transferencia", activeClass: "border-sky-400 bg-sky-950 text-sky-100 ring-2 ring-sky-400/60" },
+  { value: "DEBIT", label: "Tarjeta", activeClass: "border-amber-400 bg-amber-950 text-amber-100 ring-2 ring-amber-400/60" }
 ];
 
 const SHIFT_DURATION_REFRESH_MS = 60_000;
@@ -1201,17 +1204,25 @@ export default function App() {
 
           <div className="pos-ticket-footer mt-4 shrink-0 border-t border-stone-700 pt-4">
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
-            <label className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
-              <span>Método de pago</span>
-              <select
-                className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-3 text-lg"
-                value={paymentMethod ?? ""}
-                onChange={(event) => setPaymentMethod(event.target.value === "" ? null : (event.target.value as PaymentMethod))}
-              >
-                <option value="" disabled>Seleccioná método…</option>
-                {PAYMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
+            <div className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
+              <span id="payment-method-label">Método de pago</span>
+              <div className="pos-payment-buttons grid grid-cols-3 gap-2" role="group" aria-labelledby="payment-method-label">
+                {PAYMENT_METHOD_BUTTONS.map((option) => {
+                  const active = paymentMethod === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setPaymentMethod(option.value)}
+                      className={`rounded-xl border-2 px-3 py-3 text-sm font-black transition ${active ? option.activeClass : "border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800"}`}
+                    >
+                      {active ? "✓ " : ""}{option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             {shouldDisplayTicketAmounts(paymentMethod) ? (
               <>
                 <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>

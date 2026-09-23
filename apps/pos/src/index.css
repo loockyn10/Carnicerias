@@ -229,13 +229,18 @@ button {
     flex: 0 0 auto;
   }
 
-  .pos-payment > select {
+  .pos-payment-buttons {
     min-width: 0;
     flex: 1 1 auto;
+    gap: 0.375rem;
+  }
+
+  .pos-payment-buttons > button {
+    min-width: 0;
     border-radius: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    font-size: 1rem;
-    line-height: 1.5rem;
+    padding: 0.5rem 0.25rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
   }
 
   .pos-ticket-footer > button {
