@@ -14,6 +14,7 @@ import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
 
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
+import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
@@ -235,7 +236,7 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(null);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [weightInput, setWeightInput] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -369,6 +370,7 @@ export default function App() {
       setBranchId("");
       setCatalog([]);
       setTicket([]);
+      setPaymentMethod(null);
       return;
     }
 
@@ -739,12 +741,16 @@ export default function App() {
   const ticketPromotionDiscount = useMemo(() => sumMoney(ticket.map((line) => line.promotionDiscountCents ?? 0n)), [ticket]);
 
   useEffect(() => {
+    // Recalcular importes sólo tiene sentido una vez que hay método elegido;
+    // mientras paymentMethod sea null los importes no se muestran igual.
+    if (!paymentMethod) return;
+    const method = paymentMethod;
     setTicket((current) => current.map((line) => {
       const pricing = calculateSalePricing({
         listPriceCents: line.originalPricePerKgCents ?? line.pricePerKgCents,
         quantity: line.weightGrams,
         quantityDivisor: 1_000,
-        paymentMethod,
+        paymentMethod: method,
         cashDiscountBps: BigInt(cashDiscountBps),
         promotion: line.discountType && line.discountValue != null && line.discountRuleId
           ? { id: line.discountRuleId, discountType: line.discountType, discountValue: line.discountValue }
@@ -772,8 +778,12 @@ export default function App() {
       const applicableRules = discounts.filter((rule) => rule.productId === selectedProduct.productId)
         .sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
       const rule = applicableRules.find((candidate) => candidate.minimumGrams <= grams);
+      // Todavía puede no haber método de pago elegido en este punto: se usa un
+      // placeholder neutro sólo para completar el cálculo internamente — no se
+      // muestra nada derivado de esto hasta que se elija un método real, y el
+      // efecto de arriba recalcula todas las líneas en cuanto eso pase.
       const applied = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000,
-        paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
+        paymentMethod: paymentMethod ?? "CASH", cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
       const line: TicketLine = {
         id: editingLineId ?? crypto.randomUUID(),
         productId: selectedProduct.productId,
@@ -805,7 +815,12 @@ export default function App() {
   }
 
   async function completeSale() {
+    // Guard defensivo: no confiar sólo en el disabled del botón. Sin método de
+    // pago elegido, no se completa la venta bajo ninguna circunstancia.
+    // (chequeo directo de null, no sólo el mensaje, para que TS angoste el tipo)
+    if (!paymentMethod) { setError(validatePaymentMethodForSale(paymentMethod) ?? "Seleccioná un método de pago."); return; }
     if (!branchId || ticket.length === 0 || saleInFlight.current) return;
+    const method = paymentMethod;
     saleInFlight.current = true;
     setLoading(true);
     setError(null);
@@ -823,11 +838,11 @@ export default function App() {
           operatorToken: operator.operatorToken,
           deviceId: localRuntime.deviceId,
           ticket,
-          paymentMethod
+          paymentMethod: method
         });
         const receipt = await localDatabase.confirmSale(sale);
         setTicket([]);
-        setPaymentMethod("CASH");
+        setPaymentMethod(null);
         const runtime = await localDatabase.runtime();
         setLocalRuntime(runtime);
         setSyncStatus((current) => ({
@@ -856,7 +871,7 @@ export default function App() {
         expected_cash_discount_bps: (line.cashDiscountBps ?? 0n).toString(),
         expected_final_price_per_kg_cents: line.pricePerKgCents.toString()
       })),
-      p_payment_method: paymentMethod
+      p_payment_method: method
     });
 
     setLoading(false);
@@ -874,7 +889,7 @@ export default function App() {
 
     setNotice(`Venta ${completedSale.sale_id.slice(0, 8)} confirmada por ${formatCurrency(BigInt(completedSale.total_cents))}`);
     setTicket([]);
-    setPaymentMethod("CASH");
+    setPaymentMethod(null);
     void loadRecentSales().catch(() => undefined);
   }
 
@@ -910,6 +925,7 @@ export default function App() {
       setOperator(null);
       setShift(null);
       setTicket([]);
+      setPaymentMethod(null);
       setLocalRuntime(await localDatabase.runtime());
       if (result.clockOutCreated) {
         setNotice("Salida registrada");
@@ -1067,6 +1083,7 @@ export default function App() {
               onChange={(event) => {
                 if (ticket.length && !window.confirm("Cambiar de sucursal cancelará el ticket actual. ¿Continuar?")) return;
                 setTicket([]);
+                setPaymentMethod(null);
                 setBranchId(event.target.value);
               }}
             >
@@ -1140,7 +1157,18 @@ export default function App() {
         <aside className="pos-ticket flex min-h-[520px] flex-col bg-stone-900 p-4 lg:min-h-0 lg:overflow-hidden lg:p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl font-black">Ticket actual</h2>
-            {ticket.length ? <button className="text-sm font-bold text-red-400 hover:text-red-300" onClick={() => window.confirm("¿Cancelar todo el ticket?") && setTicket([])}>Cancelar</button> : null}
+            {ticket.length ? (
+              <button
+                className="text-sm font-bold text-red-400 hover:text-red-300"
+                onClick={() => {
+                  if (!window.confirm("¿Cancelar todo el ticket?")) return;
+                  setTicket([]);
+                  setPaymentMethod(null);
+                }}
+              >
+                Cancelar
+              </button>
+            ) : null}
           </div>
           <div className="pos-ticket-items mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto">
             {ticket.length === 0 ? <div className="grid h-44 place-items-center rounded-2xl border border-dashed border-stone-700 text-center text-stone-500">Seleccioná un producto<br />para comenzar</div> : null}
@@ -1151,10 +1179,16 @@ export default function App() {
                   <div className="flex justify-between gap-3">
                     <div>
                       <h3 className="font-black">{line.productName}</h3>
-                      <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)} × {formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg</p>
-                      {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
+                      {shouldDisplayTicketAmounts(paymentMethod) ? (
+                        <>
+                          <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)} × {formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg</p>
+                          {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
+                        </>
+                      ) : (
+                        <p className="mt-1 text-sm text-stone-400">{formatWeight(line.weightGrams)}</p>
+                      )}
                     </div>
-                    <strong className="text-lg text-rose-400">{formatCurrency(line.subtotalCents)}</strong>
+                    {shouldDisplayTicketAmounts(paymentMethod) ? <strong className="text-lg text-rose-400">{formatCurrency(line.subtotalCents)}</strong> : null}
                   </div>
                   <div className="mt-3 flex gap-3 text-sm font-bold">
                     <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>Modificar peso</button>
@@ -1167,17 +1201,30 @@ export default function App() {
 
           <div className="pos-ticket-footer mt-4 shrink-0 border-t border-stone-700 pt-4">
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
-            <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
-            {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
-            {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
-            <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
             <label className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
               <span>Método de pago</span>
-              <select className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-3 text-lg" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+              <select
+                className="rounded-xl border border-stone-700 bg-stone-950 px-4 py-3 text-lg"
+                value={paymentMethod ?? ""}
+                onChange={(event) => setPaymentMethod(event.target.value === "" ? null : (event.target.value as PaymentMethod))}
+              >
+                <option value="" disabled>Seleccioná método…</option>
                 {PAYMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
-            <button className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" disabled={loading || ticket.length === 0 || deviceNeedsBinding} onClick={() => void completeSale()}>
+            {shouldDisplayTicketAmounts(paymentMethod) ? (
+              <>
+                <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
+                {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
+                {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
+                <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
+              </>
+            ) : null}
+            <button
+              className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!isSaleConfirmable({ paymentMethod, ticketLength: ticket.length, loading, deviceNeedsBinding })}
+              onClick={() => void completeSale()}
+            >
               {loading ? "Procesando…" : "Confirmar venta"}
             </button>
           </div>
@@ -1317,7 +1364,7 @@ export default function App() {
           <form className="pos-modal-panel pos-weight-modal w-full max-w-lg rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl" onSubmit={saveLine}>
             <p className="text-sm font-bold uppercase tracking-wider text-rose-400">{editingLineId ? "Modificar línea" : "Agregar al ticket"}</p>
             <h2 className="mt-2 text-3xl font-black">{selectedProduct.productName}</h2>
-            <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p>
+            {shouldDisplayTicketAmounts(paymentMethod) ? <p className="mt-2 text-xl text-stone-300">{formatCurrency(selectedProduct.pricePerKgCents)} / kg</p> : null}
             {desktop && scale.config.kind !== "MANUAL" ? (
               <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
                 <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
@@ -1343,15 +1390,17 @@ export default function App() {
               Peso manual en kg
               <input autoFocus className="rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-4xl font-black outline-none focus:border-rose-500" inputMode="decimal" placeholder="1,250" value={weightInput} onChange={(event) => setWeightInput(event.target.value)} />
             </label>
-            <div className="mt-5 rounded-2xl bg-stone-950 p-4">
-              {(() => { try {
-                const grams = parseWeightToGrams(weightInput);
-                const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-                const rule = rules.find((candidate) => candidate.minimumGrams <= grams);
-                const preview = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
-                return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
-              } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
-            </div>
+            {shouldDisplayTicketAmounts(paymentMethod) ? (
+              <div className="mt-5 rounded-2xl bg-stone-950 p-4">
+                {(() => { if (!paymentMethod) return null; try {
+                  const grams = parseWeightToGrams(weightInput);
+                  const rules = discounts.filter((rule) => rule.productId === selectedProduct.productId).sort((left, right) => right.minimumGrams - left.minimumGrams || Number(right.branchId === branchId) - Number(left.branchId === branchId));
+                  const rule = rules.find((candidate) => candidate.minimumGrams <= grams);
+                  const preview = calculateSalePricing({ listPriceCents: selectedProduct.pricePerKgCents, quantity: grams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps: BigInt(cashDiscountBps), promotion: rule ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null });
+                  return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>{preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}{preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}<span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
+                } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
+              </div>
+            ) : null}
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" type="button" onClick={() => setSelectedProduct(null)}>Volver</button>
               <button className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500" type="submit">Confirmar línea</button>
