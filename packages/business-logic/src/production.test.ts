@@ -11,7 +11,8 @@ import {
   calculateWasteGrams,
   calculateWastePercentageBps,
   calculateYieldBps,
-  buildProductionBatchSummary
+  buildProductionBatchSummary,
+  type ProductionOutputPricing
 } from "./production";
 
 describe("production batch input cost", () => {
@@ -75,19 +76,19 @@ describe("missing price validation", () => {
   it("blocks finalizing when a product has no current price", () => {
     expect(() =>
       assertOutputsHavePrices([
-        { productName: "Vacío", salePricePerKgCents: 1_000_000n },
-        { productName: "Cabeza", salePricePerKgCents: null }
+        { productName: "Vacío", salePriceCents: 1_000_000n },
+        { productName: "Cabeza", salePriceCents: null }
       ])
     ).toThrow(/Cabeza/);
   });
 
   it("blocks finalizing when a product's current price is zero", () => {
-    expect(() => assertOutputsHavePrices([{ productName: "Recortes", salePricePerKgCents: 0n }])).toThrow(/Recortes/);
+    expect(() => assertOutputsHavePrices([{ productName: "Recortes", salePriceCents: 0n }])).toThrow(/Recortes/);
   });
 
   it("passes when every output has a positive price", () => {
     expect(() =>
-      assertOutputsHavePrices([{ productName: "Vacío", salePricePerKgCents: 1_000_000n }])
+      assertOutputsHavePrices([{ productName: "Vacío", salePriceCents: 1_000_000n }])
     ).not.toThrow();
   });
 });
@@ -95,13 +96,15 @@ describe("missing price validation", () => {
 describe("relative sale value cost allocation", () => {
   it("matches the spec's media res example (value, participation, margins)", () => {
     // Vacío: 2 kg @ $10.000/kg = $20.000. A second output completes $139.000 of potential value.
-    const outputs = [
-      { productId: "vacio", outputWeightGrams: 2_000, salePricePerKgCents: 1_000_000n },
-      { productId: "resto", outputWeightGrams: 2_000, salePricePerKgCents: 5_950_000n }
+    const outputs: ProductionOutputPricing[] = [
+      { productId: "vacio", unitType: "WEIGHT", outputWeightGrams: 2_000, salePricePerKgCents: 1_000_000n },
+      { productId: "resto", unitType: "WEIGHT", outputWeightGrams: 2_000, salePricePerKgCents: 5_950_000n }
     ];
     const allocations = allocateProductionCost(8_400_000n, outputs);
     const [vacio, resto] = allocations;
-    if (!vacio || !resto) throw new Error("expected both outputs to be allocated");
+    if (!vacio || !resto || vacio.unitType !== "WEIGHT" || resto.unitType !== "WEIGHT") {
+      throw new Error("expected both outputs to be allocated as WEIGHT");
+    }
 
     expect(vacio.saleValueCents).toBe(2_000_000n); // $20.000
     expect(resto.saleValueCents).toBe(11_900_000n); // $119.000
@@ -122,10 +125,10 @@ describe("relative sale value cost allocation", () => {
 
   it("distributes rounding remainders deterministically so the sum is always exact", () => {
     // 100 cents split three ways by equal sale value: 34/33/33, not 33.33 repeating.
-    const outputs = [
-      { productId: "a", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n },
-      { productId: "b", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n },
-      { productId: "c", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n }
+    const outputs: ProductionOutputPricing[] = [
+      { productId: "a", unitType: "WEIGHT", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n },
+      { productId: "b", unitType: "WEIGHT", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n },
+      { productId: "c", unitType: "WEIGHT", outputWeightGrams: 1_000, salePricePerKgCents: 1_000n }
     ];
     const allocations = allocateProductionCost(100n, outputs);
     const sum = allocations.reduce((total, allocation) => total + allocation.allocatedCostCents, 0n);
@@ -134,12 +137,55 @@ describe("relative sale value cost allocation", () => {
   });
 
   it("rejects allocation when every output price is zero", () => {
-    const outputs = [{ productId: "a", outputWeightGrams: 1_000, salePricePerKgCents: 0n }];
+    const outputs: ProductionOutputPricing[] = [
+      { productId: "a", unitType: "WEIGHT", outputWeightGrams: 1_000, salePricePerKgCents: 0n }
+    ];
     expect(() => allocateProductionCost(8_400_000n, outputs)).toThrow(RangeError);
   });
 
   it("rejects allocation with no outputs", () => {
     expect(() => allocateProductionCost(8_400_000n, [])).toThrow(RangeError);
+  });
+
+  it("allocates cost for a pure UNIT batch (cabeza entera + arrollado), keeping their real weight for merma", () => {
+    // Cabeza: 3 u @ $7.000/u = $21.000, 3.9 kg real. Arrollado: 2 u @ $8.500/u = $17.000, 2.64 kg real.
+    // Commercial value/cost allocation uses unit count × price, never this weight.
+    const outputs: ProductionOutputPricing[] = [
+      { productId: "cabeza", unitType: "UNIT", outputWeightGrams: 3_900, outputQuantityUnits: 3, salePricePerUnitCents: 700_000n },
+      { productId: "arrollado", unitType: "UNIT", outputWeightGrams: 2_640, outputQuantityUnits: 2, salePricePerUnitCents: 850_000n }
+    ];
+    const allocations = allocateProductionCost(1_240_000n, outputs);
+    const [cabeza, arrollado] = allocations;
+    if (!cabeza || !arrollado || cabeza.unitType !== "UNIT" || arrollado.unitType !== "UNIT") {
+      throw new Error("expected both outputs to be allocated as UNIT");
+    }
+    expect(cabeza.saleValueCents).toBe(2_100_000n); // unaffected by weight
+    expect(arrollado.saleValueCents).toBe(1_700_000n);
+    expect(cabeza.allocatedCostCents + arrollado.allocatedCostCents).toBe(1_240_000n);
+    expect(cabeza.allocatedCostPerUnitCents).toBe(cabeza.allocatedCostCents / 3n);
+    // Weight is carried through even though it played no role in the allocation above.
+    expect(calculateProducedWeightGrams(outputs)).toBe(6_540);
+  });
+
+  it("allocates cost across a mixed WEIGHT+UNIT batch, still summing exactly, and every output's real weight feeds merma", () => {
+    const outputs: ProductionOutputPricing[] = [
+      { productId: "vacio", unitType: "WEIGHT", outputWeightGrams: 10_000, salePricePerKgCents: 1_450_000n },
+      { productId: "bondiola", unitType: "WEIGHT", outputWeightGrams: 12_000, salePricePerKgCents: 980_000n },
+      { productId: "cabeza", unitType: "UNIT", outputWeightGrams: 3_900, outputQuantityUnits: 2, salePricePerUnitCents: 700_000n },
+      { productId: "arrollado", unitType: "UNIT", outputWeightGrams: 2_640, outputQuantityUnits: 2, salePricePerUnitCents: 850_000n }
+    ];
+    const allocations = allocateProductionCost(5_000_000n, outputs);
+    const sum = allocations.reduce((total, allocation) => total + allocation.allocatedCostCents, 0n);
+    expect(sum).toBe(5_000_000n);
+    const cabeza = allocations.find((allocation) => allocation.productId === "cabeza");
+    const vacio = allocations.find((allocation) => allocation.productId === "vacio");
+    expect(cabeza?.unitType === "UNIT" ? cabeza.allocatedCostPerUnitCents : null).not.toBeNull();
+    expect(vacio?.unitType === "WEIGHT" ? vacio.allocatedCostPerKgCents : null).not.toBeNull();
+    // Every output now carries allocatedCostPerKgCents (weight is always known), UNIT included.
+    expect(cabeza?.allocatedCostPerKgCents).not.toBeNull();
+    // Merma/rendimiento: input 100kg, produced = suma de TODOS los outputs (WEIGHT + UNIT).
+    expect(calculateProducedWeightGrams(outputs)).toBe(10_000 + 12_000 + 3_900 + 2_640);
+    expect(calculateWasteGrams(100_000, calculateProducedWeightGrams(outputs))).toBe(100_000 - (10_000 + 12_000 + 3_900 + 2_640));
   });
 });
 

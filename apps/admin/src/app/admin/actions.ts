@@ -172,9 +172,6 @@ export interface ProductManageState { error?: string; successToken?: string }
 export async function manageProductAction(_: ProductManageState, formData: FormData): Promise<ProductManageState> {
   try {
     const name = text(formData, "name");
-    const rawCost = text(formData, "cost");
-    const rawProfit = text(formData, "profit_markup");
-    if (Boolean(rawCost) !== Boolean(rawProfit)) throw new Error("Completá costo y margen de ganancia para activar el precio automático");
     const productId = text(formData, "product_id");
     await rpcOrThrow("save_product", {
       p_product_id: productId, p_category_id: text(formData, "category_id"),
@@ -184,13 +181,23 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
 
-    if (rawCost && rawProfit) {
-      const costCents = pesosToCents(rawCost);
-      const profitMarkupBps = percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n);
-      if (costCents !== Number(text(formData, "current_cost_cents") || 0) || profitMarkupBps !== Number(text(formData, "current_profit_markup_bps") || -1)) {
-        await rpcOrThrow("save_product_pricing", {
-          p_product_id: productId, p_cost_cents: costCents, p_profit_markup_bps: profitMarkupBps
-        });
+    // Precio de venta = decisión manual: se guarda directo, nunca derivado de costo+margen. Sólo
+    // escribe si cambió respecto al valor vigente (hidden input), igual que el patrón anterior.
+    const rawPrice = text(formData, "price");
+    if (rawPrice) {
+      const priceCents = pesosToCents(rawPrice);
+      if (priceCents !== Number(text(formData, "current_price_cents") || 0)) {
+        await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: priceCents });
+      }
+    }
+    // Costo directo (productos comprados ya terminados, no producidos por desposte). Un producto
+    // producido por desposte tiene su costo alimentado automáticamente al finalizar el lote; este
+    // campo permite corregirlo o cargarlo a mano para lo que no sale de desposte.
+    const rawDirectCost = text(formData, "direct_cost");
+    if (rawDirectCost) {
+      const costCents = pesosToCents(rawDirectCost);
+      if (costCents !== Number(text(formData, "current_cost_cents") || 0)) {
+        await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: costCents });
       }
     }
 
@@ -208,23 +215,23 @@ export interface ProductModalState { error?: string; success?: boolean }
 export async function createProductModalAction(_: ProductModalState, formData: FormData): Promise<ProductModalState> {
   try {
     const name = text(formData, "name");
-    const rawCost = text(formData, "cost");
-    const rawProfit = text(formData, "profit_markup");
     const role = inventoryRole(formData);
+    const rawPrice = text(formData, "price");
+    const rawDirectCost = text(formData, "direct_cost");
     // A pure raw material (Desposte input, never sold directly) has no list price to form: its
-    // cost is captured per Desposte batch instead. Any sellable role still needs cost + margin,
-    // same as before.
-    if (role !== "RAW_MATERIAL" && (!rawCost || !rawProfit)) throw new Error("Completá costo y margen de ganancia");
+    // cost is captured per Desposte batch instead. Any sellable role still needs a manual price.
+    if (role !== "RAW_MATERIAL" && !rawPrice) throw new Error("Completá el precio de venta");
+    // create_product_with_pricing (202609130012) is called purely as "create the product row"
+    // here: cost/markup are always omitted, so its optional save_product_pricing branch never
+    // fires — this sprint's manual price/cost are set separately right below, never derived.
     const productId = await rpcOrThrow("create_product_with_pricing", {
       p_category_id: text(formData, "category_id"), p_name: name,
       p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
-      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on",
-      // exactOptionalPropertyTypes rejects an explicit `undefined` value for an optional key, so a
-      // raw material with no pricing omits these keys entirely rather than setting them to undefined.
-      ...(rawCost ? { p_cost_cents: pesosToCents(rawCost) } : {}),
-      ...(rawProfit ? { p_profit_markup_bps: percentageToBasisPointsAllowZero(rawProfit, "Margen de ganancia", 100_000n) } : {})
+      p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: role });
+    if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
+    if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
     revalidatePath("/admin/products");
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/promotions");
@@ -237,9 +244,11 @@ export async function createProductModalAction(_: ProductModalState, formData: F
 export interface PricingSettingsState { error?: string; successToken?: string }
 export async function saveCashDiscountAction(_: PricingSettingsState, formData: FormData): Promise<PricingSettingsState> {
   try {
-    await rpcOrThrow("set_cash_discount_and_reprice", {
-      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Descuento en efectivo", 9_999n),
-      p_confirm: true
+    // set_cash_discount (202609220030) only writes the percentage — it never repriced any
+    // product, unlike set_cash_discount_and_reprice (left untouched in the database, unused by
+    // this UI): a manual price must never change on its own when the discount % changes.
+    await rpcOrThrow("set_cash_discount", {
+      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Descuento en efectivo", 9_999n)
     });
     revalidatePath("/admin/products");
     return { successToken: crypto.randomUUID() };
@@ -257,6 +266,28 @@ export async function setPriceAction(formData: FormData) {
   });
   revalidatePath("/admin/catalog");
   revalidatePath("/admin/products");
+}
+
+export interface BulkPriceState { error?: string; successToken?: string; applied?: number }
+
+/**
+ * Carga masiva de "Productos → Precios": recibe sólo las filas que el cliente marcó como
+ * modificadas (ver bulk-price-editor.tsx) y las aplica en una única llamada atómica a
+ * bulk_set_product_prices (202609220030) — precio global (sin sucursal) para esta primera carga;
+ * los overrides por sucursal existentes siguen editables uno por uno vía setPriceAction.
+ */
+export async function bulkSetProductPricesAction(_: BulkPriceState, formData: FormData): Promise<BulkPriceState> {
+  try {
+    const raw = text(formData, "items");
+    const items = raw ? (JSON.parse(raw) as { productId: string; priceCents: number }[]) : [];
+    if (!items.length) throw new Error("No hay cambios para guardar");
+    const result = await rpcOrThrow("bulk_set_product_prices", { p_items: items });
+    revalidatePath("/admin/products");
+    const applied = result && typeof result === "object" && "applied" in result ? Number((result as { applied: unknown }).applied) : items.length;
+    return { successToken: crypto.randomUUID(), applied };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudieron guardar los precios" };
+  }
 }
 
 async function commercialRpc(name: string, args: Record<string, unknown>) {
@@ -569,10 +600,16 @@ export async function updateProductionBatchHeaderFormAction(_: ProductionBatchFo
 export async function setProductionBatchOutputFormAction(_: ProductionBatchFormState, formData: FormData): Promise<ProductionBatchFormState> {
   const batchId = text(formData, "batch_id");
   try {
+    // Weight is always required (real physical weight produced, feeds merma/rendimiento for every
+    // output, WEIGHT or UNIT alike). Quantity is additional and only present for a UNIT product's
+    // output (the form only renders that second input then) — omitted entirely otherwise, rather
+    // than sent as null, matching the pattern used elsewhere in this file.
+    const rawUnits = text(formData, "output_quantity_units");
     await rpcOrThrow("set_production_batch_output", {
       p_batch_id: batchId,
       p_product_id: text(formData, "product_id"),
-      p_output_weight_grams: kilogramsToGrams(text(formData, "output_weight_kg"))
+      p_output_weight_grams: kilogramsToGrams(text(formData, "output_weight_kg")),
+      ...(rawUnits ? { p_output_quantity_units: unitsToInteger(rawUnits) } : {})
     });
     revalidatePath("/admin/production");
     return { batchId };

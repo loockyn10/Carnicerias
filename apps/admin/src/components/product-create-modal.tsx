@@ -6,7 +6,7 @@ import { ProductPricingFields } from "./product-pricing-fields";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories, cashDiscountBps }: { categories: { id: string; name: string }[]; cashDiscountBps: number }) {
+export function ProductCreateModal({ categories }: { categories: { id: string; name: string }[] }) {
   const [open, setOpen] = useState(false);
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
@@ -17,7 +17,7 @@ export function ProductCreateModal({ categories, cashDiscountBps }: { categories
   return <>
     <button className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" onClick={() => setOpen(true)} type="button">+ Nuevo producto</button>
     {open ? <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 p-4"><div aria-modal="true" className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl" role="dialog">
-      <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black">Nuevo producto</h2><p className="mt-1 text-sm text-stone-600">Costo y margen generan automáticamente el primer precio.</p></div><button className="text-stone-500 hover:text-stone-900" onClick={() => setOpen(false)} type="button">Cerrar</button></div>
+      <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black">Nuevo producto</h2><p className="mt-1 text-sm text-stone-600">Cargá el precio de venta manualmente.</p></div><button className="text-stone-500 hover:text-stone-900" onClick={() => setOpen(false)} type="button">Cerrar</button></div>
       <form action={action} className="mt-5 grid gap-3">
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
         <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} name="category_id" required><option value="">Seleccionar</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
@@ -29,7 +29,7 @@ export function ProductCreateModal({ categories, cashDiscountBps }: { categories
             <label className="flex items-center gap-2"><input checked={isRawMaterial} name="is_raw_material" onChange={(event) => setIsRawMaterial(event.target.checked)} type="checkbox" /> Materia prima (insumo de desposte)</label>
           </div>
         </div>
-        {requiresPricing ? <ProductPricingFields cashDiscountBps={cashDiscountBps} costCents={null} currentPriceCents={null} profitMarkupBps={null} required unitType={unitType} /> : <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-600">Una materia prima no necesita precio de venta: su costo se registra en cada desposte.</p>}
+        {requiresPricing ? <ProductPricingFields currentCostCents={null} currentPriceCents={null} required unitType={unitType} /> : <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-600">Una materia prima no necesita precio de venta: su costo se registra en cada desposte.</p>}
         <input name="slug" type="hidden" value="" /><label className="flex items-center gap-2 text-sm"><input defaultChecked name="active" type="checkbox" /> Producto activo</label>
         {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}
         <div className="mt-2 flex justify-end gap-2"><button className="rounded-lg px-4 py-2 text-sm font-bold text-stone-600" onClick={() => setOpen(false)} type="button">Cancelar</button><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Creando…" : "Crear producto"}</button></div>

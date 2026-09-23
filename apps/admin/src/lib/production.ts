@@ -22,11 +22,14 @@ export interface ProductionBatchOutputDetail {
   id: string;
   productId: string;
   productName: string;
+  /** Real physical weight of this output within the batch — always set, WEIGHT or UNIT alike. */
   outputWeightGrams: number;
-  salePricePerKgCents: number | null;
+  outputQuantityUnits: number | null;
+  salePriceCents: number | null;
   saleValueCents: number | null;
   allocatedCostCents: number | null;
   allocatedCostPerKgCents: number | null;
+  allocatedCostPerUnitCents: number | null;
   isSnapshot: boolean;
 }
 

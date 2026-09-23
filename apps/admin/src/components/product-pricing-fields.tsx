@@ -1,6 +1,6 @@
 "use client";
 
-import { calculatePriceFormation, formatCurrency } from "@carnicerias/business-logic";
+import { calculateGrossMarginCents, calculateProfitabilityOverCostBps, formatCurrency } from "@carnicerias/business-logic";
 import { useMemo, useState } from "react";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
@@ -13,22 +13,44 @@ function parseCents(value: string) {
   const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
   return match ? BigInt(match[1] ?? "0") * 100n + BigInt((match[2] ?? "").padEnd(2, "0")) : null;
 }
-function parseBps(value: string) {
-  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
-  return match ? BigInt(match[1] ?? "0") * 100n + BigInt((match[2] ?? "").padEnd(2, "0")) : null;
+function formatBps(bps: bigint | null) {
+  if (bps === null) return "—";
+  return `${(Number(bps) / 100).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
-export function ProductPricingFields({ unitType, costCents, profitMarkupBps, cashDiscountBps, currentPriceCents, required = false }: { unitType: "WEIGHT" | "UNIT"; costCents: number | null; profitMarkupBps: number | null; cashDiscountBps: number; currentPriceCents: number | null; required?: boolean }) {
-  const [cost, setCost] = useState(centsInput(costCents));
-  const [profit, setProfit] = useState(profitMarkupBps == null ? "" : String(profitMarkupBps / 100));
-  const preview = useMemo(() => {
-    const parsedCost = parseCents(cost); const parsedProfit = parseBps(profit);
-    if (parsedCost == null || parsedCost <= 0n || parsedProfit == null) return null;
-    try { return calculatePriceFormation(parsedCost, parsedProfit, BigInt(cashDiscountBps)); } catch { return null; }
-  }, [cashDiscountBps, cost, profit]);
+/**
+ * Precio de venta = decisión manual del admin; costo = evidencia derivada (desposte automático o
+ * carga directa para productos comprados terminados). Nunca se deriva un precio de costo+margen
+ * acá: eso quedó descartado (ver docs/DECISIONS.md). Ganancia/rentabilidad son métricas
+ * informativas calculadas con precio (input) − costo (vigente, de sólo lectura).
+ */
+export function ProductPricingFields({
+  unitType, currentPriceCents, currentCostCents, required = false
+}: { unitType: "WEIGHT" | "UNIT"; currentPriceCents: number | null; currentCostCents: number | null; required?: boolean }) {
+  const [price, setPrice] = useState(centsInput(currentPriceCents));
+  const [directCost, setDirectCost] = useState("");
   const suffix = unitType === "WEIGHT" ? "/ kg" : "/ unidad";
+
+  const parsedPrice = useMemo(() => parseCents(price), [price]);
+  const margin = useMemo(() => {
+    if (parsedPrice === null || parsedPrice <= 0n || currentCostCents === null) return null;
+    const costCents = BigInt(currentCostCents);
+    const grossMarginCents = calculateGrossMarginCents(parsedPrice, costCents);
+    return { grossMarginCents, profitabilityBps: calculateProfitabilityOverCostBps(grossMarginCents, costCents) };
+  }, [parsedPrice, currentCostCents]);
+
   return <div className="grid gap-3 rounded-xl border border-stone-200 p-4">
-    <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">{unitType === "WEIGHT" ? "Costo por kg" : "Costo por unidad"}<input className={input} min="0.01" name="cost" onChange={(event) => setCost(event.target.value)} required={required} step="0.01" type="number" value={cost} /></label><label className="grid gap-1 text-sm font-medium">Margen de ganancia sobre costo<input className={input} min="0" max="1000" name="profit_markup" onChange={(event) => setProfit(event.target.value)} required={required} step="0.01" type="number" value={profit} /></label></div>
-    {preview ? <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-2"><div><dt className="text-stone-500">Precio de lista</dt><dd className="font-black">{formatCurrency(preview.listPriceCents)} {suffix}</dd></div><div><dt className="text-stone-500">Precio con descuento por pago (-{(cashDiscountBps / 100).toLocaleString("es-AR")}%)</dt><dd className="font-black text-emerald-700">{formatCurrency(preview.effectiveCashPriceCents)} {suffix}</dd></div></dl> : <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{currentPriceCents ? `Configuración de precio pendiente. Precio vigente: ${formatCurrency(BigInt(currentPriceCents))} ${suffix}.` : "SIN PRECIO · no disponible en POS. Completá costo y margen para generar el primer precio."}</div>}
+    <label className="grid gap-1 text-sm font-medium">{unitType === "WEIGHT" ? "Precio de venta por kg" : "Precio de venta por unidad"}
+      <input className={input} min="0.01" name="price" onChange={(event) => setPrice(event.target.value)} required={required} step="0.01" type="number" value={price} />
+    </label>
+    <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-3">
+      <div><dt className="text-stone-500">Costo estimado vigente</dt><dd className="font-black">{currentCostCents !== null ? `${formatCurrency(BigInt(currentCostCents))} ${suffix}` : "No disponible"}</dd></div>
+      <div><dt className="text-stone-500">Ganancia estimada</dt><dd className={`font-black ${margin && margin.grossMarginCents < 0 ? "text-red-700" : "text-emerald-700"}`}>{margin ? `${formatCurrency(margin.grossMarginCents)} ${suffix}` : "—"}</dd></div>
+      <div><dt className="text-stone-500">Rentabilidad sobre costo</dt><dd className="font-black">{margin ? formatBps(margin.profitabilityBps) : "—"}</dd></div>
+    </dl>
+    <p className="text-xs text-stone-500">El costo se calcula solo (desposte) o se carga a mano si el producto se compra ya terminado; nunca determina el precio.</p>
+    <label className="grid gap-1 text-sm font-medium">Costo directo (opcional, sólo si se compra ya terminado)
+      <input className={input} min="0.01" name="direct_cost" onChange={(event) => setDirectCost(event.target.value)} step="0.01" type="number" value={directCost} />
+    </label>
   </div>;
 }

@@ -121,6 +121,28 @@ Pendiente (agente, requiere Docker/CI Linux — mismo bloqueo que 024–027):
   (`pnpm db:reset && pnpm db:test`) y regenerar `database.types.ts` con
   `pnpm db:types`.
 
+## P1 — Validar Pricing manual / Desposte UNIT contra Postgres real
+
+Implementado 2026-09-22 (ver `docs/CURRENT_STATE.md` y `docs/DECISIONS.md` D-037/D-038):
+precio de venta manual (`set_product_price`/`bulk_set_product_prices`), costo derivado de desposte
+(`complete_production_batch` alimenta `product_costs`) o carga directa (`set_product_cost`),
+descuento por pago sin reprecio (`set_cash_discount`), edición masiva de precios en
+Productos → Precios, y outputs de desposte por peso o por unidad. Migraciones `202609220029`/
+`202609220030` y tests (Vitest + pgTAP) escritos y revisados manualmente. Docker Desktop no estuvo
+operativo en esta sesión (mismo bloqueo que 024–028).
+
+Pendiente:
+
+- Ejecutar `pnpm db:reset && pnpm db:test` (`supabase/tests/production_batches.test.sql` extendido,
+  `supabase/tests/manual_pricing.test.sql` nuevo) en un entorno con Docker/CI Linux funcional.
+- Regenerar `packages/database/src/database.types.ts` con `pnpm db:types` (se editó a mano) y
+  revisar `packages/database/src/database.rpc-null-overrides.ts` contra el resultado.
+- Confirmar con `supabase migration list --linked` si 029–030 llegaron a aplicarse al remoto.
+- Smoke manual en Admin: cargar un precio individual y una tanda masiva en Productos → Precios,
+  confirmar que cambiar el descuento por pago no modifica ningún precio de lista, finalizar un
+  desposte con outputs mixtos WEIGHT+UNIT (cabeza entera + un corte por kg) y confirmar que
+  Rentabilidad/ficha de producto muestran el costo estimado recién asignado.
+
 ## P2/P3 — Capacidades opcionales según negocio
 
 - Completar venta POS `UNIT` si se vuelve necesaria comercialmente.

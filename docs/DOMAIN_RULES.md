@@ -17,31 +17,15 @@ Sólo las ventas `COMPLETED` se consideran activas para métricas comerciales y 
 
 ## Formación de precio
 
-El flujo normal es:
+**Precio de venta = decisión manual.** El administrador carga directamente el precio de lista vigente (`product_prices`, vía `set_product_price`/`bulk_set_product_prices`) mirando mercado/competencia. No se pide costo ni margen para fijarlo, y no se recalcula automáticamente cuando cambia el costo, el descuento por medio de pago o cualquier otra configuración comercial (ver D-037). El flujo anterior de costo + markup → gross-up (D-006) quedó superseded; las tablas/RPC de ese flujo (`product_pricing_settings`, `save_product_pricing`, `calculate_product_price`, `set_cash_discount_and_reprice`) se conservan en la base para no perder historial, pero ninguna pantalla vigente vuelve a escribirlas.
 
-1. costo;
-2. ganancia deseada sobre costo;
-3. precio objetivo descontado;
-4. gross-up para obtener precio de lista.
+**Costo = evidencia derivada**, nunca un input manual acoplado al precio:
 
-La “ganancia %” configurada es **markup sobre costo**, no margen financiero sobre venta.
+- automático: al finalizar un desposte, el costo asignado por valor relativo de venta de cada output pasa a ser el costo vigente de ese producto (`product_costs`);
+- manual: para un producto comprado ya terminado (no producido por desposte), se carga directo (`set_product_cost`), sin markup;
+- puede no existir todavía: un producto con precio pero sin costo es válido; se muestra como costo no disponible, nunca se inventa.
 
-Ejemplo:
-
-- costo: $10.000;
-- markup: 30%;
-- precio objetivo: $13.000.
-
-Si el descuento elegible es 10%:
-
-`precio_lista = precio_objetivo / (1 - 0,10)`
-
-Resultado aproximado:
-
-- lista: $14.444,44;
-- luego 10% de descuento: $13.000.
-
-No usar simplemente `precio_objetivo × 1,10`.
+Un producto puede tener precio de lista y no tener costo (todavía no se produjo/compró con costo registrado); la venta no se bloquea por eso.
 
 ## Descuento por medio de pago
 
@@ -187,8 +171,12 @@ Un `production_batch` transforma un insumo de origen (peso, gramos enteros) en m
 - `merma = peso_entrada - suma(peso_outputs)`. No se permite finalizar si la suma de outputs supera el peso de entrada.
 - `costo_promedio_kg_vendible = costo_total / kg_vendibles` es un promedio global; nunca se presenta como el costo real de un corte específico.
 - El costo por output se distribuye por **valor relativo de venta** (`valor_output / valor_total × costo_total`). Es una asignación estimada, no el costo de compra individual del corte.
+- Todo output registra su **peso real producido** (`output_weight_grams`), siempre obligatorio, sea el producto `WEIGHT` o `UNIT`. Un output cuyo producto se vende por unidad registra **además** la cantidad de unidades obtenidas (`output_quantity_units`, obligatoria sólo en ese caso) — ver D-038.
+- El **valor comercial** (para asignar costo) usa una fórmula distinta según el tipo: `WEIGHT` = peso × precio/kg; `UNIT` = cantidad de unidades × precio/unidad. El peso real de un output `UNIT` (p. ej. 2 arrollados = 2,640 kg) **nunca** entra en esta cuenta, aunque siempre se registre.
+- La **merma** es `input_weight_grams - SUM(output_weight_grams de TODOS los outputs, sean WEIGHT o UNIT)`: el peso real de un output `UNIT` sí cuenta para este balance físico, aunque no determine su valor comercial ni su costo asignado.
+- `products.approx_weight_grams` (opcional) es distinto: una referencia informativa **por producto**, no ligada a ningún lote (p. ej. "cabeza entera, aprox 5 kg" en la ficha del producto); nunca interviene en precio, costo, asignación ni en el balance de merma de ningún lote — para eso siempre se usa el peso real cargado en ese lote.
 - La suma de los costos asignados debe ser **exactamente igual** al costo total del lote. Se distribuye el residuo de redondeo determinísticamente (mayor resto primero, empate por `product_id`), nunca se acepta una diferencia de centavos.
-- Al finalizar se toma un snapshot del precio de venta vigente de cada output (reutilizando `product_prices`, no un sistema paralelo). Si un output no tiene precio vigente, se bloquea el cálculo y se informa cuál producto lo necesita.
+- Al finalizar se toma un snapshot del precio de venta vigente de cada output (reutilizando `product_prices`, no un sistema paralelo). Si un output no tiene precio vigente, se bloquea el cálculo y se informa cuál producto lo necesita. Al mismo tiempo, el costo asignado de cada output pasa a ser el costo vigente de ese producto en `product_costs` (ver "Formación de precio" arriba y D-037): el costo se alimenta solo, nunca hay que cargarlo a mano para un producto producido.
 - Estados: `DRAFT` (editable), `COMPLETED` (histórico, inmutable), `CANCELLED` (sólo permitido desde `DRAFT`; cancelar un lote completado requeriría una reversión que todavía no existe).
 - Un lote completado nunca se reescribe silenciosamente.
 - Es información administrativa (costo de compra, costo asignado, márgenes): pertenece a Admin, no al POS de mostrador. Los permisos `production.read`/`production.write` son exclusivos del rol `admin` (mismo patrón que `settlements.*`/`analytics.read`).

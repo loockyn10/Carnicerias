@@ -58,13 +58,11 @@ Empleados, productos y otras entidades con referencias históricas se desactivan
 
 ## D-006 — Pricing por costo + markup
 
-**Status:** Active
+**Status:** Superseded by D-037
 
-El flujo normal configura costo + porcentaje de ganancia sobre costo.
+El flujo normal configuraba costo + porcentaje de ganancia sobre costo, y el precio de lista se obtenía por gross-up del descuento elegible.
 
-El precio de lista se obtiene por gross-up del descuento elegible.
-
-**Motivo:** preservar el precio objetivo luego del descuento.
+**Motivo (histórico):** preservar el precio objetivo luego del descuento.
 
 ---
 
@@ -366,6 +364,39 @@ el borrado y exige desactivar (`active = false`) en su lugar.
 hasta ahora sólo se sembraba manualmente. `branches.write` y las policies de
 insert/update en `branches` ya existían desde `202609100001` sin usarse; esta
 decisión es sobre cómo se usa ese permiso, no un cambio de RLS nuevo.
+
+---
+
+## D-037 — Precio de venta manual; costo derivado de desposte o compra directa
+
+**Status:** Active
+
+El precio de venta (`product_prices`) deja de derivarse de costo + markup (D-006, ahora superseded). Pasa a ser una decisión manual del administrador (compite por precio de mercado), cargada directamente vía `set_product_price`/`bulk_set_product_prices` (migración `202609220030`). Cambiar el costo, el descuento por medio de pago o cualquier otra configuración comercial **nunca** recalcula ni sobrescribe un precio de venta ya cargado.
+
+El costo (`product_costs`) pasa a ser el lado derivado: automático al finalizar un desposte (`complete_production_batch`, migración `202609220029`, alimenta `product_costs` con el costo asignado por valor relativo de venta de cada output) o manual vía `set_product_cost` para productos comprados ya terminados (sin desposte). Un producto puede tener precio sin tener costo todavía; eso es válido y se muestra como "costo no disponible", nunca se inventa.
+
+`save_product_pricing`/`calculate_product_price`/`set_cash_discount_and_reprice` (D-006, migración `202609130012`) quedan intactas en la base de datos (historial, D-005) pero ninguna UI vuelve a llamarlas: el descuento por medio de pago se sigue configurando (`set_cash_discount`, migración `202609220030`), pero ya no repricea ningún producto.
+
+**Motivo:** el negocio real fija precio mirando la competencia, no calculándolo desde un costo cargado a mano; el costo real surge de la producción (desposte) o de la compra, no al revés.
+
+---
+
+## D-038 — Desposte: outputs por peso, y opcionalmente también por unidad
+
+**Status:** Active
+
+Todo output de un lote de desposte (`production_batch_outputs`) registra su **peso real producido** (`output_weight_grams`, siempre obligatorio, para cualquier tipo de producto) — migración `202609220029`. Un output cuyo producto se vende por unidad (`UNIT`) registra **además** la cantidad de unidades obtenidas (`output_quantity_units`, obligatoria sólo en ese caso).
+
+Dos usos distintos y no intercambiables del mismo lote:
+
+- **Valor comercial / asignación de costo** (D-028): para un output `WEIGHT`, peso × precio/kg; para un output `UNIT`, cantidad × precio/unidad. El peso real de un output `UNIT` (p. ej. 2 arrollados = 2,640 kg) **nunca** interviene acá — la asignación de costo por valor relativo de venta (`allocateProductionCost`/`compute_production_preview`) ya era agnóstica al tipo de medida, sólo necesita el valor de venta potencial en centavos.
+- **Merma/rendimiento**: `waste_grams = input_weight_grams - SUM(output_weight_grams de TODOS los outputs, sean WEIGHT o UNIT)`. Un output `UNIT` sigue siendo materia física del lote y su peso real debe contar para este balance, aunque no determine su valor comercial.
+
+El costo asignado a un output `UNIT` se expresa igual como costo/unidad (nunca costo/kg) al alimentar `product_costs`, porque así se cotiza ese producto en todo el resto del sistema (precio, ventas).
+
+`products.approx_weight_grams` (opcional, migración `202609220029`) es distinto de lo anterior: es una referencia informativa **por producto**, no ligada a ningún lote (p. ej. "cabeza entera, aprox 5 kg" en la ficha del producto); nunca se usa en ningún cálculo de precio, costo, asignación o balance de merma — para eso siempre se usa el peso real cargado en el lote (`output_weight_grams`).
+
+**Motivo:** el negocio real desposta piezas que se venden por unidad (cabeza entera, arrollado) junto con cortes por peso en el mismo lote, y esas piezas siguen siendo materia física real del animal: omitir su peso subestimaría la merma real del lote. El modelo de asignación por valor comercial ya soportaba el caso `UNIT` matemáticamente; sólo faltaba conservar también su peso físico para el balance.
 
 ---
 

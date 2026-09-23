@@ -6,21 +6,44 @@ export interface ProductionOutputWeight {
   outputWeightGrams: number;
 }
 
-export interface ProductionOutputPricing {
-  productId: string;
-  outputWeightGrams: number;
-  salePricePerKgCents: bigint;
-}
+/**
+ * An output priced for cost allocation, discriminated by how the output product SELLS: WEIGHT
+ * (commercial value = price per kg × grams obtained) or UNIT (commercial value = price per unit ×
+ * units obtained). A UNIT output still has real physical weight — e.g. 2 arrollados weigh 2.640 kg
+ * — and that weight is required here too: it never determines commercial value/cost allocation
+ * for a UNIT output (that stays unit count × price per unit), but it DOES feed the batch's
+ * merma/rendimiento balance (calculateProducedWeightGrams/buildProductionBatchSummary below sum
+ * every output's weight, WEIGHT or UNIT alike). Never confuse this with a product's
+ * `approx_weight_grams` (a per-product, purely informational reference) — this is the real
+ * measured weight of THIS batch's output.
+ */
+export type ProductionOutputPricing =
+  | { productId: string; unitType: "WEIGHT"; outputWeightGrams: number; salePricePerKgCents: bigint }
+  | { productId: string; unitType: "UNIT"; outputWeightGrams: number; outputQuantityUnits: number; salePricePerUnitCents: bigint };
 
-export interface ProductionOutputAllocation {
-  productId: string;
-  outputWeightGrams: number;
-  salePricePerKgCents: bigint;
-  saleValueCents: bigint;
-  allocationBps: bigint;
-  allocatedCostCents: bigint;
-  allocatedCostPerKgCents: bigint;
-}
+export type ProductionOutputAllocation =
+  | {
+      productId: string;
+      unitType: "WEIGHT";
+      outputWeightGrams: number;
+      salePricePerKgCents: bigint;
+      saleValueCents: bigint;
+      allocationBps: bigint;
+      allocatedCostCents: bigint;
+      allocatedCostPerKgCents: bigint;
+    }
+  | {
+      productId: string;
+      unitType: "UNIT";
+      outputWeightGrams: number;
+      outputQuantityUnits: number;
+      salePricePerUnitCents: bigint;
+      saleValueCents: bigint;
+      allocationBps: bigint;
+      allocatedCostCents: bigint;
+      allocatedCostPerUnitCents: bigint;
+      allocatedCostPerKgCents: bigint;
+    };
 
 /** Rounds half up like divideRoundHalfUp, but accepts a negative numerator (a loss). */
 function divideRoundHalfUpSigned(numerator: bigint, denominator: bigint): bigint {
@@ -70,22 +93,34 @@ export function calculateAverageCostPerKgCents(costTotalCents: bigint, producedW
   return divideRoundHalfUp(costTotalCents * 1_000n, BigInt(producedWeightGrams));
 }
 
-/** Potential sale value of one output at its price snapshot. */
+/** Potential sale value of one WEIGHT output at its price snapshot. */
 export function calculateOutputSaleValueCents(salePricePerKgCents: bigint, outputWeightGrams: number): bigint {
   return priceForWeight(salePricePerKgCents, outputWeightGrams);
+}
+
+/** Potential sale value of one UNIT output at its price snapshot. */
+export function calculateOutputSaleValueCentsForUnit(salePricePerUnitCents: bigint, outputQuantityUnits: number): bigint {
+  return salePricePerUnitCents * BigInt(outputQuantityUnits);
+}
+
+function saleValueCentsForOutput(output: ProductionOutputPricing): bigint {
+  return output.unitType === "WEIGHT"
+    ? calculateOutputSaleValueCents(output.salePricePerKgCents, output.outputWeightGrams)
+    : calculateOutputSaleValueCentsForUnit(output.salePricePerUnitCents, output.outputQuantityUnits);
 }
 
 /** Total potential sale value across every output. */
 export const calculateTotalSaleValueCents = sumMoney;
 
 /**
- * Throws naming the first output whose product has no valid current sale price, so the caller
- * can block finalizing the batch with a clear message instead of allocating cost against a gap.
+ * Throws naming the first output whose product has no valid current sale price (per kg or per
+ * unit, whichever applies), so the caller can block finalizing the batch with a clear message
+ * instead of allocating cost against a gap.
  */
 export function assertOutputsHavePrices(
-  outputs: readonly { productName: string; salePricePerKgCents: bigint | null }[]
+  outputs: readonly { productName: string; salePriceCents: bigint | null }[]
 ): void {
-  const missing = outputs.find((output) => output.salePricePerKgCents === null || output.salePricePerKgCents <= 0n);
+  const missing = outputs.find((output) => output.salePriceCents === null || output.salePriceCents <= 0n);
   if (missing) {
     throw new RangeError(`El producto "${missing.productName}" no tiene un precio de venta vigente`);
   }
@@ -94,7 +129,8 @@ export function assertOutputsHavePrices(
 /**
  * Allocates the batch's total cost across outputs by relative sale value (a standard joint-cost
  * technique): each output's share of potential revenue determines its share of cost. This is an
- * assigned/estimated cost, never the true purchase cost of that specific cut.
+ * assigned/estimated cost, never the true purchase cost of that specific cut. Works the same way
+ * whether an output sells by weight or by unit — only how its own sale value is computed differs.
  *
  * Uses a largest-remainder distribution so the allocated costs always sum EXACTLY to
  * costTotalCents; per-output division alone would leak or invent cents through independent
@@ -109,7 +145,7 @@ export function allocateProductionCost(
 
   const shares = outputs.map((output, index) => ({
     index,
-    saleValueCents: calculateOutputSaleValueCents(output.salePricePerKgCents, output.outputWeightGrams)
+    saleValueCents: saleValueCentsForOutput(output)
   }));
   const totalSaleValueCents = sumMoney(shares.map((share) => share.saleValueCents));
   if (totalSaleValueCents <= 0n) {
@@ -144,14 +180,31 @@ export function allocateProductionCost(
   return outputs.map((output, index) => {
     const saleValueCents = distribution[index]?.saleValueCents ?? 0n;
     const allocatedCostCents = allocatedCents[index] ?? 0n;
+    const allocationBps = divideRoundHalfUp(saleValueCents * 10_000n, totalSaleValueCents);
+    const allocatedCostPerKgCents = divideRoundHalfUp(allocatedCostCents * 1_000n, BigInt(output.outputWeightGrams));
+    if (output.unitType === "WEIGHT") {
+      return {
+        productId: output.productId,
+        unitType: "WEIGHT",
+        outputWeightGrams: output.outputWeightGrams,
+        salePricePerKgCents: output.salePricePerKgCents,
+        saleValueCents,
+        allocationBps,
+        allocatedCostCents,
+        allocatedCostPerKgCents
+      };
+    }
     return {
       productId: output.productId,
+      unitType: "UNIT",
       outputWeightGrams: output.outputWeightGrams,
-      salePricePerKgCents: output.salePricePerKgCents,
+      outputQuantityUnits: output.outputQuantityUnits,
+      salePricePerUnitCents: output.salePricePerUnitCents,
       saleValueCents,
-      allocationBps: divideRoundHalfUp(saleValueCents * 10_000n, totalSaleValueCents),
+      allocationBps,
       allocatedCostCents,
-      allocatedCostPerKgCents: divideRoundHalfUp(allocatedCostCents * 1_000n, BigInt(output.outputWeightGrams))
+      allocatedCostPerUnitCents: divideRoundHalfUp(allocatedCostCents, BigInt(output.outputQuantityUnits)),
+      allocatedCostPerKgCents
     };
   });
 }
@@ -190,7 +243,12 @@ export interface ProductionBatchSummary {
 /**
  * Composes every batch-level figure from its inputs. Pure and safe to call while a batch is
  * still a draft (with zero or partial outputs); it never assigns per-output cost — use
- * allocateProductionCost for that once every output has a price snapshot.
+ * allocateProductionCost for that once every output has a price snapshot. `outputs` (for
+ * waste/yield) must include EVERY output's real physical weight, WEIGHT or UNIT alike — a UNIT
+ * output (e.g. 2 arrollados) still has measured weight and must count toward the batch's physical
+ * balance, even though that same weight never determines its commercial value (see
+ * ProductionOutputPricing above and docs/DOMAIN_RULES.md, merma). `outputSaleValuesCents` covers
+ * every output regardless of kind too, since sale value is always expressed in cents.
  */
 export function buildProductionBatchSummary(input: {
   inputWeightGrams: number;

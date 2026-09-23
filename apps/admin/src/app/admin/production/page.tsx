@@ -57,7 +57,7 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const [batchesResult, branchesResult, productsResult, settingsResult] = await Promise.all([
     perf.measure("batches", supabase.rpc("list_production_batches", { p_limit: 50, ...(statusFilter ? { p_status: statusFilter } : {}) })),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
-    perf.measure("products", supabase.from("products").select("id, name, sku, inventory_role").eq("organization_id", context.organizationId).eq("active", true).eq("unit_type", "WEIGHT").order("name")),
+    perf.measure("products", supabase.from("products").select("id, name, sku, inventory_role, unit_type, approx_weight_grams").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("productionBranch", supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).single())
   ]);
   const batches = jsonArray<ProductionBatchListItem>(batchesResult.data);
@@ -65,7 +65,10 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const products = productsResult.data ?? [];
   const productionBranchId = settingsResult.data?.production_branch_id ?? null;
   const productionBranch = branches.find((branch) => branch.id === productionBranchId) ?? null;
-  const sourceProducts = products.filter((product) => product.inventory_role === "RAW_MATERIAL" || product.inventory_role === "BOTH");
+  // Only a purchased weighed input can be desposted (media res, etc.); an output, though, can be
+  // sold either by weight or by unit (cabeza entera, arrollado), so the output selector is not
+  // restricted to WEIGHT the way the source-input selector is.
+  const sourceProducts = products.filter((product) => product.unit_type === "WEIGHT" && (product.inventory_role === "RAW_MATERIAL" || product.inventory_role === "BOTH"));
   const sellableProducts = products.filter((product) => product.inventory_role === "SELLABLE" || product.inventory_role === "BOTH");
 
   const detailResult = batchId
@@ -85,7 +88,7 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   // their inventory_role was changed after the batch was created, so an old batch never renders
   // with a selector that silently drops its own current value.
   const editSourceProducts = detail && !sourceProducts.some((product) => product.id === detail.batch.sourceProductId)
-    ? [...sourceProducts, { id: detail.batch.sourceProductId, name: detail.batch.sourceProductName, sku: null, inventory_role: "RAW_MATERIAL" as const }]
+    ? [...sourceProducts, { id: detail.batch.sourceProductId, name: detail.batch.sourceProductName, sku: null, inventory_role: "RAW_MATERIAL" as const, unit_type: "WEIGHT" as const, approx_weight_grams: null }]
     : sourceProducts;
   const outputProducts = (detail ? sellableProducts.filter((product) => product.id !== detail.batch.sourceProductId) : sellableProducts);
 
@@ -186,23 +189,29 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
             <div className="mt-3 overflow-x-auto rounded-xl border">
               <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="bg-stone-50"><tr>
-                  <th className="p-2">Producto</th><th className="p-2">Peso</th><th className="p-2">Precio venta/kg</th>
+                  <th className="p-2">Producto</th><th className="p-2">Peso real</th><th className="p-2">Unidades</th><th className="p-2">Precio venta</th>
                   <th className="p-2">Valor potencial</th><th className="p-2">% del valor total</th>
-                  <th className="p-2">Costo asignado</th><th className="p-2">Costo asignado/kg</th>
+                  <th className="p-2">Costo asignado</th><th className="p-2">Costo/kg</th><th className="p-2">Costo/u</th>
                   {detail.batch.status === "DRAFT" ? <th className="p-2" /> : null}
                 </tr></thead>
                 <tbody>{detail.outputs.map((output) => {
                   const shareBps = output.saleValueCents !== null && detail.summary.totalSaleValueCents
                     ? Math.round((output.saleValueCents * 10_000) / detail.summary.totalSaleValueCents)
                     : null;
+                  const isUnit = output.outputQuantityUnits !== null;
+                  const priceLabel = output.salePriceCents !== null
+                    ? `${formatCurrency(BigInt(output.salePriceCents))} ${isUnit ? "/u" : "/kg"}`
+                    : null;
                   return <tr className="border-t" key={output.id}>
                     <td className="p-2 font-bold">{output.productName}</td>
                     <td className="p-2">{formatWeight(output.outputWeightGrams)}</td>
-                    <td className="p-2">{output.salePricePerKgCents !== null ? formatCurrency(BigInt(output.salePricePerKgCents)) : <span className="font-bold text-amber-700">Sin precio</span>}</td>
+                    <td className="p-2">{output.outputQuantityUnits !== null ? `${String(output.outputQuantityUnits)} u` : "—"}</td>
+                    <td className="p-2">{priceLabel ?? <span className="font-bold text-amber-700">Sin precio</span>}</td>
                     <td className="p-2">{output.saleValueCents !== null ? formatCurrency(BigInt(output.saleValueCents)) : "—"}</td>
                     <td className="p-2">{shareBps !== null ? formatBps(shareBps) : "—"}</td>
                     <td className="p-2">{output.allocatedCostCents !== null ? formatCurrency(BigInt(output.allocatedCostCents)) : "—"}</td>
                     <td className="p-2">{output.allocatedCostPerKgCents !== null ? formatCurrency(BigInt(output.allocatedCostPerKgCents)) : "—"}</td>
+                    <td className="p-2">{output.allocatedCostPerUnitCents !== null ? formatCurrency(BigInt(output.allocatedCostPerUnitCents)) : "—"}</td>
                     {detail.batch.status === "DRAFT" ? <td className="p-2">
                       <form action={removeProductionBatchOutputAction}>
                         <input name="output_id" type="hidden" value={output.id} />

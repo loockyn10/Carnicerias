@@ -79,22 +79,22 @@ Los roles son filas, los permisos son capacidades y `role_permissions` los vincu
 
 ## Precio e historia
 
-- `product_costs`: historial de costo.
-- `product_pricing_settings`: historial de markup.
-- `organization_cash_discounts`: historial de descuento por medio elegible.
-- `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal.
+- `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal. **Es la única fuente del precio de venta**, cargado manualmente (`set_product_price`/`bulk_set_product_prices`, migración `202609220030`) — no se deriva de costo+markup (ver D-037, `docs/DECISIONS.md`).
+- `product_costs`: historial de costo, alimentado automáticamente al finalizar un desposte (`complete_production_batch`, migración `202609220029`) o cargado directo (`set_product_cost`) para productos comprados ya terminados.
+- `organization_cash_discounts`: historial de descuento por medio elegible, configurado vía `set_cash_discount` (sin reprecio).
+- `product_pricing_settings` (markup) y el flujo `save_product_pricing`/`calculate_product_price`/`set_cash_discount_and_reprice` (D-006) quedan en la base intactos (historial) pero ninguna UI vigente los vuelve a escribir.
 
 Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso usan cents y gramos enteros; porcentajes usan basis points y redondeo half-up. Los ítems de venta guardan snapshots suficientes de lista, costo, markup, descuento por pago, promoción y subtotal final.
 
-Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo/markup. El dominio, pricing y analytics contemplan `UNIT`, pero la venta POS completa actualmente sólo soporta `WEIGHT`.
+Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo. El dominio, pricing y analytics contemplan `UNIT` (incluidos outputs de desposte por unidad, ver más abajo), pero la venta POS completa actualmente sólo soporta `WEIGHT`.
 
 ## Desposte / Producción
 
-`production_batches` y `production_batch_outputs` (migraciones `202609220024`/`202609220025`) registran la transformación de un insumo comprado por peso en múltiples productos de catálogo más merma. Nombres genéricos deliberadamente (no específicos de cerdo): el mismo modelo sirve para cualquier insumo.
+`production_batches` y `production_batch_outputs` (migraciones `202609220024`/`202609220025`, extendidas en `202609220029`) registran la transformación de un insumo comprado por peso en múltiples productos de catálogo más merma. Nombres genéricos deliberadamente (no específicos de cerdo): el mismo modelo sirve para cualquier insumo. Todo output registra su peso real producido (`output_weight_grams`, siempre obligatorio); un output cuyo producto vende por unidad registra además `output_quantity_units` (ver D-038). El peso real determina la merma (`input_weight_grams - suma(output_weight_grams de todos los outputs)`), nunca el valor comercial de un output `UNIT` (ese usa cantidad × precio/unidad, independiente del peso).
 
-Los cálculos (costo total, merma, rendimiento, valor potencial, asignación de costo por valor relativo de venta con redondeo determinístico exacto, márgenes) viven como funciones puras en `packages/business-logic/src/production.ts`, reutilizables sin Supabase. El servidor implementa la misma asignación (`app_private.compute_production_preview`) tanto para la vista previa en vivo de un borrador como, sin cambios, para los valores que `complete_production_batch` congela como snapshot.
+Los cálculos (costo total, merma, rendimiento, valor potencial, asignación de costo por valor relativo de venta con redondeo determinístico exacto, márgenes) viven como funciones puras en `packages/business-logic/src/production.ts`, reutilizables sin Supabase; `allocateProductionCost` acepta outputs `WEIGHT` o `UNIT` indistintamente (discriminated union), ya que sólo necesita el valor de venta potencial en centavos de cada uno. El servidor implementa la misma asignación (`app_private.compute_production_preview`) tanto para la vista previa en vivo de un borrador como, sin cambios, para los valores que `complete_production_batch` congela como snapshot.
 
-Al finalizar un lote (`DRAFT → COMPLETED`, irreversible salvo una futura reversión no implementada), se toma snapshot del precio de venta vigente de cada output (reutilizando `product_prices`) y se escribe en el ledger existente `stock_movements`: `PRODUCTION_CONSUME` (negativo, insumo completo) y `PRODUCTION_YIELD` (positivo, cada output). La merma nunca es un movimiento de stock; es la diferencia aritmética reportada en `production_batches.waste_grams`. No existe un segundo modelo de inventario.
+Al finalizar un lote (`DRAFT → COMPLETED`, irreversible salvo una futura reversión no implementada), se toma snapshot del precio de venta vigente de cada output (reutilizando `product_prices`) y se escribe en el ledger existente `stock_movements`: `PRODUCTION_CONSUME` (negativo, insumo completo) y `PRODUCTION_YIELD` (positivo, cada output, en gramos o en unidades según corresponda). La merma nunca es un movimiento de stock; es la diferencia aritmética reportada en `production_batches.waste_grams`. No existe un segundo modelo de inventario. Además, el costo asignado de cada output pasa a ser el costo vigente de ese producto en `product_costs` (ver D-037): el desposte alimenta el costo automáticamente, sin entrada manual.
 
 La UI vive enteramente en Admin (`/admin/production`, patrón Server Component + Server Actions en `apps/admin/src/app/admin/actions.ts`, igual que rendiciones/stock), no en el POS: es información administrativa (costo, costo asignado, márgenes), no operativa de mostrador (ver D-031). Los permisos `production.read`/`production.write` son exclusivos del rol `admin`.
 

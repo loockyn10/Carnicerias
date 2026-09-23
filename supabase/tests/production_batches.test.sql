@@ -1,14 +1,14 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(103);
+select plan(122);
 
 -- Shape and hardening.
 select has_table('public', 'production_batches', 'production_batches table exists');
 select has_table('public', 'production_batch_outputs', 'production_batch_outputs table exists');
 select has_function('public', 'create_production_batch', array['uuid','integer','bigint','uuid','integer','text','text'], 'create RPC exists');
 select has_function('public', 'update_production_batch_header', array['uuid','uuid','integer','bigint','integer','text','text'], 'update header RPC exists');
-select has_function('public', 'set_production_batch_output', array['uuid','uuid','integer'], 'set output RPC exists');
+select has_function('public', 'set_production_batch_output', array['uuid','uuid','integer','integer'], 'set output RPC exists (weight always, plus unit quantity for UNIT outputs)');
 select has_function('public', 'remove_production_batch_output', array['uuid'], 'remove output RPC exists');
 select has_function('public', 'cancel_production_batch', array['uuid'], 'cancel RPC exists');
 select has_function('public', 'complete_production_batch', array['uuid'], 'complete RPC exists');
@@ -28,6 +28,8 @@ select ok(exists (select 1 from public.role_permissions where role_id = '1000000
 select ok(exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000001' and permission_key = 'production.write'), 'admin receives production write permission');
 select ok(not exists (select 1 from public.role_permissions where role_id = '10000000-0000-4000-8000-000000000002' and permission_key like 'production.%'), 'employee receives no production permission (Desposte is an Admin-only capability, matching settlements.*/analytics.read)');
 select has_column('public', 'stock_movements', 'production_batch_id', 'stock_movements gained a production_batch_id link column');
+select has_column('public', 'production_batch_outputs', 'output_quantity_units', 'production_batch_outputs gained output_quantity_units for UNIT outputs');
+select has_column('public', 'products', 'approx_weight_grams', 'products gained an optional approx_weight_grams reference column');
 
 -- Fixture: two organizations. Org A has two branches (employee assigned only to A1).
 insert into auth.users (
@@ -61,13 +63,19 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('b5000000-0000-4000-8000-000000000002', 'b2000000-0000-4000-8000-000000000001', 'b4000000-0000-4000-8000-000000000001', 'Vacio', 'vacio', 'CORTE-1', 'WEIGHT', 'SELLABLE'),
   ('b5000000-0000-4000-8000-000000000003', 'b2000000-0000-4000-8000-000000000001', 'b4000000-0000-4000-8000-000000000001', 'Costilla', 'costilla', 'CORTE-2', 'WEIGHT', 'SELLABLE'),
   ('b5000000-0000-4000-8000-000000000004', 'b2000000-0000-4000-8000-000000000001', 'b4000000-0000-4000-8000-000000000001', 'Sin Precio', 'sin-precio', 'CORTE-3', 'WEIGHT', 'SELLABLE'),
-  ('b5000000-0000-4000-8000-000000000005', 'b2000000-0000-4000-8000-000000000002', 'b4000000-0000-4000-8000-000000000002', 'Producto Org B', 'producto-org-b', 'ORGB-1', 'WEIGHT', 'BOTH');
+  ('b5000000-0000-4000-8000-000000000005', 'b2000000-0000-4000-8000-000000000002', 'b4000000-0000-4000-8000-000000000002', 'Producto Org B', 'producto-org-b', 'ORGB-1', 'WEIGHT', 'BOTH'),
+  ('b5000000-0000-4000-8000-000000000006', 'b2000000-0000-4000-8000-000000000001', 'b4000000-0000-4000-8000-000000000001', 'Cabeza', 'cabeza', 'CORTE-4', 'UNIT', 'SELLABLE'),
+  ('b5000000-0000-4000-8000-000000000007', 'b2000000-0000-4000-8000-000000000001', 'b4000000-0000-4000-8000-000000000001', 'Arrollado', 'arrollado', 'CORTE-5', 'UNIT', 'SELLABLE');
 
 -- $10.000/kg and $59.500/kg so the two outputs sum to exactly $139.000 of potential value,
 -- matching the worked example already verified in packages/business-logic/src/production.test.ts.
+-- Cabeza (UNIT) at $7.000/unit for the mixed WEIGHT+UNIT batch below. Arrollado (UNIT) is left
+-- without a price on purpose, to test that a missing UNIT price blocks finalization exactly like
+-- a missing WEIGHT price does.
 insert into public.product_prices (organization_id, product_id, price_cents, valid_from) values
   ('b2000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000002', 1000000, now() - interval '1 day'),
-  ('b2000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000003', 5950000, now() - interval '1 day');
+  ('b2000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000003', 5950000, now() - interval '1 day'),
+  ('b2000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000006', 700000, now() - interval '1 day');
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'b1000000-0000-4000-8000-000000000001', true);
@@ -343,6 +351,89 @@ select throws_ok($$select public.delete_production_batch(
   (select id from public.production_batches where organization_id = 'b2000000-0000-4000-8000-000000000001' and status = 'COMPLETED' limit 1)
 )$$, '22023', 'Sólo un lote en borrador puede eliminarse', 'a COMPLETED batch cannot be deleted');
 select is((select count(*) from public.stock_movements where type in ('PRODUCTION_CONSUME', 'PRODUCTION_YIELD')), 3::bigint, 'deleting draft batches never wrote or removed any stock movement (still exactly the 3 from the one completed batch)');
+
+-- UNIT outputs: a mixed WEIGHT+UNIT batch (Costilla by weight, Cabeza by unit count). Cabeza
+-- (UNIT) still carries its own REAL weight (3.9 kg) alongside its 2-unit count: commercial value
+-- and cost allocation use the unit count × price, but that weight must still count toward the
+-- batch's merma/rendimiento balance (see D-038, docs/DECISIONS.md).
+select lives_ok($$select public.create_production_batch(
+  p_source_product_id => 'b5000000-0000-4000-8000-000000000001', p_input_weight_grams => 10000, p_cost_per_kg_cents => 300000,
+  p_description => 'Lote mixto WEIGHT+UNIT'
+)$$, 'admin creates a batch mixing WEIGHT and UNIT outputs');
+
+select throws_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'),
+  'b5000000-0000-4000-8000-000000000003', 3000, 4
+)$$, '22023', 'El producto "Costilla" se vende por peso: no corresponde indicar una cantidad de unidades', 'a WEIGHT product rejects a unit quantity value even when a valid weight is also given');
+select throws_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'),
+  'b5000000-0000-4000-8000-000000000006', 3900
+)$$, '22023', 'El producto "Cabeza" se vende por unidad: indicá también la cantidad de unidades obtenidas', 'a UNIT product still requires a unit quantity even when a valid weight is given');
+select throws_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'),
+  'b5000000-0000-4000-8000-000000000006', null, 2
+)$$, '22023', 'El peso obtenido debe ser mayor a cero', 'weight is required for every output, WEIGHT or UNIT alike');
+
+select lives_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'),
+  'b5000000-0000-4000-8000-000000000006', 3900, 2
+)$$, 'admin adds Cabeza as a 2-unit output weighing 3.9 kg');
+select lives_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'),
+  'b5000000-0000-4000-8000-000000000003', 3000
+)$$, 'admin adds Costilla as a 3kg output, in the same batch');
+select lives_ok($$select public.complete_production_batch(
+  (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT')
+)$$, 'admin finalizes the mixed batch');
+
+select is((
+  select sum(allocated_cost_cents_snapshot) from public.production_batch_outputs
+  where batch_id = (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT')
+), 3000000::bigint, 'allocated costs across WEIGHT and UNIT outputs still sum EXACTLY to the batch cost');
+
+select is(
+  (select pc.cost_cents from public.product_costs pc
+   where pc.organization_id = 'b2000000-0000-4000-8000-000000000001' and pc.product_id = 'b5000000-0000-4000-8000-000000000006' and pc.valid_to is null),
+  (select app_private.round_ratio_half_up(pbo.allocated_cost_cents_snapshot, pbo.output_quantity_units) from public.production_batch_outputs pbo
+   where pbo.batch_id = (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT') and pbo.product_id = 'b5000000-0000-4000-8000-000000000006'),
+  'completing the batch feeds product_costs for the UNIT output with its cost-per-unit (never per its own weight)'
+);
+select is(
+  (select pc.cost_cents from public.product_costs pc
+   where pc.organization_id = 'b2000000-0000-4000-8000-000000000001' and pc.product_id = 'b5000000-0000-4000-8000-000000000003' and pc.valid_to is null),
+  (select app_private.round_ratio_half_up(pbo.allocated_cost_cents_snapshot * 1000, pbo.output_weight_grams) from public.production_batch_outputs pbo
+   where pbo.batch_id = (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT') and pbo.product_id = 'b5000000-0000-4000-8000-000000000003'),
+  'completing the batch feeds product_costs for the WEIGHT output with its cost-per-kg'
+);
+select is((
+  select quantity_grams from public.stock_movements
+  where production_batch_id = (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT')
+    and product_id = 'b5000000-0000-4000-8000-000000000006' and type = 'PRODUCTION_YIELD'
+), 2::bigint, 'the UNIT output''s stock movement records unit count, not grams (its own stock is tracked in units)');
+select is((
+  select quantity_grams from public.stock_movements
+  where production_batch_id = (select id from public.production_batches where description = 'Lote mixto WEIGHT+UNIT')
+    and product_id = 'b5000000-0000-4000-8000-000000000003' and type = 'PRODUCTION_YIELD'
+), 3000::bigint, 'the WEIGHT output''s stock movement still records grams');
+select is((
+  select produced_weight_grams from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'
+), 6900, 'produced weight sums EVERY output''s real weight, including the UNIT output''s 3.9 kg (D-038)');
+select is((
+  select waste_grams from public.production_batches where description = 'Lote mixto WEIGHT+UNIT'
+), 3100, 'waste = input weight minus every output''s real weight, UNIT included');
+
+-- A UNIT output with no current price blocks finalizing exactly like a WEIGHT output does.
+select lives_ok($$select public.create_production_batch(
+  p_source_product_id => 'b5000000-0000-4000-8000-000000000001', p_input_weight_grams => 5000, p_cost_per_kg_cents => 100000,
+  p_description => 'Lote unit sin precio'
+)$$, 'admin creates a batch for the missing-UNIT-price case');
+select lives_ok($$select public.set_production_batch_output(
+  (select id from public.production_batches where description = 'Lote unit sin precio'),
+  'b5000000-0000-4000-8000-000000000007', 3900, 3
+)$$, 'admin adds Arrollado (no current price) as a 3-unit, 3.9kg output');
+select throws_ok($$select public.complete_production_batch(
+  (select id from public.production_batches where description = 'Lote unit sin precio')
+)$$, '22023', 'El producto "Arrollado" no tiene un precio de venta vigente', 'finalizing is blocked and names the UNIT product missing a price');
 
 -- Employees get none of this either (Desposte configuration stays Admin-only).
 reset role;

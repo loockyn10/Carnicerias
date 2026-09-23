@@ -13,11 +13,10 @@ interface ProductManageModalProps {
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
   categories: { id: string; name: string }[];
-  pricing: { costCents: number; profitMarkupBps: number } | null;
-  cashDiscountBps: number;
+  costCents: number | null;
 }
 
-export function ProductManageModal({ product, price, promotion, categories, pricing, cashDiscountBps }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, costCents }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -47,13 +46,13 @@ export function ProductManageModal({ product, price, promotion, categories, pric
     <button className="rounded-lg border px-3 py-2 text-sm font-bold" onClick={() => setOpen(true)} type="button">Administrar</button>
     {open ? <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !pending) setOpen(false); }}>
       <section aria-labelledby={`manage-product-${product.id}`} aria-modal="true" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-5 text-left shadow-xl" role="dialog">
-        <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black" id={`manage-product-${product.id}`}>Administrar producto — {product.name}</h2><p className="mt-1 text-sm text-stone-600">Editá el producto, su costo y margen.</p></div><button aria-label="Cerrar" className="text-xl text-stone-500 hover:text-stone-900" disabled={pending} onClick={() => setOpen(false)} type="button">×</button></div>
+        <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black" id={`manage-product-${product.id}`}>Administrar producto — {product.name}</h2><p className="mt-1 text-sm text-stone-600">Editá el producto y su precio de venta.</p></div><button aria-label="Cerrar" className="text-xl text-stone-500 hover:text-stone-900" disabled={pending} onClick={() => setOpen(false)} type="button">×</button></div>
         <form action={action} className="mt-5 grid gap-4" ref={formRef}>
           <input name="product_id" type="hidden" value={product.id} /><input name="slug" type="hidden" value={product.slug} /><input name="unit_type" type="hidden" value={product.unitType} />
-          <input name="current_cost_cents" type="hidden" value={pricing?.costCents ?? ""} /><input name="current_profit_markup_bps" type="hidden" value={pricing?.profitMarkupBps ?? ""} />
+          <input name="current_price_cents" type="hidden" value={price?.cents ?? ""} /><input name="current_cost_cents" type="hidden" value={costCents ?? ""} />
           <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} defaultValue={product.name} name="name" required /></label>
           <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-medium">Categoría<select className={input} defaultValue={product.categoryId ?? ""} name="category_id" required>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label></div>
-          <ProductPricingFields cashDiscountBps={cashDiscountBps} costCents={pricing?.costCents ?? null} currentPriceCents={price?.cents ?? null} profitMarkupBps={pricing?.profitMarkupBps ?? null} unitType={product.unitType} />
+          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={product.unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>
             <div className="mt-2 flex flex-wrap gap-4 text-sm">
