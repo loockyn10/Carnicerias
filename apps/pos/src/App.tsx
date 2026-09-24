@@ -70,8 +70,9 @@ interface Announcement { id: string; title: string; message: string; type: strin
 // Sólo 3 métodos operativos se ofrecen para ventas nuevas. CREDIT/OTHER siguen
 // siendo valores válidos de PaymentMethod (ventas históricas, no se migran),
 // simplemente no se exponen en este selector. DEBIT y CREDIT hoy tienen el
-// mismo comportamiento comercial (sin descuento por pago), así que "Tarjeta"
-// usa DEBIT como representación interna — no se crea un método CARD nuevo.
+// mismo comportamiento comercial: recargo por tarjeta sobre el precio base
+// (ver D-044), así que "Tarjeta" usa DEBIT como representación interna — no
+// se crea un método CARD nuevo.
 const PAYMENT_METHOD_BUTTONS: { value: PaymentMethod; label: string; activeClass: string }[] = [
   { value: "CASH", label: "Efectivo", activeClass: "border-emerald-400 bg-emerald-950 text-emerald-100 ring-2 ring-emerald-400/60" },
   { value: "TRANSFER", label: "Transferencia", activeClass: "border-sky-400 bg-sky-950 text-sky-100 ring-2 ring-sky-400/60" },
@@ -829,6 +830,7 @@ export default function App() {
     return line.quantityUnits != null ? listPrice * BigInt(line.quantityUnits) : priceForWeight(listPrice, line.weightGrams);
   })), [ticket]);
   const ticketCashDiscount = useMemo(() => sumMoney(ticket.map((line) => line.cashDiscountCents ?? 0n)), [ticket]);
+  const ticketCardSurcharge = useMemo(() => sumMoney(ticket.map((line) => line.cardSurchargeCents ?? 0n)), [ticket]);
   const ticketPromotionDiscount = useMemo(() => sumMoney(ticket.map((line) => line.promotionDiscountCents ?? 0n)), [ticket]);
 
   useEffect(() => {
@@ -865,7 +867,8 @@ export default function App() {
         });
       }
       return { ...line, pricePerKgCents: pricing.finalPriceCents, cashDiscountBps: pricing.cashDiscountBps,
-        cashDiscountCents: pricing.cashDiscountCents, promotionDiscountCents: pricing.promotionDiscountCents,
+        cashDiscountCents: pricing.cashDiscountCents, cardSurchargeCents: pricing.cardSurchargeCents,
+        promotionDiscountCents: pricing.promotionDiscountCents,
         discountCents: pricing.discountCents, subtotalCents: pricing.subtotalCents };
     }));
   }, [cashDiscountBps, paymentMethod]);
@@ -909,7 +912,8 @@ export default function App() {
           originalPricePerKgCents: selectedProduct.pricePerKgCents, discountRuleId: computed.discountRuleId,
           discountType: computed.discountType, discountValue: computed.discountValue, promotionMode: computed.promotionMode,
           discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
-          cashDiscountCents: computed.pricing.cashDiscountCents, promotionDiscountCents: computed.pricing.promotionDiscountCents,
+          cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
+          promotionDiscountCents: computed.pricing.promotionDiscountCents,
           subtotalCents: computed.pricing.subtotalCents
         };
       } else {
@@ -921,7 +925,8 @@ export default function App() {
           weightGrams: grams, pricePerKgCents: computed.pricing.finalPriceCents, originalPricePerKgCents: selectedProduct.pricePerKgCents,
           discountRuleId: computed.discountRuleId, discountType: computed.discountType, discountValue: computed.discountValue,
           promotionMode: computed.promotionMode, discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
-          cashDiscountCents: computed.pricing.cashDiscountCents, promotionDiscountCents: computed.pricing.promotionDiscountCents,
+          cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
+          promotionDiscountCents: computed.pricing.promotionDiscountCents,
           subtotalCents: computed.pricing.subtotalCents
         };
       }
@@ -1367,6 +1372,7 @@ export default function App() {
               <>
                 <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
                 {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
+                {ticketCardSurcharge > 0n ? <div className="mt-1 flex justify-between text-sm text-amber-400"><span>Recargo tarjeta ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>+{formatCurrency(ticketCardSurcharge)}</span></div> : null}
                 {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
                 <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
               </>
@@ -1600,6 +1606,7 @@ export default function App() {
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}
+                      {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}
                       {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
                     </>}
                     <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;

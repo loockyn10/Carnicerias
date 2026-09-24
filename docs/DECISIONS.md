@@ -68,7 +68,7 @@ El flujo normal configuraba costo + porcentaje de ganancia sobre costo, y el pre
 
 ## D-007 — Descuento por medio de pago
 
-**Status:** Active
+**Status:** Superseded by D-044
 
 Elegibles: CASH, TRANSFER, OTHER.
 
@@ -76,20 +76,26 @@ No elegibles: DEBIT, CREDIT.
 
 El nombre técnico histórico `cash_discount` no redefine la regla de producto.
 
+**Corrección 2026-09-24:** esta decisión describía la regla al revés de la intención real del
+negocio. D-044 la reemplaza: el precio cargado en Productos ya es el precio de
+CASH/TRANSFER/OTHER (sin ajuste), y DEBIT/CREDIT pagan ese precio más un recargo. La partición de
+métodos (misma de siempre) y el nombre técnico `cash_discount` se conservan; sólo cambia qué lado
+recibe el ajuste y en qué dirección.
+
 ---
 
 ## D-008 — Descuentos secuenciales
 
-**Status:** Active
+**Status:** Active (paso 2 reinterpretado por D-044)
 
 Orden:
 
 1. lista;
-2. descuento de medio de pago;
+2. ajuste por medio de pago (recargo por tarjeta desde D-044; antes, un descuento — ver D-007);
 3. promoción;
 4. final.
 
-Los porcentajes no se suman.
+Los porcentajes no se suman. El orden en sí (lista → medio de pago → promoción → final) no cambió con D-044, sólo la fórmula del paso 2.
 
 ---
 
@@ -484,3 +490,27 @@ Las tabs de categoría del POS no se infieren filtrando productos por `category_
 Una categoría con al menos una asignación real (`product_category_assignments`, sea principal o secundaria) entra en el directorio y genera su tab con su propio nombre/color, sin depender de si algún producto la tiene como principal. Una categoría sin ninguna asignación puede omitirse. `products.category_id` (categoría principal) sigue existiendo sin cambios para color/etiqueta de la card de un producto individual y para consumidores legacy de una sola categoría — pero deja de ser la única fuente de qué tabs existen.
 
 **Motivo:** corrige una limitación real de D-041 (v1): una categoría usada sólo como secundaria (ej. "Embutidos", si ningún producto la tiene como principal — caso concreto: "Chorizo de cerdo" con principal Cerdo y secundaria Embutidos) no generaba tab propia. El pedido de este sprint lo señaló explícitamente: "no inferir las tabs solamente desde `products.category_id`".
+
+---
+
+## D-044 — Recargo por tarjeta en vez de descuento por efectivo: el precio cargado ES el precio de efectivo/transferencia
+
+**Status:** Active
+
+Corrige/invierte D-007: el precio manual cargado en Productos (`product_prices.price_cents`) es el precio de **CASH/TRANSFER/OTHER directamente, sin ningún ajuste**. **DEBIT/CREDIT** ("Tarjeta" en el POS) pagan ese mismo precio **más un recargo** configurado como porcentaje.
+
+Ejemplo (el mismo de la aclaración original): precio cargado $10.000, recargo configurado 10% → CASH = $10.000, TRANSFER = $10.000, DEBIT = $11.000, CREDIT = $11.000.
+
+Antes de esta decisión el precio cargado era el precio de lista sin descuento, CASH/TRANSFER/OTHER pagaban ese precio menos un descuento configurado, y DEBIT/CREDIT pagaban el precio de lista sin cambios. La partición de métodos (CASH/TRANSFER/OTHER de un lado, DEBIT/CREDIT del otro) es la misma de siempre — D-044 sólo invierte qué lado recibe el ajuste bps y en qué dirección (resta → suma).
+
+**Nombres físicos conservados, sin migración destructiva de renombrado** (decisión explícita del pedido): `organization_cash_discounts.cash_discount_bps`, `sale_items.cash_discount_bps`/`cash_discount_cents`, y el helper `app_private.payment_method_receives_discount`/`payment_method_receives_discount` (Rust) mantienen sus nombres. `cash_discount_bps` ahora configura el **porcentaje de recargo**, no un descuento. `cash_discount_cents` (por línea) es **siempre 0** para toda venta posterior a este sprint — ningún medio de pago da descuento ya — pero se conserva sin tocar en cada fila histórica (D-005/D-009, snapshots inmutables). El concepto genuinamente nuevo (cuánto sumó la tarjeta) vive en una columna nueva: `sale_items.card_surcharge_cents`/`local_sale_items.card_surcharge_cents` (`>= 0`).
+
+**PACK_FIXED_TOTAL no se reinterpreta** (ambigüedad señalada explícitamente en el pedido, resuelta de forma conservadora): el total fijo de un pack (D-039) es también **invariante al medio de pago** — pagar con tarjeta nunca agrega un recargo sobre el total del pack, exactamente igual que ya era invariante al peso real. Sólo el remanente de un pack `UNIT` (unidades que sobran del último pack completo, vendidas a precio normal) sí lleva recargo, porque esa porción es una venta normal genuina, no parte del pack.
+
+**Capas tocadas**: `packages/business-logic/src/pricing.ts` (`isCardSurchargePaymentMethod`, reemplaza `isDiscountEligiblePaymentMethod`; las tres funciones de pricing ganan `cardSurchargeCents`), Postgres (`202609240035_card_surcharge_pricing.sql`, migración nueva — ver más abajo por qué no se editaron 031/034), Rust (`insert_sale`, mismos cuatro casos WEIGHT/UNIT × pack/normal), SQLite (`010_card_surcharge_pricing.sql`), POS (`apps/pos/src/App.tsx`: ticket y modal muestran "Recargo tarjeta" en vez de/junto a "Descuento por pago"), Admin (`pricing-settings-modal.tsx`: copy "RECARGO POR TARJETA").
+
+**Migración nueva, no edición de 031/034**: a diferencia de rondas anteriores del mismo sprint, esta vez se confirmó evidencia directa (una tarea previa de este mismo día) de que al menos parte de las migraciones `031`–`034` ya están aplicadas en un entorno real del usuario — por lo tanto no se editaron más; el cambio de este sprint se agregó como una migración nueva e incremental (`202609240035`), con `CREATE OR REPLACE FUNCTION` sobre las mismas firmas.
+
+**Bug encontrado y corregido en la misma migración**: `get_pos_commercial_config` (tal como quedó después del `CREATE OR REPLACE` de la migración `202609230031`, que le agregó los campos de pack) había perdido por completo la clave `cashDiscountBps` del jsonb devuelto — el POS nunca recibía el porcentaje configurado. Corregido en `202609240035` junto con el resto del cambio (no es la causa raíz de la regla de negocio invertida, que era el motivo real y explícito del pedido, pero sí un bug real que hubiera impedido ver cualquier ajuste por medio de pago, en cualquier dirección, una vez esa migración se aplicara).
+
+**Motivo:** el negocio real fija el precio mirando lo que cobra en efectivo/transferencia; la tarjeta cuesta más porque el comercio paga un arancel, y ese costo se traslada como recargo explícito, no como un "descuento" que hace parecer más caro el precio base. Aclarado explícitamente por el dueño tras observar que el sistema no diferenciaba tarjeta de manera intuitiva.

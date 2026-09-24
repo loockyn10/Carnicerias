@@ -81,10 +81,16 @@ Los roles son filas, los permisos son capacidades y `role_permissions` los vincu
 
 - `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal. **Es la única fuente del precio de venta**, cargado manualmente (`set_product_price`/`bulk_set_product_prices`, migración `202609220030`) — no se deriva de costo+markup (ver D-037, `docs/DECISIONS.md`).
 - `product_costs`: historial de costo, alimentado automáticamente al finalizar un desposte (`complete_production_batch`, migración `202609220029`) o cargado directo (`set_product_cost`) para productos comprados ya terminados.
-- `organization_cash_discounts`: historial de descuento por medio elegible, configurado vía `set_cash_discount` (sin reprecio).
+- `organization_cash_discounts`: historial de recargo por tarjeta (D-044, columna `cash_discount_bps` conservada por nombre), configurado vía `set_cash_discount` (sin reprecio). CASH/TRANSFER/OTHER pagan el precio cargado sin ajuste; DEBIT/CREDIT pagan ese precio más el porcentaje configurado.
 - `product_pricing_settings` (markup) y el flujo `save_product_pricing`/`calculate_product_price`/`set_cash_discount_and_reprice` (D-006) quedan en la base intactos (historial) pero ninguna UI vigente los vuelve a escribir.
 
-Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso usan cents y gramos enteros; porcentajes usan basis points y redondeo half-up. Los ítems de venta guardan snapshots suficientes de lista, costo, markup, descuento por pago, promoción y subtotal final.
+Los cambios generan nuevas vigencias; no sobrescriben historia. Dinero y peso usan cents y gramos enteros; porcentajes usan basis points y redondeo half-up. Los ítems de venta guardan snapshots suficientes de lista, costo, markup, recargo por tarjeta, promoción y subtotal final.
+
+## Recargo por tarjeta (D-044)
+
+Migración `202609240035_card_surcharge_pricing.sql` (nueva, no edita `202609230031`/`202609230034` — ver el motivo en D-044) invierte la regla anterior: `product_prices.price_cents` ya es el precio de CASH/TRANSFER/OTHER sin ajuste; DEBIT/CREDIT pagan ese precio más un recargo (`organization_cash_discounts.cash_discount_bps`, nombre físico conservado). `packages/business-logic/src/pricing.ts` centraliza la fórmula (`isCardSurchargePaymentMethod`, reemplaza `isDiscountEligiblePaymentMethod`; las tres funciones de pricing ganan `cardSurchargeCents`), replicada byte-a-byte en `complete_discounted_sale`/`sync_offline_sale` (Postgres) e `insert_sale` (Rust/SQLite) — ninguna de las tres puede aceptar un total que la otra rechazaría. `sale_items`/`local_sale_items` ganan `card_surcharge_cents` (columna nueva, `>= 0`); `cash_discount_cents` se conserva sin tocar en filas históricas pero queda siempre en 0 para una venta nueva (ya ningún medio de pago da descuento).
+
+`PACK_FIXED_TOTAL` (D-039) queda deliberadamente invariante al medio de pago — el total fijo de un pack nunca lleva recargo, igual que nunca varía con el peso/cantidad real; sólo el remanente de un pack `UNIT` (unidades fuera del último pack completo) es una venta normal y sí lleva recargo. Bug encontrado y corregido en la misma migración: `get_pos_commercial_config` había perdido la clave `cashDiscountBps` de su jsonb en un `CREATE OR REPLACE` anterior (202609230031).
 
 Productos legacy con precio vigente siguen vendiéndose aunque todavía no tengan costo. El dominio, pricing, analytics y venta POS contemplan `UNIT` de punta a punta (ver "Venta POS `UNIT`" más abajo), incluidos outputs de desposte por unidad.
 

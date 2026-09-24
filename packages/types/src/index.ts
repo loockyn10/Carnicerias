@@ -96,8 +96,17 @@ export interface TicketLine {
    * for a normal or threshold-discounted line. */
   promotionMode?: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
   discountCents?: bigint;
+  /** Kept under its legacy name (see D-044): configures the card SURCHARGE percentage now, not a
+   * cash discount. CASH/TRANSFER/OTHER get no adjustment at all; DEBIT/CREDIT pay list price plus
+   * this bps. */
   cashDiscountBps?: bigint;
+  /** Always 0 for a new sale under D-044 — no payment method gets a discount off list price
+   * anymore. Kept (not removed) so a historical sale's real, immutable pre-D-044 value still
+   * round-trips correctly. */
   cashDiscountCents?: bigint;
+  /** Amount added on top of list price because this line's payment method is DEBIT/CREDIT — see
+   * D-044. Always 0 for CASH/TRANSFER/OTHER and for the fixed portion of a PACK_FIXED_TOTAL line. */
+  cardSurchargeCents?: bigint;
   promotionDiscountCents?: bigint;
   costCentsSnapshot?: bigint | null;
   profitMarkupBpsSnapshot?: bigint | null;

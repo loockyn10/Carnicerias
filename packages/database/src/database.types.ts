@@ -1828,6 +1828,7 @@ export type Database = {
       sale_items: {
         Row: {
           branch_id: string
+          card_surcharge_cents: number
           cash_discount_bps: number
           cash_discount_cents: number
           cost_cents_snapshot: number | null
@@ -1855,6 +1856,7 @@ export type Database = {
         }
         Insert: {
           branch_id: string
+          card_surcharge_cents?: number
           cash_discount_bps?: number
           cash_discount_cents?: number
           cost_cents_snapshot?: number | null
@@ -1882,6 +1884,7 @@ export type Database = {
         }
         Update: {
           branch_id?: string
+          card_surcharge_cents?: number
           cash_discount_bps?: number
           cash_discount_cents?: number
           cost_cents_snapshot?: number | null

@@ -28,39 +28,42 @@ Sólo las ventas `COMPLETED` se consideran activas para métricas comerciales y 
 
 Un producto puede tener precio de lista y no tener costo (todavía no se produjo/compró con costo registrado); la venta no se bloquea por eso.
 
-## Descuento por medio de pago
+## Recargo por tarjeta (D-044)
 
-Decisión vigente:
+Decisión vigente (invierte la regla anterior, ver D-007/D-044):
 
-Elegibles:
+El precio cargado manualmente en Productos (`product_prices.price_cents`) **es** el precio de:
 
 - `CASH`
 - `TRANSFER`
 - `OTHER`
 
-No elegibles:
+sin ningún ajuste. `DEBIT`/`CREDIT` ("Tarjeta" en el POS) pagan ese mismo precio **más un recargo** (porcentaje configurado en Admin → Productos → Precios → "Recargo por tarjeta").
 
-- `DEBIT`
-- `CREDIT`
+Ejemplo: precio cargado $10.000, recargo configurado 10% → CASH = $10.000, TRANSFER = $10.000, DEBIT = $11.000, CREDIT = $11.000.
 
-El nombre técnico histórico puede seguir conteniendo `cash_discount`, pero la regla de producto es **descuento por medio de pago elegible**. Backend, POS online, POS offline y sync aplican la misma elegibilidad.
+El nombre técnico histórico sigue conteniendo `cash_discount` (`organization_cash_discounts.cash_discount_bps`, `sale_items.cash_discount_bps`), pero la regla de producto vigente es **recargo por tarjeta**, nunca un descuento por ningún medio de pago. `sale_items.cash_discount_cents` queda siempre en 0 para toda venta nueva (ningún medio da descuento); el monto real del recargo se registra en `sale_items.card_surcharge_cents` (`>= 0`). Backend, POS online, POS offline y sync aplican la misma regla.
 
-## Orden de descuentos
+**PACK_FIXED_TOTAL nunca lleva recargo por tarjeta**: el total fijo de un pack (ver "Promociones" abajo) es invariante al medio de pago, igual que ya es invariante al peso/cantidad real — pagar con tarjeta no le agrega nada. Sólo el remanente de un pack `UNIT` (unidades sueltas por fuera del pack) es una venta normal y sí lleva el recargo.
+
+## Orden de ajustes
 
 Orden vigente:
 
-1. precio de lista;
-2. descuento por medio de pago elegible;
+1. precio de lista (= precio de CASH/TRANSFER/OTHER, sin ajuste);
+2. recargo por tarjeta (sólo DEBIT/CREDIT; D-044);
 3. promoción por cantidad/regla comercial;
 4. precio final.
 
 Los porcentajes son secuenciales, no se suman.
 
-Ejemplo:
+Ejemplo (tarjeta):
 
-- lista $14.444,44;
-- -10% medio de pago → $13.000;
-- -5% promoción → $12.350.
+- lista/efectivo $14.444,44;
+- +10% tarjeta → $15.888,88;
+- -5% promoción → $15.094,44.
+
+Ejemplo (efectivo/transferencia): lista $14.444,44 → sin ajuste → -5% promoción → $13.722,22.
 
 ## Promociones
 

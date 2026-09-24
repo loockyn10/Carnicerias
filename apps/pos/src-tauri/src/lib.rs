@@ -18,6 +18,7 @@ const POS_OPERATORS_TIMEKEEPING_SCHEMA: &str = include_str!("../migrations/006_p
 const WEIGHT_DISCOUNT_PACK_MODE_SCHEMA: &str = include_str!("../migrations/007_weight_discount_pack_mode.sql");
 const PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA: &str = include_str!("../migrations/008_product_category_assignments.sql");
 const UNIT_SALE_SUPPORT_SCHEMA: &str = include_str!("../migrations/009_unit_sale_support.sql");
+const CARD_SURCHARGE_PRICING_SCHEMA: &str = include_str!("../migrations/010_card_surcharge_pricing.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -175,6 +176,7 @@ struct OfflineSaleItem {
     #[serde(default)] discount_cents: Option<String>,
     #[serde(default)] cash_discount_bps: Option<String>,
     #[serde(default)] cash_discount_cents: Option<String>,
+    #[serde(default)] card_surcharge_cents: Option<String>,
     #[serde(default)] promotion_discount_cents: Option<String>,
     #[serde(default)] cost_cents_snapshot: Option<String>,
     #[serde(default)] profit_markup_bps_snapshot: Option<String>,
@@ -292,6 +294,10 @@ fn parse_i64(value: &str, field: &str) -> Result<i64, String> {
     value.parse::<i64>().map_err(|_| format!("Invalid {field}"))
 }
 
+// Name and partition kept exactly as-is (still CASH/TRANSFER/OTHER on this side) — see D-044.
+// Under the pre-D-044 model this partition got a cash discount; now it gets NO adjustment at
+// all (list price unchanged), while its negation (DEBIT/CREDIT) gets a card surcharge instead.
+// Callers use `!payment_method_receives_discount(method)` to gate the surcharge.
 fn payment_method_receives_discount(method: &str) -> bool {
     matches!(method, "CASH" | "TRANSFER" | "OTHER")
 }
@@ -390,6 +396,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.execute("insert into schema_migrations(version, applied_at) values (9, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
         connection.execute_batch("pragma foreign_keys = on;").map_err(|error| error.to_string())?;
+    }
+    let card_surcharge_pricing_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 10)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !card_surcharge_pricing_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(CARD_SURCHARGE_PRICING_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (10, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
     }
 
     let timestamp = now();
@@ -873,11 +886,18 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
         let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
         let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
+        let card_surcharge_cents = item.card_surcharge_cents.as_deref().map(|value| parse_i64(value, "cardSurchargeCents")).transpose()?.unwrap_or(0);
         let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
-        if !(0..10_000).contains(&cash_discount_bps) || (!payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0) {
+        // D-044: only DEBIT/CREDIT may carry a nonzero bps now (the card surcharge);
+        // CASH/TRANSFER/OTHER must not (they get no adjustment off the list price at all), and no
+        // payment method gets an actual discount anymore, so cash_discount_cents is always 0.
+        if !(0..10_000).contains(&cash_discount_bps)
+            || (payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0)
+            || cash_discount_cents != 0
+        {
             return Err("Invalid local sale calculation".to_string());
         }
-        let cash_price = original_price.checked_mul(10_000 - cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
+        let cash_price = original_price.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
         let has_new_pricing = item.cash_discount_bps.is_some() || item.promotion_discount_cents.is_some();
         let product_unit_type: &str;
 
@@ -909,8 +929,12 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                     if pack_price > normal_subtotal || subtotal != pack_price {
                         return Err("Offline pack promotion is inconsistent".to_string());
                     }
-                    let expected_promotion_discount = (cash_subtotal - subtotal).max(0);
-                    if cash_discount_cents != normal_subtotal - cash_subtotal
+                    // D-044: a pack's fixed total is payment-method-invariant, exactly as it's
+                    // already weight-invariant — card_surcharge_cents is always 0 here, and the
+                    // promotion discount is measured against the LIST price (normal_subtotal),
+                    // never a card-surcharged one.
+                    let expected_promotion_discount = (normal_subtotal - subtotal).max(0);
+                    if card_surcharge_cents != 0
                         || promotion_discount_cents != expected_promotion_discount
                         || discount_cents != normal_subtotal - subtotal
                     {
@@ -933,7 +957,7 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                         None if price != cash_price => return Err("Undiscounted snapshot is inconsistent".to_string()),
                         None => {}
                     }
-                    if subtotal != expected || cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != cash_discount_cents + promotion_discount_cents {
+                    if subtotal != expected || card_surcharge_cents != cash_subtotal - normal_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != promotion_discount_cents {
                         return Err("Invalid local sale calculation".to_string());
                     }
                 }
@@ -968,16 +992,23 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                     }
                     let whole_packs = quantity_units / pack_quantity;
                     let remainder = quantity_units % pack_quantity;
+                    // D-044: the whole-pack portion is payment-method-invariant (never a card
+                    // surcharge on top of it); only the remainder — a genuine normal-price sale —
+                    // carries one.
                     let expected_subtotal = pack_price.checked_mul(whole_packs)
                         .and_then(|value| cash_price.checked_mul(remainder).and_then(|rest| value.checked_add(rest)))
                         .ok_or_else(|| "Sale amount overflow".to_string())?;
                     if subtotal != expected_subtotal {
                         return Err("Offline pack promotion is inconsistent".to_string());
                     }
-                    let expected_promotion_discount = (cash_subtotal - subtotal).max(0);
-                    if cash_discount_cents != normal_subtotal - cash_subtotal
+                    let expected_card_surcharge = (cash_price - original_price).max(0).checked_mul(remainder).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    let whole_pack_units = whole_packs.checked_mul(pack_quantity).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    let whole_pack_list_value = original_price.checked_mul(whole_pack_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    let whole_pack_charged = pack_price.checked_mul(whole_packs).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    let expected_promotion_discount = (whole_pack_list_value - whole_pack_charged).max(0);
+                    if card_surcharge_cents != expected_card_surcharge
                         || promotion_discount_cents != expected_promotion_discount
-                        || discount_cents != normal_subtotal - subtotal
+                        || discount_cents != expected_promotion_discount
                     {
                         return Err("Invalid local sale calculation".to_string());
                     }
@@ -985,7 +1016,7 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                     if subtotal != cash_subtotal || price != cash_price {
                         return Err("Undiscounted snapshot is inconsistent".to_string());
                     }
-                    if cash_discount_cents != normal_subtotal - cash_subtotal || promotion_discount_cents != 0 || discount_cents != cash_discount_cents {
+                    if card_surcharge_cents != cash_subtotal - normal_subtotal || promotion_discount_cents != 0 || discount_cents != 0 {
                         return Err("Invalid local sale calculation".to_string());
                     }
                 }
@@ -1032,15 +1063,16 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
         let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
         let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
+        let card_surcharge_cents = item.card_surcharge_cents.as_deref().map(|value| parse_i64(value, "cardSurchargeCents")).transpose()?.unwrap_or(0);
         let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
         let cost_snapshot = item.cost_cents_snapshot.as_deref().map(|value| parse_i64(value, "costCentsSnapshot")).transpose()?;
         let profit_snapshot = item.profit_markup_bps_snapshot.as_deref().map(|value| parse_i64(value, "profitMarkupBpsSnapshot")).transpose()?;
         transaction
             .execute(
                 "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams, quantity_units,
-                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, promotion_mode, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                  price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, card_surcharge_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, promotion_mode, created_at) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                 params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams, item.quantity_units,
-                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, item.promotion_mode, sale.created_at],
+                        parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, card_surcharge_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, item.promotion_mode, sale.created_at],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -1368,9 +1400,10 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'promotion_mode'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'quantity_units'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_weight_discounts') where name = 'pack_price_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -1414,13 +1447,15 @@ mod tests {
             [],
         ).unwrap();
 
-        // Now bring the connection up to date — this is where migration 9's rebuild runs.
+        // Now bring the connection up to date — this is where migrations 9 (rebuild) and 10 (new
+        // card_surcharge_cents column) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         // The rebuilt schema now genuinely accepts a UNIT row (nullable weight_grams, new
         // quantity_units, and a sale whose total weight is legitimately zero).
         connection.execute(
@@ -1436,8 +1471,14 @@ mod tests {
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'unit-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 40);
     }
 
+    // D-044: base $14.444,44/kg, 10% card surcharge configured, 5% quantity promo, DEBIT ("Tarjeta").
+    // cash_price = 14.444,44 * 1,10 = 15.888,88; promo 5% off that = 15.094,44. card_surcharge_cents
+    // (15.888,88 - 14.444,44 = 1.444,44) and promotion_discount_cents (15.888,88 - 15.094,44 =
+    // 794,44) must persist separately, and cash_discount_cents must be 0 — no payment method gets
+    // an actual discount anymore, only DEBIT/CREDIT get a surcharge (see calculateSalePricing's
+    // "applies a sequential percentage promotion after the card surcharge" test for the same numbers).
     #[test]
-    fn discounted_cash_sale_persists_separated_snapshots() {
+    fn card_surcharge_sale_persists_separated_snapshots() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_connection(&mut connection).unwrap();
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
@@ -1449,19 +1490,80 @@ mod tests {
         let sale = OfflineSalePayload {
             schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
             organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
-            status: "COMPLETED".into(), total_cents: "1235000".into(), total_weight_grams: "1000".into(),
+            status: "COMPLETED".into(), total_cents: "1509444".into(), total_weight_grams: "1000".into(),
             created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
-                price_per_kg_cents: "1235000".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("209444".into()),
-                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("144444".into()), promotion_discount_cents: Some("65000".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1235000".into() }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1235000".into() },
+                price_per_kg_cents: "1509444".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("79444".into()),
+                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("144444".into()), promotion_discount_cents: Some("79444".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1509444".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "1509444".into() },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
         };
         let transaction = connection.transaction().unwrap();
         insert_sale(&transaction, &sale).unwrap();
         transaction.commit().unwrap();
-        assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
-        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 65000);
+        assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
+        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 79444);
+    }
+
+    // Same base/percentage as above, but CASH: no adjustment at all — list price unchanged, only
+    // the promotion applies. Confirms switching Efectivo <-> Tarjeta recalculates from the same
+    // immutable list price rather than leaving a residual adjustment.
+    #[test]
+    fn cash_sale_with_promotion_has_no_card_surcharge() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        // 5% off the (unchanged) list price: 1.444.444 * 0,95 rounded half up = 1.372.222.
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
+            status: "COMPLETED".into(), total_cents: "1372222".into(), total_weight_grams: "1000".into(),
+            created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
+                price_per_kg_cents: "1372222".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("72222".into()),
+                cash_discount_bps: Some("0".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("0".into()), promotion_discount_cents: Some("72222".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1372222".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1372222".into() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
+        };
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 72222);
+    }
+
+    // A CASH sale carrying a nonzero cash_discount_bps (the pre-D-044 shape) must now be rejected
+    // — CASH/TRANSFER/OTHER get no adjustment at all.
+    #[test]
+    fn cash_sale_cannot_carry_a_nonzero_surcharge_bps() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',1000000,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
+            status: "COMPLETED".into(), total_cents: "1100000".into(), total_weight_grams: "1000".into(),
+            created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
+                price_per_kg_cents: "1100000".into(), original_price_per_kg_cents: Some("1000000".into()), discount_rule_id: None, discount_type: None, discount_value: None, promotion_mode: None, discount_cents: Some("0".into()),
+                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("100000".into()), promotion_discount_cents: Some("0".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1100000".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1100000".into() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
+        };
+        let transaction = connection.transaction().unwrap();
+        assert!(insert_sale(&transaction, &sale).is_err());
     }
 
     fn pack_sale_fixture(connection: &Connection) -> (String, OfflineSalePayload) {
@@ -1481,8 +1583,13 @@ mod tests {
                 id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(2050), quantity_units: None,
                 price_per_kg_cents: "8780".into(), original_price_per_kg_cents: Some("10000".into()),
                 discount_rule_id: Some("pack-1".into()), discount_type: None, discount_value: None, promotion_mode: Some("PACK_FIXED_TOTAL".into()),
-                discount_cents: Some("2500".into()), cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("2050".into()),
-                promotion_discount_cents: Some("450".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "18000".into()
+                // D-044: a pack's fixed total is payment-method-invariant — cash_discount_bps/cents
+                // and card_surcharge_cents are all 0 regardless of payment method; the discount is
+                // measured against the LIST price (20.500 for 2.050g at $10.000/kg), not a
+                // payment-method-adjusted one: 20.500 - 18.000 = 2.500.
+                discount_cents: Some("2500".into()), cash_discount_bps: Some("0".into()), cash_discount_cents: Some("0".into()),
+                card_surcharge_cents: Some("0".into()),
+                promotion_discount_cents: Some("2500".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "18000".into()
             }],
             payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "18000".into() },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-2050".into(), occurred_at: "2026-09-23T00:00:00Z".into() }]
@@ -1537,7 +1644,8 @@ mod tests {
             discount_type: None, discount_value: None,
             promotion_mode: pack_rule_id.map(|_| "PACK_FIXED_TOTAL".to_string()),
             discount_cents: Some(discount_cents.to_string()), cash_discount_bps: Some("0".into()),
-            cash_discount_cents: Some("0".into()), promotion_discount_cents: Some(promotion_discount_cents.to_string()),
+            cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("0".into()),
+            promotion_discount_cents: Some(promotion_discount_cents.to_string()),
             cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: subtotal.to_string(),
         }
     }

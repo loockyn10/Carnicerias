@@ -74,6 +74,27 @@ describe("offline sale envelope", () => {
     expect(payload.items[0]).toMatchObject({ cashDiscountBps: "1000", cashDiscountCents: "144444", promotionDiscountCents: "65000", discountCents: "209444" });
   });
 
+  it("freezes a card surcharge snapshot separately from any discount (D-044)", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "DEBIT", createId: () => crypto.randomUUID(),
+      ticket: [{ id: "line", productId: "asado", productName: "Asado", weightGrams: 1_000,
+        originalPricePerKgCents: 1_000_000n, pricePerKgCents: 1_100_000n,
+        cashDiscountBps: 1_000n, cashDiscountCents: 0n, cardSurchargeCents: 100_000n,
+        promotionDiscountCents: 0n, discountCents: 0n, subtotalCents: 1_100_000n }]
+    });
+    expect(payload.items[0]).toMatchObject({ cardSurchargeCents: "100000", cashDiscountCents: "0", discountCents: "0" });
+  });
+
+  it("defaults cardSurchargeCents to 0 when the line doesn't set it (CASH/TRANSFER/OTHER)", () => {
+    const payload = createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      paymentMethod: "CASH", createId: () => crypto.randomUUID(),
+      ticket: [{ id: "line", productId: "asado", productName: "Asado", weightGrams: 1_000, pricePerKgCents: 1_000_000n, subtotalCents: 1_000_000n }]
+    });
+    expect(payload.items[0]).toMatchObject({ cardSurchargeCents: "0" });
+  });
+
   it("sends a UNIT line with quantityUnits and no weightGrams key at all, and no weight in its stock movement", () => {
     const payload = createOfflineSale({
       organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",

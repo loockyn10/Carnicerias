@@ -38,6 +38,7 @@ export interface OfflineSaleItemPayload {
   discountCents?: string;
   cashDiscountBps?: string;
   cashDiscountCents?: string;
+  cardSurchargeCents?: string;
   promotionDiscountCents?: string;
   costCentsSnapshot?: string | null;
   profitMarkupBpsSnapshot?: string | null;
@@ -187,6 +188,7 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     discountCents: (line.discountCents ?? 0n).toString(),
     cashDiscountBps: (line.cashDiscountBps ?? 0n).toString(),
     cashDiscountCents: (line.cashDiscountCents ?? 0n).toString(),
+    cardSurchargeCents: (line.cardSurchargeCents ?? 0n).toString(),
     promotionDiscountCents: (line.promotionDiscountCents ?? (line.discountCents ?? 0n) - (line.cashDiscountCents ?? 0n)).toString(),
     costCentsSnapshot: line.costCentsSnapshot?.toString() ?? null,
     profitMarkupBpsSnapshot: line.profitMarkupBpsSnapshot?.toString() ?? null,

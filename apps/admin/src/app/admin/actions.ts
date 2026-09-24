@@ -198,9 +198,12 @@ export async function saveCashDiscountAction(_: PricingSettingsState, formData: 
   try {
     // set_cash_discount (202609220030) only writes the percentage — it never repriced any
     // product, unlike set_cash_discount_and_reprice (left untouched in the database, unused by
-    // this UI): a manual price must never change on its own when the discount % changes.
+    // this UI): a manual price must never change on its own when this percentage changes. Kept
+    // under its legacy name (see D-044): it now configures the card surcharge percentage, not a
+    // cash discount — CASH/TRANSFER/OTHER get no adjustment at all, DEBIT/CREDIT pay list price
+    // plus this percentage.
     await rpcOrThrow("set_cash_discount", {
-      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Descuento en efectivo", 9_999n)
+      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Recargo por tarjeta", 9_999n)
     });
     revalidatePath("/admin/products");
     return { successToken: crypto.randomUUID() };

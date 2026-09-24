@@ -198,6 +198,36 @@ Pendiente:
   era realmente `unit_type='UNIT'` (no se pudo verificar contra datos reales
   en ninguna sesión, ver diagnóstico en `docs/CURRENT_STATE.md`).
 
+## P1 — Validar Recargo por tarjeta (D-044) contra Postgres real
+
+Implementado 2026-09-24 (ver `docs/CURRENT_STATE.md` y D-044 en
+`docs/DECISIONS.md`): el precio cargado en Productos pasa a ser el precio de
+CASH/TRANSFER/OTHER sin ajuste; DEBIT/CREDIT pagan ese precio más un recargo
+configurado (`set_cash_discount`, sin cambio de firma). Migración nueva
+`202609240035_card_surcharge_pricing.sql` (no se editaron `202609230031`/
+`202609230034`: hay evidencia de que al menos parte ya está aplicada en un
+entorno real) y SQLite `010_card_surcharge_pricing.sql`. `cargo test` 35/35 OK
+(4 tests nuevos), `pnpm check` OK en los 7 proyectos.
+
+Pendiente:
+
+- Ejecutar `pnpm db:reset && pnpm db:test` (`supabase/tests/card_surcharge_pricing.test.sql`,
+  24 aserciones) en un entorno con Docker/CI Linux funcional.
+- Regenerar `packages/database/src/database.types.ts` con `pnpm db:types` (se
+  editó a mano) y revisar `packages/database/src/database.rpc-null-overrides.ts`
+  contra el resultado.
+- Confirmar con `supabase migration list --linked` qué migraciones (incluida
+  `202609240035`) llegaron a aplicarse al remoto antes de asumir el estado real.
+- Smoke manual en POS: cargar un producto a $10.000 con 10% de recargo
+  configurado, confirmar que Efectivo y Transferencia muestran $10.000 y
+  Tarjeta $11.000; cambiar de Efectivo a Tarjeta y viceversa sobre una línea ya
+  agregada y confirmar que el ticket recalcula sin volver a agregar el
+  producto; vender un pack (WEIGHT o UNIT) con Tarjeta y confirmar que el
+  total del pack no cambia; vender un UNIT pack con remanente (ej. 45
+  hamburguesas) con Tarjeta y confirmar que sólo el remanente lleva recargo.
+  Repetir offline (reinicio + sync) y confirmar que el servidor no rechaza el
+  total ya validado localmente.
+
 ## P2/P3 — Capacidades opcionales según negocio
 
 - Conservar como evidencia el timestamp/intento de clock-out offline anómalo, manteniendo el turno en `REQUIRES_REVIEW`.
