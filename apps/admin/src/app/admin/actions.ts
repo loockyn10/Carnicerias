@@ -6,68 +6,9 @@ import { redirect } from "next/navigation";
 import { createClient } from "../../lib/supabase/server";
 import { requireAdminContext } from "../../lib/admin";
 import { parsePesosToCents } from "../../lib/settlements";
+import { decimal, ids, kilogramsToGrams, optionalId, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
+import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import type { Database } from "@carnicerias/database";
-
-function text(formData: FormData, key: string) {
-  const value = formData.get(key);
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function optionalId(formData: FormData, key: string) {
-  return text(formData, key) || null;
-}
-
-function ids(formData: FormData, key: string) {
-  return formData.getAll(key)
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-function decimal(value: string, label: string) {
-  const parsed = Number(value.replace(",", "."));
-  if (!Number.isFinite(parsed)) throw new Error(`${label} inválido`);
-  return parsed;
-}
-
-function kilogramsToGrams(value: string, allowZero = false) {
-  const match = /^(\d+)(?:[,.](\d{1,3}))?$/.exec(value.trim());
-  if (!match) throw new Error("Peso inválido");
-  const grams = BigInt(match[1] ?? "") * 1_000n + BigInt((match[2] ?? "").padEnd(3, "0"));
-  if (grams < 0n || (!allowZero && grams === 0n) || grams > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Peso inválido");
-  return Number(grams);
-}
-
-function unitsToInteger(value: string) {
-  if (!/^\d+$/.test(value.trim())) throw new Error("Cantidad de unidades inválida");
-  const units = BigInt(value.trim());
-  if (units <= 0n || units > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Cantidad de unidades inválida");
-  return Number(units);
-}
-
-function pesosToCents(value: string) {
-  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
-  if (!match) throw new Error("Precio inválido");
-  const cents = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
-  if (cents <= 0n || cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Precio inválido");
-  return Number(cents);
-}
-
-function percentageToBasisPoints(value: string) {
-  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
-  if (!match) throw new Error("Descuento inválido");
-  const basisPoints = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
-  if (basisPoints <= 0n || basisPoints > 10_000n) throw new Error("El descuento debe estar entre 0,01% y 100%");
-  return Number(basisPoints);
-}
-
-function percentageToBasisPointsAllowZero(value: string, label: string, maximumBps: bigint) {
-  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim());
-  if (!match) throw new Error(`${label} inválido`);
-  const basisPoints = BigInt(match[1] ?? "") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
-  if (basisPoints < 0n || basisPoints > maximumBps) throw new Error(`${label} fuera del rango permitido`);
-  return Number(basisPoints);
-}
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
   const sellable = formData.get("is_sellable") === "on";
@@ -310,34 +251,10 @@ async function commercialRpc(name: string, args: Record<string, unknown>) {
 }
 
 async function saveWeightDiscount(formData: FormData) {
-  const promotionMode = text(formData, "promotion_mode") || "THRESHOLD";
-  const shared = {
-    p_id: optionalId(formData, "discount_id"), p_product_id: text(formData, "product_id"), p_branch_id: optionalId(formData, "branch_id"),
-    p_active: formData.get("active") === "on",
-    p_valid_from: text(formData, "valid_from") ? new Date(text(formData, "valid_from")).toISOString() : new Date().toISOString(),
-    p_valid_until: text(formData, "valid_until") ? new Date(text(formData, "valid_until")).toISOString() : null,
-    p_promotion_mode: promotionMode
-  };
-  if (promotionMode === "PACK_FIXED_TOTAL") {
-    // A pack's quantity is expressed in kg or in units depending on the product's own sale
-    // type — the client only ever renders the field that matches, but the server RPC re-checks
-    // it against the real product row regardless (see 202609230031_promotion_pack_fixed_total.sql).
-    const packUnitType = text(formData, "pack_unit_type");
-    await commercialRpc("save_weight_discount", {
-      ...shared,
-      p_pack_quantity_grams: packUnitType === "WEIGHT" ? kilogramsToGrams(text(formData, "pack_quantity_kg")) : null,
-      p_pack_quantity_units: packUnitType === "UNIT" ? unitsToInteger(text(formData, "pack_quantity_units")) : null,
-      p_pack_price_cents: pesosToCents(text(formData, "pack_price"))
-    });
-  } else {
-    const discountType = text(formData, "discount_type");
-    if (discountType !== "PERCENTAGE" && discountType !== "FIXED_PRICE_PER_KG") throw new Error("Tipo de descuento inválido");
-    await commercialRpc("save_weight_discount", {
-      ...shared,
-      p_minimum_grams: kilogramsToGrams(text(formData, "minimum_kg")), p_discount_type: discountType,
-      p_discount_value: discountType === "PERCENTAGE" ? percentageToBasisPoints(text(formData, "discount_value")) : pesosToCents(text(formData, "discount_value"))
-    });
-  }
+  // See weight-discount-args.ts for why every call must always name all 13 parameters
+  // of save_weight_discount (the database has two overloads; PostgREST resolves them by
+  // the exact set of parameter names in the request body).
+  await commercialRpc("save_weight_discount", { ...buildSaveWeightDiscountArgs(formData) });
   revalidatePath("/admin/catalog");
   revalidatePath("/admin/promotions");
   revalidatePath("/admin/products");
