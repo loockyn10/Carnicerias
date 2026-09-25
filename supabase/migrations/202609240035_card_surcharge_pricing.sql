@@ -18,13 +18,14 @@ begin;
 -- (D-005/D-009 — snapshots are immutable). The one genuinely new concept, "how much extra a card
 -- payment added", gets its own new column: sale_items.card_surcharge_cents.
 --
--- PACK_FIXED_TOTAL (D-039) is deliberately NOT reinterpreted here: a pack's configured total
--- stays exactly as fixed as it already was against the real weighed grams — paying by card never
--- adds a surcharge on top of a pack's total, exactly like it never scaled with weight. Only the
--- non-pack remainder of a UNIT pack sale (units beyond the last whole pack, sold at the normal
--- per-unit price) carries the card surcharge, since that portion genuinely is a normal-price sale.
--- See docs/DECISIONS.md D-044 for why this was the conservative, non-invented resolution chosen
--- for the one business ambiguity this task flagged explicitly.
+-- PACK_FIXED_TOTAL and every promotion (D-039): the surcharge applies to the WHOLE commercial
+-- result, no exception. Order is list price -> promotion/pack -> card surcharge (never the other
+-- way — a promotion is always evaluated against the plain list price, and the surcharge is a
+-- single final multiplicative step over whatever that produced, packs included). Confirmed
+-- explicitly by the product owner (2026-09-24) after an initial, more conservative reading of
+-- D-039 (packs payment-method-invariant) was corrected: "TODO lo que se pague con tarjeta lleva
+-- el porcentaje de recargo configurado. No hay excepción para promociones ni packs." See
+-- docs/DECISIONS.md D-044 for the full history of this correction.
 
 alter table public.sale_items
   add column card_surcharge_cents bigint not null default 0 check (card_surcharge_cents >= 0);
@@ -112,11 +113,11 @@ begin
 end;
 $$;
 
--- complete_discounted_sale (online checkout): same signature as 202609230034. Every branch below
--- is a full re-derivation (not a byte-for-byte copy) of that migration's version, with the
--- payment-method formula inverted per D-044. app_private.payment_method_receives_discount is left
--- completely untouched (still means "is this CASH/TRANSFER/OTHER") — call sites below now gate on
--- its NEGATION to decide who gets the card surcharge looked up, instead of removing/renaming it.
+-- complete_discounted_sale (online checkout): same signature as 202609230034. Order is
+-- list -> promotion/pack -> card surcharge for every branch, no exception (D-044, corrected).
+-- app_private.payment_method_receives_discount is left completely untouched (still means "is
+-- this CASH/TRANSFER/OTHER") — call sites below gate on its NEGATION to decide who gets the
+-- surcharge looked up, instead of removing/renaming it.
 create or replace function public.complete_discounted_sale(p_branch_id uuid, p_items jsonb, p_payment_method text)
 returns table(sale_id uuid, total_cents bigint, total_weight_grams bigint, completed_at timestamptz)
 language plpgsql
@@ -140,7 +141,7 @@ declare
   pack_promo public.product_weight_discounts%rowtype;
   name text;
   list_price bigint;
-  cash_price bigint;
+  promo_price bigint;
   final_price bigint;
   promo record;
   rule_id uuid;
@@ -202,9 +203,7 @@ begin
       if not found or list_price <> expected_price then
         raise exception 'Product price changed; reload and retry' using errcode = '40001';
       end if;
-      cash_price := app_private.round_ratio_half_up(list_price * (10000 + cash_bps), 10000);
       list_subtotal := list_price * quantity;
-      cash_subtotal := cash_price * quantity;
 
       if pack_promotion_id is not null then
         select * into pack_promo from public.product_weight_discounts
@@ -220,20 +219,31 @@ begin
         end if;
         whole_packs := quantity / pack_promo.pack_quantity_units;
         remainder := quantity % pack_promo.pack_quantity_units;
-        -- The pack's whole-pack portion never carries a card surcharge (D-044); only the
-        -- remainder, a genuine normal-price sale, does.
-        subtotal := pack_promo.pack_price_cents * whole_packs + cash_price * remainder;
-        final_price := cash_price;
-        card_surcharge := greatest(cash_price - list_price, 0) * remainder;
+        -- cash_subtotal is the CASH-equivalent commercial result: whole packs at their fixed
+        -- price, plus any remainder at plain list price (no promo ever applies to a UNIT
+        -- remainder). The card surcharge (D-044, corrected) is then ONE step applied to that
+        -- WHOLE total below — never only to the remainder.
+        cash_subtotal := pack_promo.pack_price_cents * whole_packs + list_price * remainder;
         promotion_discount := greatest(list_price * (whole_packs * pack_promo.pack_quantity_units) - pack_promo.pack_price_cents * whole_packs, 0);
         rule_id := pack_promo.id; rule_discount_type := null; rule_discount_value := null; line_promotion_mode := 'PACK_FIXED_TOTAL';
+        -- Pack total: the surcharge is one rounding applied directly to the whole total (mirrors
+        -- calculateUnitPackSalePricing exactly — there is no single per-unit rate for a mixed
+        -- pack+remainder line, so final_price_per_kg_cents reuses the total, same as the pure
+        -- calculation function does).
+        subtotal := case when cash_bps > 0 then app_private.round_ratio_half_up(cash_subtotal * (10000 + cash_bps), 10000) else cash_subtotal end;
+        final_price := subtotal;
       else
-        subtotal := cash_subtotal;
-        final_price := cash_price;
-        card_surcharge := greatest(cash_subtotal - list_subtotal, 0);
+        cash_subtotal := list_subtotal;
         promotion_discount := 0;
         rule_id := null; rule_discount_type := null; rule_discount_value := null; line_promotion_mode := null;
+        -- Non-pack: round once at the per-unit level (mirrors calculateSalePricing exactly —
+        -- quantityDivisor 1 means its own subtotal rounding is a no-op, i.e. exact multiply),
+        -- not at the subtotal level, so this always agrees with the pure TS calculation bit for
+        -- bit even for quantities where the two roundings could otherwise diverge by a cent.
+        final_price := case when cash_bps > 0 then app_private.round_ratio_half_up(list_price * (10000 + cash_bps), 10000) else list_price end;
+        subtotal := final_price * quantity;
       end if;
+      card_surcharge := subtotal - cash_subtotal;
 
       select c.cost_cents into cost_snapshot from public.product_costs c
       where c.organization_id = org_id and c.product_id = product and c.valid_from <= at_time and (c.valid_to is null or c.valid_to > at_time)
@@ -277,9 +287,7 @@ begin
       if not found or list_price <> expected_price then
         raise exception 'Product price changed; reload and retry' using errcode = '40001';
       end if;
-      cash_price := app_private.round_ratio_half_up(list_price * (10000 + cash_bps), 10000);
       list_subtotal := app_private.round_ratio_half_up(list_price * grams, 1000);
-      cash_subtotal := app_private.round_ratio_half_up(cash_price * grams, 1000);
 
       if pack_promotion_id is not null then
         select * into pack_promo from public.product_weight_discounts
@@ -288,28 +296,38 @@ begin
           and (branch_id = p_branch_id or branch_id is null)
           and valid_from <= at_time and (valid_until is null or valid_until > at_time);
         if not found then raise exception 'Promotion configuration changed; reload and retry' using errcode = '40001'; end if;
-        -- Guard is (and always was) against LIST price, never a payment-method-adjusted one — a
-        -- pack's total is payment-method-invariant, see D-044.
+        -- Guard is (and always was) against LIST price — the pack's fixed total, before any card
+        -- surcharge, must not exceed what the weighed amount would cost at plain list price.
         if pack_promo.pack_price_cents > list_subtotal then
           raise exception 'El precio del pack supera el precio de lista para el peso pesado' using errcode = '22023';
         end if;
-        final_price := app_private.round_ratio_half_up(pack_promo.pack_price_cents * 1000, grams);
-        subtotal := pack_promo.pack_price_cents;
-        card_surcharge := 0;
-        promotion_discount := greatest(list_subtotal - subtotal, 0);
+        -- cash_subtotal is the pack's CASH-equivalent total; the surcharge (D-044, corrected)
+        -- applies to this WHOLE total below (one rounding, mirrors calculateWeightPackSalePricing
+        -- exactly — a pack has no single per-kg rate to round first), exactly like any other line
+        -- — no pack exception. final_price_per_kg_cents is only a derived display equivalent.
+        cash_subtotal := pack_promo.pack_price_cents;
+        promotion_discount := greatest(list_subtotal - cash_subtotal, 0);
         rule_id := pack_promo.id; rule_discount_type := null; rule_discount_value := null; line_promotion_mode := 'PACK_FIXED_TOTAL';
+        subtotal := case when cash_bps > 0 then app_private.round_ratio_half_up(cash_subtotal * (10000 + cash_bps), 10000) else cash_subtotal end;
+        final_price := app_private.round_ratio_half_up(subtotal * 1000, grams);
       else
-        select * into promo from public.resolve_weight_discount(org_id, product, p_branch_id, grams, cash_price, at_time);
-        final_price := coalesce(promo.final_price_cents, cash_price);
-        if final_price > cash_price then raise exception 'Promotion is not a discount for this payment method' using errcode = '22023'; end if;
-        if (expected_cash_bps is not null and expected_cash_bps <> cash_bps) or (expected_final_price is not null and expected_final_price <> final_price) then
-          raise exception 'Commercial configuration changed; reload and retry' using errcode = '40001';
-        end if;
-        subtotal := app_private.round_ratio_half_up(final_price * grams, 1000);
-        card_surcharge := greatest(cash_subtotal - list_subtotal, 0);
-        promotion_discount := greatest(cash_subtotal - subtotal, 0);
+        select * into promo from public.resolve_weight_discount(org_id, product, p_branch_id, grams, list_price, at_time);
+        promo_price := coalesce(promo.final_price_cents, list_price);
+        if promo_price > list_price then raise exception 'Promotion is not a discount' using errcode = '22023'; end if;
+        cash_subtotal := app_private.round_ratio_half_up(promo_price * grams, 1000);
+        promotion_discount := list_subtotal - cash_subtotal;
         rule_id := promo.rule_id; rule_discount_type := promo.discount_type; rule_discount_value := promo.discount_value;
         line_promotion_mode := case when rule_id is not null then 'THRESHOLD'::public.promotion_mode end;
+        -- Non-pack: round once at the per-kg level (mirrors calculateSalePricing exactly), THEN
+        -- derive the subtotal from grams (its own, second rounding) — same double-rounding shape
+        -- the pre-existing cash-discount code already had, just with the surcharge in the second
+        -- factor instead of the first.
+        final_price := case when cash_bps > 0 then app_private.round_ratio_half_up(promo_price * (10000 + cash_bps), 10000) else promo_price end;
+        subtotal := app_private.round_ratio_half_up(final_price * grams, 1000);
+      end if;
+      card_surcharge := subtotal - cash_subtotal;
+      if (expected_cash_bps is not null and expected_cash_bps <> cash_bps) or (expected_final_price is not null and expected_final_price <> final_price) then
+        raise exception 'Commercial configuration changed; reload and retry' using errcode = '40001';
       end if;
 
       select c.cost_cents into cost_snapshot from public.product_costs c
@@ -363,12 +381,12 @@ declare
   sale_id uuid; created_at timestamptz; completed_at timestamptz; declared_total bigint; declared_weight bigint;
   computed_total bigint := 0; computed_weight bigint := 0; method public.payment_method;
   item_index integer; item jsonb; movement jsonb; current_product_id uuid; grams integer; quantity integer;
-  list_price bigint; cash_price bigint; final_price bigint; subtotal bigint;
+  list_price bigint; promo_price bigint; final_price bigint; subtotal bigint;
   discount_total bigint; cash_bps integer; cash_discount bigint; card_surcharge bigint; promo_discount bigint;
   discount_type public.weight_discount_type; discount_value bigint; discount_rule uuid;
   line_promotion_mode public.promotion_mode; pack_promo public.product_weight_discounts%rowtype;
   whole_packs bigint; remainder bigint;
-  list_subtotal bigint; cash_subtotal bigint; cost_snapshot bigint; profit_snapshot integer; has_new_pricing boolean;
+  list_subtotal bigint; cash_subtotal bigint; cost_snapshot bigint; profit_snapshot integer;
 begin
   if profile_id is null then raise exception 'Authentication required' using errcode = '28000'; end if;
   if p_payload is null or p_payload->>'schemaVersion' <> '1' then raise exception 'Unsupported offline sale payload' using errcode = '22023'; end if;
@@ -405,7 +423,6 @@ begin
 
   for item_index in 0..jsonb_array_length(p_payload->'items') - 1 loop
     item := p_payload->'items'->item_index; movement := p_payload->'stockMovements'->item_index;
-    has_new_pricing := item ? 'cashDiscountBps' or item ? 'promotionDiscountCents';
     begin
       current_product_id := (item->>'productId')::uuid; final_price := (item->>'pricePerKgCents')::bigint;
       list_price := coalesce(nullif(item->>'originalPricePerKgCents', '')::bigint, final_price);
@@ -427,12 +444,11 @@ begin
        or cash_discount <> 0 then
       raise exception 'Offline sale item values are invalid' using errcode = '22023';
     end if;
-    cash_price := app_private.round_ratio_half_up(list_price * (10000 + cash_bps), 10000);
 
     if quantity is not null and grams is null then
       -- UNIT line.
       if quantity <= 0 then raise exception 'Offline sale item values are invalid' using errcode = '22023'; end if;
-      list_subtotal := list_price * quantity; cash_subtotal := cash_price * quantity;
+      list_subtotal := list_price * quantity;
       if discount_type is not null or discount_value is not null then
         raise exception 'Offline unit sale discount metadata is inconsistent' using errcode = '22023';
       end if;
@@ -446,19 +462,33 @@ begin
         end if;
         whole_packs := quantity / pack_promo.pack_quantity_units;
         remainder := quantity % pack_promo.pack_quantity_units;
-        if final_price <> cash_price or subtotal <> pack_promo.pack_price_cents * whole_packs + cash_price * remainder then
-          raise exception 'Offline pack promotion is inconsistent' using errcode = '22023';
-        end if;
-        if card_surcharge <> greatest(cash_price - list_price, 0) * remainder
-           or promo_discount <> greatest(list_price * (whole_packs * pack_promo.pack_quantity_units) - pack_promo.pack_price_cents * whole_packs, 0)
+        -- Pack total: CASH-equivalent = whole packs at their fixed price + remainder at plain
+        -- list (never a discounted rate) — the surcharge (D-044, corrected) is ONE rounding on
+        -- the WHOLE resulting total below, never only on the remainder.
+        cash_subtotal := pack_promo.pack_price_cents * whole_packs + list_price * remainder;
+        if promo_discount <> greatest(list_price * (whole_packs * pack_promo.pack_quantity_units) - pack_promo.pack_price_cents * whole_packs, 0)
            or discount_total <> promo_discount then
           raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
         end if;
+        if subtotal <> (case when cash_bps > 0 then app_private.round_ratio_half_up(cash_subtotal * (10000 + cash_bps), 10000) else cash_subtotal end)
+           or final_price <> subtotal then
+          raise exception 'Offline pack promotion is inconsistent' using errcode = '22023';
+        end if;
       else
-        if final_price <> cash_price or subtotal <> cash_subtotal then raise exception 'Undiscounted snapshot is inconsistent' using errcode = '22023'; end if;
-        if card_surcharge <> greatest(cash_subtotal - list_subtotal, 0) or promo_discount <> 0 or discount_total <> 0 then
+        cash_subtotal := list_subtotal;
+        if promo_discount <> 0 or discount_total <> 0 then
           raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
         end if;
+        -- Non-pack: round once at the per-unit level (mirrors calculateSalePricing exactly,
+        -- since quantityDivisor 1 makes its own subtotal rounding a no-op), then multiply exactly
+        -- — not a single rounding on the subtotal, which can disagree by a cent for some quantities.
+        if final_price <> (case when cash_bps > 0 then app_private.round_ratio_half_up(list_price * (10000 + cash_bps), 10000) else list_price end)
+           or subtotal <> final_price * quantity then
+          raise exception 'Undiscounted snapshot is inconsistent' using errcode = '22023';
+        end if;
+      end if;
+      if card_surcharge <> subtotal - cash_subtotal then
+        raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
       end if;
       if not exists(select 1 from public.products p where p.id = current_product_id and p.organization_id = org_id and p.unit_type = 'UNIT') then
         raise exception 'Offline sale product does not belong to the device organization' using errcode = '42501';
@@ -490,7 +520,7 @@ begin
     else
       -- WEIGHT line.
       if grams is null or grams <= 0 then raise exception 'Offline sale item values are invalid' using errcode = '22023'; end if;
-      list_subtotal := app_private.round_ratio_half_up(list_price * grams, 1000); cash_subtotal := app_private.round_ratio_half_up(cash_price * grams, 1000);
+      list_subtotal := app_private.round_ratio_half_up(list_price * grams, 1000);
 
       if line_promotion_mode = 'PACK_FIXED_TOTAL' then
         if discount_type is not null or discount_value is not null then
@@ -500,32 +530,40 @@ begin
         select * into pack_promo from public.product_weight_discounts
         where id = discount_rule and organization_id = org_id and product_id = current_product_id and promotion_mode = 'PACK_FIXED_TOTAL';
         if not found then raise exception 'Offline discount rule does not belong to the sale product' using errcode = '42501'; end if;
+        -- Guard against LIST price, before any card surcharge — the pack total is
+        -- payment-method-invariant only up to this guard, not in the final charged amount below.
         if pack_promo.pack_price_cents > list_subtotal then raise exception 'El precio del pack supera el precio de lista para el peso pesado' using errcode = '22023'; end if;
-        if final_price <> app_private.round_ratio_half_up(pack_promo.pack_price_cents * 1000, grams) or subtotal <> pack_promo.pack_price_cents then
-          raise exception 'Offline pack promotion is inconsistent' using errcode = '22023';
-        end if;
-        if card_surcharge <> 0 or promo_discount <> greatest(list_subtotal - subtotal, 0) or discount_total <> promo_discount then
+        cash_subtotal := pack_promo.pack_price_cents;
+        if promo_discount <> greatest(list_subtotal - cash_subtotal, 0) or discount_total <> promo_discount then
           raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
+        end if;
+        -- The surcharge (D-044, corrected) applies to the WHOLE pack total below — one rounding,
+        -- mirrors calculateWeightPackSalePricing exactly (no single per-kg rate to round first).
+        if subtotal <> (case when cash_bps > 0 then app_private.round_ratio_half_up(cash_subtotal * (10000 + cash_bps), 10000) else cash_subtotal end)
+           or final_price <> app_private.round_ratio_half_up(subtotal * 1000, grams) then
+          raise exception 'Offline pack promotion is inconsistent' using errcode = '22023';
         end if;
       else
         if discount_type = 'PERCENTAGE' then
-          if discount_value not between 1 and 10000
-             or (has_new_pricing and final_price <> app_private.round_ratio_half_up(cash_price * (10000 - discount_value), 10000))
-             or (not has_new_pricing and final_price <> app_private.round_ratio_half_up(cash_price * (10000 - discount_value), 10000) and final_price <> cash_price * (10000 - discount_value) / 10000) then
-            raise exception 'Offline percentage promotion is inconsistent' using errcode = '22023';
-          end if;
+          if discount_value not between 1 and 10000 then raise exception 'Offline percentage promotion is inconsistent' using errcode = '22023'; end if;
+          promo_price := app_private.round_ratio_half_up(list_price * (10000 - discount_value), 10000);
         elsif discount_type = 'FIXED_PRICE_PER_KG' then
-          if discount_value <= 0 or final_price <> discount_value then raise exception 'Offline fixed-price promotion is inconsistent' using errcode = '22023'; end if;
+          if discount_value <= 0 then raise exception 'Offline fixed-price promotion is inconsistent' using errcode = '22023'; end if;
+          promo_price := discount_value;
         elsif discount_rule is not null or discount_value is not null then
           raise exception 'Offline promotion metadata is inconsistent' using errcode = '22023';
         else
-          if final_price <> cash_price then raise exception 'Offline undiscounted price is inconsistent' using errcode = '22023'; end if;
+          promo_price := list_price;
         end if;
-        if final_price > cash_price then raise exception 'Offline promotion cannot increase a price' using errcode = '22023'; end if;
-        if subtotal <> app_private.round_ratio_half_up(final_price * grams, 1000)
-           or card_surcharge <> greatest(cash_subtotal - list_subtotal, 0)
-           or promo_discount <> greatest(cash_subtotal - subtotal, 0)
-           or discount_total <> promo_discount then
+        if promo_price > list_price then raise exception 'Offline promotion cannot increase a price' using errcode = '22023'; end if;
+        cash_subtotal := app_private.round_ratio_half_up(promo_price * grams, 1000);
+        if promo_discount <> list_subtotal - cash_subtotal or discount_total <> promo_discount then
+          raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
+        end if;
+        -- Non-pack: round once at the per-kg level (list -> promotion -> surcharge, D-044,
+        -- corrected), THEN derive the subtotal from grams — mirrors calculateSalePricing exactly.
+        if final_price <> (case when cash_bps > 0 then app_private.round_ratio_half_up(promo_price * (10000 + cash_bps), 10000) else promo_price end)
+           or subtotal <> app_private.round_ratio_half_up(final_price * grams, 1000) then
           raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
         end if;
         if discount_rule is not null and not exists(
@@ -533,6 +571,9 @@ begin
         ) then
           raise exception 'Offline discount rule does not belong to the sale product' using errcode = '42501';
         end if;
+      end if;
+      if card_surcharge <> subtotal - cash_subtotal then
+        raise exception 'Offline sale item arithmetic is invalid' using errcode = '22023';
       end if;
 
       if not exists(select 1 from public.products p where p.id = current_product_id and p.organization_id = org_id and p.unit_type = 'WEIGHT') then

@@ -888,33 +888,32 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
         let card_surcharge_cents = item.card_surcharge_cents.as_deref().map(|value| parse_i64(value, "cardSurchargeCents")).transpose()?.unwrap_or(0);
         let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(discount_cents - cash_discount_cents);
-        // D-044: only DEBIT/CREDIT may carry a nonzero bps now (the card surcharge);
-        // CASH/TRANSFER/OTHER must not (they get no adjustment off the list price at all), and no
-        // payment method gets an actual discount anymore, so cash_discount_cents is always 0.
+        // D-044 (corrected 2026-09-24): only DEBIT/CREDIT may carry a nonzero bps now (the card
+        // surcharge); CASH/TRANSFER/OTHER must not (they get no adjustment off the list price at
+        // all), and no payment method gets an actual discount anymore, so cash_discount_cents is
+        // always 0. The surcharge itself is computed per-branch below — list -> promotion/pack ->
+        // surcharge, applied to the WHOLE commercial result with no exception for a pack.
         if !(0..10_000).contains(&cash_discount_bps)
             || (payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0)
             || cash_discount_cents != 0
         {
             return Err("Invalid local sale calculation".to_string());
         }
-        let cash_price = original_price.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-        let has_new_pricing = item.cash_discount_bps.is_some() || item.promotion_discount_cents.is_some();
         let product_unit_type: &str;
 
         match (item.weight_grams, item.quantity_units) {
             (Some(weight_grams), None) => {
                 product_unit_type = "WEIGHT";
                 if weight_grams <= 0 { return Err("Invalid local sale calculation".to_string()); }
-                let expected = price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                let normal_subtotal = original_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                let cash_subtotal = cash_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let list_subtotal = original_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let cash_subtotal: i64;
                 if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
                     // Pack line: subtotal is the pack's own fixed total, not a per-kg rate applied
                     // to the weighed grams, so the generic "subtotal == price*weight/1000" identity
                     // does not hold here (final_price is only a derived per-kg equivalent for
                     // display/reporting). Re-validated against local_weight_discounts, same sanity
-                    // guard as the server (pack price must not exceed list price for the actual
-                    // weighed amount).
+                    // guard as the server (pack price must not exceed LIST price for the actual
+                    // weighed amount — before any card surcharge).
                     if item.discount_type.is_some() || item.discount_value.is_some() {
                         return Err("Offline pack promotion metadata is inconsistent".to_string());
                     }
@@ -926,57 +925,70 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                             |row| row.get(0),
                         )
                         .map_err(|_| "Offline pack promotion is unknown".to_string())?;
-                    if pack_price > normal_subtotal || subtotal != pack_price {
+                    if pack_price > list_subtotal {
                         return Err("Offline pack promotion is inconsistent".to_string());
                     }
-                    // D-044: a pack's fixed total is payment-method-invariant, exactly as it's
-                    // already weight-invariant — card_surcharge_cents is always 0 here, and the
-                    // promotion discount is measured against the LIST price (normal_subtotal),
-                    // never a card-surcharged one.
-                    let expected_promotion_discount = (normal_subtotal - subtotal).max(0);
-                    if card_surcharge_cents != 0
-                        || promotion_discount_cents != expected_promotion_discount
-                        || discount_cents != normal_subtotal - subtotal
-                    {
+                    cash_subtotal = pack_price;
+                    let expected_promotion_discount = (list_subtotal - cash_subtotal).max(0);
+                    if promotion_discount_cents != expected_promotion_discount || discount_cents != expected_promotion_discount {
                         return Err("Invalid local sale calculation".to_string());
                     }
+                    // Surcharge (D-044, corrected): ONE rounding on the WHOLE pack total below —
+                    // no pack exception. final_price_per_kg_cents is only a derived display value.
+                    let expected_subtotal = if cash_discount_bps > 0 {
+                        cash_subtotal.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?
+                    } else { cash_subtotal };
+                    if subtotal != expected_subtotal { return Err("Offline pack promotion is inconsistent".to_string()); }
+                    let expected_price = subtotal.checked_mul(1000).and_then(|value| value.checked_add(weight_grams / 2)).map(|value| value / weight_grams).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    if price != expected_price { return Err("Offline pack promotion is inconsistent".to_string()); }
                 } else {
-                    match item.discount_type.as_deref() {
+                    // Promotion evaluated against plain LIST price (never a card-adjusted one).
+                    let promo_price: i64 = match item.discount_type.as_deref() {
                         Some("PERCENTAGE") => {
                             let value = item.discount_value.as_deref().ok_or_else(|| "Missing percentage promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
                             if !(1..=10_000).contains(&value) { return Err("Invalid percentage promotion".to_string()); }
-                            let rounded = cash_price.checked_mul(10_000 - value).and_then(|amount| amount.checked_add(5_000)).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                            let legacy = cash_price.checked_mul(10_000 - value).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?;
-                            if price != rounded && (has_new_pricing || price != legacy) { return Err("Percentage promotion snapshot is inconsistent".to_string()); }
+                            original_price.checked_mul(10_000 - value).and_then(|amount| amount.checked_add(5_000)).map(|amount| amount / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?
                         }
                         Some("FIXED_PRICE_PER_KG") => {
                             let value = item.discount_value.as_deref().ok_or_else(|| "Missing fixed-price promotion value".to_string()).and_then(|value| parse_i64(value, "discountValue"))?;
-                            if price != value || price > cash_price { return Err("Fixed-price promotion snapshot is inconsistent".to_string()); }
+                            if value <= 0 { return Err("Fixed-price promotion snapshot is inconsistent".to_string()); }
+                            value
                         }
                         Some(_) => return Err("Unsupported promotion type".to_string()),
-                        None if price != cash_price => return Err("Undiscounted snapshot is inconsistent".to_string()),
-                        None => {}
-                    }
-                    if subtotal != expected || card_surcharge_cents != cash_subtotal - normal_subtotal || promotion_discount_cents != cash_subtotal - subtotal || discount_cents != promotion_discount_cents {
+                        None => original_price,
+                    };
+                    if promo_price > original_price { return Err("Offline promotion cannot increase a price".to_string()); }
+                    cash_subtotal = promo_price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    if promotion_discount_cents != list_subtotal - cash_subtotal || discount_cents != promotion_discount_cents {
                         return Err("Invalid local sale calculation".to_string());
                     }
+                    // Surcharge (D-044, corrected): round once at the per-kg level (mirrors
+                    // calculateSalePricing exactly), THEN derive the subtotal from grams.
+                    let expected_price = if cash_discount_bps > 0 {
+                        promo_price.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?
+                    } else { promo_price };
+                    if price != expected_price { return Err("Percentage promotion snapshot is inconsistent".to_string()); }
+                    let expected_subtotal = price.checked_mul(weight_grams).and_then(|value| value.checked_add(500)).map(|value| value / 1000).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    if subtotal != expected_subtotal { return Err("Invalid local sale calculation".to_string()); }
                 }
+                if card_surcharge_cents != subtotal - cash_subtotal { return Err("Invalid local sale calculation".to_string()); }
                 computed_weight = computed_weight.checked_add(weight_grams).ok_or_else(|| "Sale weight overflow".to_string())?;
             }
             (None, Some(quantity_units)) => {
                 // UNIT line: no per-kg division, quantities multiply directly. THRESHOLD
                 // promotions never apply to UNIT (WEIGHT-only by design, see save_weight_discount)
                 // — the only supported promotion here is PACK_FIXED_TOTAL, applied in exact
-                // multiples of the pack's quantity, with any remainder at the normal cash price
-                // (mirrors calculateUnitPackSalePricing exactly). UNIT lines contribute nothing to
-                // the sale's total WEIGHT (that total stays a pure weight tally).
+                // multiples of the pack's quantity, with any remainder at plain list price (never a
+                // discounted rate — mirrors calculateUnitPackSalePricing exactly). UNIT lines
+                // contribute nothing to the sale's total WEIGHT (that total stays a pure weight
+                // tally).
                 product_unit_type = "UNIT";
                 if quantity_units <= 0 { return Err("Invalid local sale calculation".to_string()); }
                 if item.discount_type.is_some() || item.discount_value.is_some() {
                     return Err("Offline unit sale discount metadata is inconsistent".to_string());
                 }
-                let normal_subtotal = original_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
-                let cash_subtotal = cash_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let list_subtotal = original_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                let cash_subtotal: i64;
                 if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
                     let rule_id = item.discount_rule_id.as_deref().ok_or_else(|| "Missing pack promotion id".to_string())?;
                     let (pack_quantity, pack_price): (i64, i64) = transaction
@@ -992,34 +1004,41 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                     }
                     let whole_packs = quantity_units / pack_quantity;
                     let remainder = quantity_units % pack_quantity;
-                    // D-044: the whole-pack portion is payment-method-invariant (never a card
-                    // surcharge on top of it); only the remainder — a genuine normal-price sale —
-                    // carries one.
-                    let expected_subtotal = pack_price.checked_mul(whole_packs)
-                        .and_then(|value| cash_price.checked_mul(remainder).and_then(|rest| value.checked_add(rest)))
+                    // CASH-equivalent total: whole packs at their fixed price, remainder at plain
+                    // list price (never card-adjusted at this stage).
+                    cash_subtotal = pack_price.checked_mul(whole_packs)
+                        .and_then(|value| original_price.checked_mul(remainder).and_then(|rest| value.checked_add(rest)))
                         .ok_or_else(|| "Sale amount overflow".to_string())?;
-                    if subtotal != expected_subtotal {
-                        return Err("Offline pack promotion is inconsistent".to_string());
-                    }
-                    let expected_card_surcharge = (cash_price - original_price).max(0).checked_mul(remainder).ok_or_else(|| "Sale amount overflow".to_string())?;
                     let whole_pack_units = whole_packs.checked_mul(pack_quantity).ok_or_else(|| "Sale amount overflow".to_string())?;
                     let whole_pack_list_value = original_price.checked_mul(whole_pack_units).ok_or_else(|| "Sale amount overflow".to_string())?;
                     let whole_pack_charged = pack_price.checked_mul(whole_packs).ok_or_else(|| "Sale amount overflow".to_string())?;
                     let expected_promotion_discount = (whole_pack_list_value - whole_pack_charged).max(0);
-                    if card_surcharge_cents != expected_card_surcharge
-                        || promotion_discount_cents != expected_promotion_discount
-                        || discount_cents != expected_promotion_discount
-                    {
+                    if promotion_discount_cents != expected_promotion_discount || discount_cents != expected_promotion_discount {
                         return Err("Invalid local sale calculation".to_string());
                     }
+                    // Surcharge (D-044, corrected): ONE rounding applied to the WHOLE total below —
+                    // never only to the remainder. final_price_per_kg_cents reuses the total, same
+                    // as calculateUnitPackSalePricing (no single per-unit rate for a mixed line).
+                    let expected_subtotal = if cash_discount_bps > 0 {
+                        cash_subtotal.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?
+                    } else { cash_subtotal };
+                    if subtotal != expected_subtotal || price != subtotal { return Err("Offline pack promotion is inconsistent".to_string()); }
                 } else {
-                    if subtotal != cash_subtotal || price != cash_price {
-                        return Err("Undiscounted snapshot is inconsistent".to_string());
-                    }
-                    if card_surcharge_cents != cash_subtotal - normal_subtotal || promotion_discount_cents != 0 || discount_cents != 0 {
+                    cash_subtotal = list_subtotal;
+                    if promotion_discount_cents != 0 || discount_cents != 0 {
                         return Err("Invalid local sale calculation".to_string());
                     }
+                    // Non-pack: round once at the per-unit level, then multiply exactly (mirrors
+                    // calculateSalePricing — quantityDivisor 1 makes its own subtotal rounding a
+                    // no-op), never a single rounding directly on the subtotal.
+                    let expected_price = if cash_discount_bps > 0 {
+                        original_price.checked_mul(10_000 + cash_discount_bps).and_then(|value| value.checked_add(5_000)).map(|value| value / 10_000).ok_or_else(|| "Sale amount overflow".to_string())?
+                    } else { original_price };
+                    if price != expected_price { return Err("Undiscounted snapshot is inconsistent".to_string()); }
+                    let expected_subtotal = price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
+                    if subtotal != expected_subtotal { return Err("Undiscounted snapshot is inconsistent".to_string()); }
                 }
+                if card_surcharge_cents != subtotal - cash_subtotal { return Err("Invalid local sale calculation".to_string()); }
             }
             _ => return Err("A sale item must have exactly one of weightGrams or quantityUnits".to_string()),
         }
@@ -1493,8 +1512,8 @@ mod tests {
             status: "COMPLETED".into(), total_cents: "1509444".into(), total_weight_grams: "1000".into(),
             created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
-                price_per_kg_cents: "1509444".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("79444".into()),
-                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("144444".into()), promotion_discount_cents: Some("79444".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1509444".into() }],
+                price_per_kg_cents: "1509444".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("72222".into()),
+                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("137222".into()), promotion_discount_cents: Some("72222".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1509444".into() }],
             payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "1509444".into() },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
         };
@@ -1502,8 +1521,13 @@ mod tests {
         insert_sale(&transaction, &sale).unwrap();
         transaction.commit().unwrap();
         assert_eq!(connection.query_row("select cash_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
-        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 144444);
-        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 79444);
+        // D-044 (corrected): promotion is evaluated against LIST first (5% off 1.444.444 =
+        // 1.372.222, a 72.222 promo discount), THEN the 10% card surcharge applies to that
+        // promo'd result (1.372.222 * 1,10 = 1.509.444, a 137.222 surcharge) — not the other way
+        // around. The final total (1.509.444) is a coincidental match to the old, wrong order for
+        // this specific example; the breakdown between promo and surcharge is not.
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 137222);
+        assert_eq!(connection.query_row("select promotion_discount_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 72222);
     }
 
     // Same base/percentage as above, but CASH: no adjustment at all — list price unchanged, only
@@ -1583,10 +1607,12 @@ mod tests {
                 id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(2050), quantity_units: None,
                 price_per_kg_cents: "8780".into(), original_price_per_kg_cents: Some("10000".into()),
                 discount_rule_id: Some("pack-1".into()), discount_type: None, discount_value: None, promotion_mode: Some("PACK_FIXED_TOTAL".into()),
-                // D-044: a pack's fixed total is payment-method-invariant — cash_discount_bps/cents
-                // and card_surcharge_cents are all 0 regardless of payment method; the discount is
-                // measured against the LIST price (20.500 for 2.050g at $10.000/kg), not a
-                // payment-method-adjusted one: 20.500 - 18.000 = 2.500.
+                // D-044 (corrected): cash_discount_cents stays 0 for every payment method (no
+                // method gets an actual discount), and the promotion discount is measured against
+                // the LIST price (20.500 for 2.050g at $10.000/kg): 20.500 - 18.000 = 2.500. This
+                // fixture uses CASH (bps=0), so card_surcharge_cents is 0 here too — see
+                // weight_pack_sale_surcharges_the_whole_total_for_debit for the DEBIT case, where
+                // the pack's total itself carries the surcharge (no pack exception).
                 discount_cents: Some("2500".into()), cash_discount_bps: Some("0".into()), cash_discount_cents: Some("0".into()),
                 card_surcharge_cents: Some("0".into()),
                 promotion_discount_cents: Some("2500".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "18000".into()
@@ -1626,6 +1652,59 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // D-044 correction (2026-09-24), required example: "Vacio: 2kg por $18.000" -> DEBIT =
+    // $19.800 (18.000 * 1,10), not $18.000. No pack exception to the card surcharge.
+    #[test]
+    fn weight_pack_sale_surcharges_the_whole_total_for_debit() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let (_, mut sale) = pack_sale_fixture(&connection);
+        sale.payment.method = "DEBIT".into();
+        sale.items[0].cash_discount_bps = Some("1000".into());
+        sale.items[0].card_surcharge_cents = Some("1800".into());
+        sale.items[0].subtotal_cents = "19800".into();
+        // Derived $/kg display value from the surcharged subtotal: (19800*1000+1025)/2050 = 9659.
+        sale.items[0].price_per_kg_cents = "9659".into();
+        sale.total_cents = "19800".into();
+        sale.payment.amount_cents = "19800".into();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 19800);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 1800);
+    }
+
+    // D-044, required example: promo = $9.000/kg. CASH pays exactly that; DEBIT pays that PLUS
+    // the surcharge (promotion is evaluated against list first, surcharge applies to its result).
+    #[test]
+    fn threshold_sale_surcharges_after_the_promotion_for_debit() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-24T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-24T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-24T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',1000000,'2026-09-24T00:00:00Z','2026-09-24T00:00:00Z')", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        // 1kg at $10.000/kg list, FIXED_PRICE_PER_KG promo = $9.000/kg, DEBIT +10% -> $9.900/kg.
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
+            status: "COMPLETED".into(), total_cents: "990000".into(), total_weight_grams: "1000".into(),
+            created_at: "2026-09-24T00:00:00Z".into(), completed_at: "2026-09-24T00:00:00Z".into(),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(1000), quantity_units: None,
+                price_per_kg_cents: "990000".into(), original_price_per_kg_cents: Some("1000000".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("FIXED_PRICE_PER_KG".into()), discount_value: Some("900000".into()), promotion_mode: None, discount_cents: Some("100000".into()),
+                cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("90000".into()), promotion_discount_cents: Some("100000".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "990000".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "990000".into() },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-24T00:00:00Z".into() }]
+        };
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 990000);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_,i64>(0)).unwrap(), 90000);
+    }
+
     fn unit_sale_device(connection: &Connection) -> String {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
@@ -1636,10 +1715,14 @@ mod tests {
     }
 
     fn unit_sale_item(quantity: i64, subtotal: i64, discount_cents: i64, promotion_discount_cents: i64, pack_rule_id: Option<&str>) -> OfflineSaleItem {
+        // A PACK_FIXED_TOTAL line reuses subtotal_cents as its final_price_per_kg_cents snapshot
+        // (there is no single per-unit rate for a mixed pack+remainder line — mirrors
+        // calculateUnitPackSalePricing exactly); a plain line uses the genuine $800/u price.
+        let price_per_kg_cents = if pack_rule_id.is_some() { subtotal.to_string() } else { "800".to_string() };
         OfflineSaleItem {
             id: Uuid::new_v4().to_string(), product_id: "hamburguesa".into(), product_name_snapshot: "Hamburguesa".into(),
             weight_grams: None, quantity_units: Some(quantity),
-            price_per_kg_cents: "800".into(), original_price_per_kg_cents: Some("800".into()),
+            price_per_kg_cents, original_price_per_kg_cents: Some("800".into()),
             discount_rule_id: pack_rule_id.map(|id| id.to_string()),
             discount_type: None, discount_value: None,
             promotion_mode: pack_rule_id.map(|_| "PACK_FIXED_TOTAL".to_string()),
@@ -1723,6 +1806,50 @@ mod tests {
         insert_sale(&transaction, &sale).unwrap();
         transaction.commit().unwrap();
         assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 31200);
+    }
+
+    // D-044 correction (2026-09-24), required example: "40 unidades por $28.000" -> DEBIT =
+    // $30.800 (28.000 * 1,10). No pack exception, even for an exact multiple with no remainder.
+    #[test]
+    fn unit_pack_sale_surcharges_the_whole_total_for_debit_exact_multiple() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',40,28000)", []).unwrap();
+        let mut item = unit_sale_item(40, 30800, 4000, 4000, Some("pack-1"));
+        item.price_per_kg_cents = "30800".into();
+        item.cash_discount_bps = Some("1000".into());
+        item.card_surcharge_cents = Some("2800".into());
+        let mut sale = unit_sale_payload(device_id, 40, 30800, item);
+        sale.payment.method = "DEBIT".into();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 30800);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 2800);
+    }
+
+    // D-044 correction, required example: 45 units (1 pack $28.000 + 5 remainder at $800 =
+    // $32.000 CASH-equivalent) -> DEBIT = $35.200 (32.000 * 1,10). The surcharge applies to the
+    // WHOLE total, never only to the $4.000 remainder (which alone * 1,10 would give $4.400,
+    // for a wrong total of $32.400 — this test guards against exactly that mistake).
+    #[test]
+    fn unit_pack_sale_with_remainder_surcharges_the_whole_total_for_debit() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',40,28000)", []).unwrap();
+        let mut item = unit_sale_item(45, 35200, 4000, 4000, Some("pack-1"));
+        item.price_per_kg_cents = "35200".into();
+        item.cash_discount_bps = Some("1000".into());
+        item.card_surcharge_cents = Some("3200".into());
+        let mut sale = unit_sale_payload(device_id, 45, 35200, item);
+        sale.payment.method = "DEBIT".into();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 35200);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 3200);
     }
 
     #[test]

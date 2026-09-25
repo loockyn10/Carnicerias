@@ -61,13 +61,16 @@ export function calculatePriceFormation(costCents: bigint, profitMarkupBps: bigi
 /**
  * Recalculates from the immutable list price every time; discounts never accumulate.
  *
- * Payment-method adjustment (D-044): CASH/TRANSFER/OTHER pay exactly listPriceCents, no
- * adjustment at all — cashDiscountCents is always 0. DEBIT/CREDIT ("Tarjeta") pay
- * listPriceCents plus a card surcharge (cardSurchargeCents), computed from the same
- * `cashDiscountBps` configuration value (kept under its legacy name/column — see D-044 — it now
- * configures the surcharge percentage, not a discount). A promotion is then evaluated against
- * that post-surcharge price (cashPriceCents), exactly like before: it still can never increase
- * the price relative to whatever this payment method would otherwise pay.
+ * Order (D-044, corrected): list price -> promotion -> card surcharge. A promotion is evaluated
+ * against the plain list price (never against a card-adjusted one) — this is the CASH/TRANSFER
+ * equivalent price (cashPriceCents/cashSubtotalCents). The card surcharge is then a single
+ * multiplicative step applied to that CASH-equivalent result, for CASH/TRANSFER/OTHER there is no
+ * exception: no adjustment at all — cashDiscountCents is always 0. DEBIT/CREDIT ("Tarjeta") pay
+ * the CASH-equivalent amount plus the configured surcharge percentage (cardSurchargeCents),
+ * computed from the same `cashDiscountBps` configuration value (kept under its legacy name/column
+ * — see D-044 — it now configures the surcharge percentage, not a discount). Every payment method
+ * that isn't a card surcharge one gets exactly the CASH-equivalent price; there is no promotion or
+ * pack exception to the surcharge itself (D-044's correction).
  */
 export function calculateSalePricing(input: {
   listPriceCents: bigint;
@@ -81,21 +84,21 @@ export function calculateSalePricing(input: {
   if (listPriceCents <= 0n || !Number.isSafeInteger(quantity) || quantity <= 0) throw new RangeError("Invalid sale quantity or price");
   validateBasisPoints(input.cashDiscountBps);
   const cashDiscountBps = isCardSurchargePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
-  const cashPriceCents = divideRoundHalfUp(listPriceCents * (10_000n + cashDiscountBps), 10_000n);
-  let finalPriceCents = cashPriceCents;
+  let cashPriceCents = listPriceCents;
   if (promotion) {
-    finalPriceCents = promotion.discountType === "PERCENTAGE"
-      ? divideRoundHalfUp(cashPriceCents * (10_000n - promotion.discountValue), 10_000n)
+    cashPriceCents = promotion.discountType === "PERCENTAGE"
+      ? divideRoundHalfUp(listPriceCents * (10_000n - promotion.discountValue), 10_000n)
       : promotion.discountValue;
-    if (finalPriceCents <= 0n || finalPriceCents > cashPriceCents) throw new RangeError("Promotion is not a discount for this payment method");
+    if (cashPriceCents <= 0n || cashPriceCents > listPriceCents) throw new RangeError("Promotion is not a discount");
   }
+  const finalPriceCents = cashDiscountBps > 0n ? divideRoundHalfUp(cashPriceCents * (10_000n + cashDiscountBps), 10_000n) : cashPriceCents;
   const line = (price: bigint) => divideRoundHalfUp(price * BigInt(quantity), BigInt(quantityDivisor));
   const listSubtotalCents = line(listPriceCents);
   const cashSubtotalCents = line(cashPriceCents);
   const subtotalCents = line(finalPriceCents);
   const cashDiscountCents = 0n;
-  const cardSurchargeCents = cashSubtotalCents - listSubtotalCents;
-  const promotionDiscountCents = cashSubtotalCents - subtotalCents;
+  const cardSurchargeCents = subtotalCents - cashSubtotalCents;
+  const promotionDiscountCents = listSubtotalCents - cashSubtotalCents;
   return {
     listPriceCents, cashPriceCents, finalPriceCents, listSubtotalCents, cashSubtotalCents,
     subtotalCents, cashDiscountBps, cashDiscountCents, cardSurchargeCents, promotionDiscountCents,
@@ -113,17 +116,11 @@ export function calculateSalePricing(input: {
  * piece unweighted at full list price — in practice this never triggers for a
  * real pack's natural weight variance.
  *
- * Payment method (D-044): a pack's configured total is deliberately
- * payment-method-invariant — paying by card never adds a surcharge on top of
- * it, exactly as it never varied with the weighed grams. `paymentMethod`/
- * `cashDiscountBps` are accepted only for a uniform call signature with the
- * other pricing functions and to snapshot the config that was in effect;
- * cashPriceCents/cashSubtotalCents/cardSurchargeCents/cashDiscountCents all
- * collapse to their list-price-equivalent values here (this was the one
- * business decision this migration deliberately did NOT reinterpret — see
- * D-044's report). Mirrors complete_discounted_sale's PACK_FIXED_TOTAL branch
- * exactly (same rounding, same clamped promotionDiscountCents) so the
- * server-side snapshot and this pure calculation always agree.
+ * Payment method (D-044, corrected): the pack's configured total (packPriceCents) IS the
+ * CASH-equivalent commercial result — cashSubtotalCents. A card payment then applies the
+ * surcharge to that whole total, exactly like any other line: no pack exception to the
+ * surcharge itself. finalPriceCents (a derived $/kg display value) is computed from the
+ * surcharge-inclusive subtotal, since the pack total — not a per-kg rate — is the ground truth.
  */
 export function calculateWeightPackSalePricing(input: {
   listPriceCents: bigint;
@@ -132,24 +129,27 @@ export function calculateWeightPackSalePricing(input: {
   cashDiscountBps: bigint;
   packPriceCents: bigint;
 }): SalePricing {
-  const { listPriceCents, weightGrams, packPriceCents } = input;
+  const { listPriceCents, weightGrams, paymentMethod, packPriceCents } = input;
   if (listPriceCents <= 0n || !Number.isSafeInteger(weightGrams) || weightGrams <= 0) {
     throw new RangeError("Invalid sale quantity or price");
   }
   if (packPriceCents <= 0n) throw new RangeError("Invalid pack price");
   validateBasisPoints(input.cashDiscountBps);
+  const cashDiscountBps = isCardSurchargePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
   const listSubtotalCents = divideRoundHalfUp(listPriceCents * BigInt(weightGrams), 1_000n);
   if (packPriceCents > listSubtotalCents) {
     throw new RangeError("Pack price exceeds list price for the weighed amount");
   }
-  const subtotalCents = packPriceCents;
+  const cashSubtotalCents = packPriceCents;
+  const subtotalCents = cashDiscountBps > 0n ? divideRoundHalfUp(cashSubtotalCents * (10_000n + cashDiscountBps), 10_000n) : cashSubtotalCents;
   const finalPriceCents = divideRoundHalfUp(subtotalCents * 1_000n, BigInt(weightGrams));
-  const rawPromotionDiscountCents = listSubtotalCents - subtotalCents;
+  const cardSurchargeCents = subtotalCents - cashSubtotalCents;
+  const rawPromotionDiscountCents = listSubtotalCents - cashSubtotalCents;
   const promotionDiscountCents = rawPromotionDiscountCents > 0n ? rawPromotionDiscountCents : 0n;
   return {
-    listPriceCents, cashPriceCents: listPriceCents, finalPriceCents, listSubtotalCents, cashSubtotalCents: listSubtotalCents,
-    subtotalCents, cashDiscountBps: 0n, cashDiscountCents: 0n, cardSurchargeCents: 0n, promotionDiscountCents,
-    discountCents: listSubtotalCents - subtotalCents
+    listPriceCents, cashPriceCents: listPriceCents, finalPriceCents, listSubtotalCents, cashSubtotalCents,
+    subtotalCents, cashDiscountBps, cashDiscountCents: 0n, cardSurchargeCents, promotionDiscountCents,
+    discountCents: promotionDiscountCents
   };
 }
 
@@ -166,12 +166,11 @@ export interface UnitPackPromotion {
  * at the normal per-unit price — never a partial/invented discount for the
  * remainder.
  *
- * Payment method (D-044): the whole-pack portion (packPriceCents * wholePacks)
- * is payment-method-invariant, exactly like the WEIGHT pack — a card payment
- * never adds a surcharge on top of the pack's configured total. The remainder
- * units are a genuine normal-price sale (not part of the pack), so they DO
- * carry the card surcharge like any other line: cashPriceCents reflects it,
- * and it feeds the remainder's contribution to subtotalCents/cardSurchargeCents.
+ * Payment method (D-044, corrected): first compute the full CASH-equivalent commercial
+ * result — whole packs at their fixed price plus any remainder at the (list) per-unit price —
+ * exactly as a CASH/TRANSFER customer would pay. The card surcharge is then applied ONCE to
+ * that whole total (cashSubtotalCents), never only to the remainder: a 45-unit sale (1 pack +
+ * 5 loose) surcharges the full $32.000, not just the $4.000 remainder.
  */
 export function calculateUnitPackSalePricing(input: {
   listPriceCents: bigint;
@@ -193,18 +192,17 @@ export function calculateUnitPackSalePricing(input: {
   }
   validateBasisPoints(input.cashDiscountBps);
   const cashDiscountBps = isCardSurchargePaymentMethod(paymentMethod) ? input.cashDiscountBps : 0n;
-  const cashPriceCents = divideRoundHalfUp(listPriceCents * (10_000n + cashDiscountBps), 10_000n);
   const wholePacks = Math.floor(quantityUnits / pack.packQuantityUnits);
   const remainderUnits = quantityUnits - wholePacks * pack.packQuantityUnits;
   const listSubtotalCents = listPriceCents * BigInt(quantityUnits);
-  const cashSubtotalCents = pack.packPriceCents * BigInt(wholePacks) + cashPriceCents * BigInt(remainderUnits);
-  const subtotalCents = cashSubtotalCents;
+  const cashSubtotalCents = pack.packPriceCents * BigInt(wholePacks) + listPriceCents * BigInt(remainderUnits);
+  const subtotalCents = cashDiscountBps > 0n ? divideRoundHalfUp(cashSubtotalCents * (10_000n + cashDiscountBps), 10_000n) : cashSubtotalCents;
   const cashDiscountCents = 0n;
-  const cardSurchargeCents = cashPriceCents > listPriceCents ? (cashPriceCents - listPriceCents) * BigInt(remainderUnits) : 0n;
+  const cardSurchargeCents = subtotalCents - cashSubtotalCents;
   const rawPromotionDiscountCents = (listPriceCents * BigInt(wholePacks * pack.packQuantityUnits)) - (pack.packPriceCents * BigInt(wholePacks));
   const promotionDiscountCents = rawPromotionDiscountCents > 0n ? rawPromotionDiscountCents : 0n;
   return {
-    listPriceCents, cashPriceCents, finalPriceCents: subtotalCents, listSubtotalCents, cashSubtotalCents,
+    listPriceCents, cashPriceCents: listPriceCents, finalPriceCents: subtotalCents, listSubtotalCents, cashSubtotalCents,
     subtotalCents, cashDiscountBps, cashDiscountCents, cardSurchargeCents, promotionDiscountCents,
     discountCents: cashDiscountCents + promotionDiscountCents
   };

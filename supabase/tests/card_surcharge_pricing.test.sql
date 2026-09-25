@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(24);
+select plan(32);
 
 select has_column('public', 'sale_items', 'card_surcharge_cents', 'sale_items.card_surcharge_cents exists');
 select col_not_null('public', 'sale_items', 'cash_discount_cents', 'cash_discount_cents is still required (sanity check the new column did not disturb the existing ones)');
@@ -97,8 +97,9 @@ select lives_ok(
 );
 select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 1_100_000::bigint, 'CREDIT: same +10% surcharge as DEBIT');
 
--- PACK_FIXED_TOTAL (WEIGHT): a pack's total is payment-method-invariant (D-044) — DEBIT charges
--- the exact same total as CASH, never the total plus a surcharge.
+-- PACK_FIXED_TOTAL (WEIGHT), corrected 2026-09-24: NO exception for packs — the surcharge
+-- applies to the whole pack total, exactly like any other line. The required example:
+-- "2kg por $18.000" -> DEBIT = $19.800 (18.000 * 1,10), not $18.000.
 select lives_ok(
   $$select public.save_weight_discount(null,'b5000000-0000-4000-8000-000000000001',null,null,null,null,true,now(),null,'PACK_FIXED_TOTAL',2000,null,18000)$$,
   'a WEIGHT pack promo (2kg/$18.000) is created'
@@ -110,19 +111,47 @@ select lives_ok(
       'product_id','b5000000-0000-4000-8000-000000000001','weight_grams',2050,'expected_price_per_kg_cents','1000000',
       'pack_promotion_id',(select id from public.product_weight_discounts where product_id='b5000000-0000-4000-8000-000000000001' and promotion_mode='PACK_FIXED_TOTAL')
     )),
+    'CASH'
+  )$$,
+  'a CASH pack sale completes'
+);
+select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 18_000::bigint, 'CASH pack: exactly $18.000, the configured total');
+select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 0::bigint, 'CASH pack: no surcharge');
+select lives_ok(
+  $$select public.complete_discounted_sale(
+    'b3000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'product_id','b5000000-0000-4000-8000-000000000001','weight_grams',2050,'expected_price_per_kg_cents','1000000',
+      'pack_promotion_id',(select id from public.product_weight_discounts where product_id='b5000000-0000-4000-8000-000000000001' and promotion_mode='PACK_FIXED_TOTAL')
+    )),
     'DEBIT'
   )$$,
   'a DEBIT pack sale completes'
 );
-select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 18_000::bigint, 'DEBIT pack: still exactly $18.000, no card surcharge added on top of the pack total');
-select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 0::bigint, 'DEBIT pack: card_surcharge_cents is 0 for the fixed-total portion');
+select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 19_800::bigint, 'DEBIT pack: $18.000 * 1,10 = $19.800 (the required example — the pack total DOES carry the surcharge)');
+select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 1_800::bigint, 'DEBIT pack: card_surcharge_cents = 1.800');
 
--- PACK_FIXED_TOTAL (UNIT): the whole-pack portion is payment-method-invariant, but a remainder
--- (a genuine normal-price sale) DOES carry the card surcharge — the exact 45-hamburguesas example.
+-- PACK_FIXED_TOTAL (UNIT), corrected 2026-09-24: the surcharge applies to the WHOLE resulting
+-- total (pack + remainder), never only to the remainder. Required examples: "40u por $28.000"
+-- -> DEBIT = $30.800; 45 units (1 pack + 5 remainder, $32.000 CASH-equivalent) -> DEBIT = $35.200.
 select lives_ok(
   $$select public.save_weight_discount(null,'b5000000-0000-4000-8000-000000000002',null,null,null,null,true,now(),null,'PACK_FIXED_TOTAL',null,40,28000)$$,
   'a UNIT pack promo (40u/$28.000) is created'
 );
+select lives_ok(
+  $$select public.complete_discounted_sale(
+    'b3000000-0000-4000-8000-000000000001',
+    jsonb_build_array(jsonb_build_object(
+      'product_id','b5000000-0000-4000-8000-000000000002','quantity_units',40,'expected_price_per_unit_cents','800',
+      'pack_promotion_id',(select id from public.product_weight_discounts where product_id='b5000000-0000-4000-8000-000000000002' and promotion_mode='PACK_FIXED_TOTAL')
+    )),
+    'DEBIT'
+  )$$,
+  'a DEBIT UNIT pack sale (exact multiple, no remainder) completes'
+);
+select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 30_800::bigint, 'DEBIT: 40u pack $28.000 * 1,10 = $30.800 (the required example)');
+select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 2_800::bigint, 'DEBIT: card_surcharge_cents = 2.800');
+
 select lives_ok(
   $$select public.complete_discounted_sale(
     'b3000000-0000-4000-8000-000000000001',
@@ -134,8 +163,24 @@ select lives_ok(
   )$$,
   'a DEBIT UNIT pack sale (45 units, 1 pack + 5 remainder) completes'
 );
-select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 32_400::bigint, 'DEBIT: pack ($28.000, no surcharge) + 5 remainder units at $800*1.10=$880 each = $32.400');
-select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 400::bigint, 'DEBIT: card_surcharge_cents = 5 * (880-800) = 400, only the remainder carries it');
+select is((select subtotal_cents from public.sale_items order by created_at desc limit 1), 35_200::bigint, 'DEBIT: (pack $28.000 + 5*$800 remainder = $32.000 CASH-equivalent) * 1,10 = $35.200 — the required example; NOT $28.000 + 5*$880');
+select is((select card_surcharge_cents from public.sale_items order by created_at desc limit 1), 3_200::bigint, 'DEBIT: card_surcharge_cents = 3.200, on the WHOLE total');
+
+-- Cancelling a DEBIT pack sale must still reverse stock correctly (regression: this sprint's
+-- correction only touches pricing fields, never quantity_units/stock_movements).
+select lives_ok(
+  $$select public.cancel_sale(
+    (select id from public.sales order by created_at desc limit 1),
+    gen_random_uuid(),
+    'Test de cancelacion con recargo por tarjeta'
+  )$$,
+  'cancelling a DEBIT pack sale with a card surcharge still reverses stock correctly'
+);
+select is(
+  (select quantity_grams from public.stock_movements where type = 'RETURN' order by created_at desc limit 1),
+  45::bigint,
+  'the RETURN movement restores the exact unit quantity sold, unaffected by the card surcharge'
+);
 
 reset role;
 select * from finish();

@@ -18,9 +18,10 @@ describe("price formation", () => {
   });
 });
 
-// D-044: the list price (product_prices.price_cents) is now the CASH/TRANSFER price directly —
-// no adjustment at all. DEBIT/CREDIT ("Tarjeta") add a card surcharge on top of it. This is the
-// inverse of the pre-D-044 model (CASH/TRANSFER got a discount off a higher list price).
+// D-044 (corrected): the list price (product_prices.price_cents) is the CASH/TRANSFER/OTHER
+// price directly — a promotion is evaluated against it with no exception. DEBIT/CREDIT
+// ("Tarjeta") then add a card surcharge to that WHOLE commercial result (list, or list-after-
+// promotion, or a pack's fixed total) — never only to part of it, and never before the promotion.
 describe("calculateSalePricing — payment method (D-044)", () => {
   const base = { listPriceCents: 1_000_000n, quantity: 1, quantityDivisor: 1 as const, cashDiscountBps: 1_000n };
 
@@ -69,14 +70,25 @@ describe("calculateSalePricing — payment method (D-044)", () => {
     expect(pricing.finalPriceCents).toBe(1_588_888n);
   });
 
-  it("applies a sequential percentage promotion after the card surcharge, not before", () => {
+  // The required THRESHOLD example: promo = $9.000/kg. CASH/TRANSFER pay exactly that; DEBIT/
+  // CREDIT pay that PLUS the surcharge (the promo is evaluated against list first, then the
+  // surcharge applies to the promo's result — never the other way around).
+  it("THRESHOLD promo $9.000/kg: CASH/TRANSFER pay $9.000/kg, DEBIT/CREDIT pay $9.900/kg", () => {
+    const promotion = { id: "fixed", discountType: "FIXED_PRICE_PER_KG" as const, discountValue: 900_000n };
+    const cash = calculateSalePricing({ listPriceCents: 1_000_000n, quantity: 1_000, quantityDivisor: 1_000, paymentMethod: "CASH", cashDiscountBps: 1_000n, promotion });
+    expect(cash.finalPriceCents).toBe(900_000n);
+    const debit = calculateSalePricing({ listPriceCents: 1_000_000n, quantity: 1_000, quantityDivisor: 1_000, paymentMethod: "DEBIT", cashDiscountBps: 1_000n, promotion });
+    expect(debit.finalPriceCents).toBe(990_000n);
+  });
+
+  it("applies a sequential percentage promotion BEFORE the card surcharge (list -> promotion -> surcharge)", () => {
     const promotion = { id: "five", discountType: "PERCENTAGE" as const, discountValue: 500n };
     const cash = calculateSalePricing({ listPriceCents: 1_444_444n, quantity: 1_000, quantityDivisor: 1_000, paymentMethod: "CASH", cashDiscountBps: 1_000n, promotion });
-    expect(cash.cashPriceCents).toBe(1_444_444n);
+    expect(cash.cashPriceCents).toBe(1_372_222n); // 5% off list — the CASH-equivalent result
     expect(cash.finalPriceCents).toBe(1_372_222n);
     const card = calculateSalePricing({ listPriceCents: 1_444_444n, quantity: 1_000, quantityDivisor: 1_000, paymentMethod: "CREDIT", cashDiscountBps: 1_000n, promotion });
-    expect(card.cashPriceCents).toBe(1_588_888n);
-    expect(card.finalPriceCents).toBe(1_509_444n); // 5% off the post-surcharge price, not off list
+    expect(card.cashPriceCents).toBe(1_372_222n); // the promo baseline is identical regardless of payment method
+    expect(card.finalPriceCents).toBe(1_509_444n); // then +10% surcharge on the promo's result, not on list
   });
 
   it("defines which payment methods receive a card surcharge from the real payment methods", () => {
@@ -93,7 +105,7 @@ describe("calculateSalePricing — payment method (D-044)", () => {
   });
 });
 
-describe("promotion pack (PACK_FIXED_TOTAL)", () => {
+describe("promotion pack (PACK_FIXED_TOTAL) — D-044 corrected: no exception to the card surcharge", () => {
   it("charges the WEIGHT pack's fixed total regardless of the real weighed grams", () => {
     // "Vacío: 2kg por $18.000" sold as a real 2.050kg piece — not the nominal weight.
     const result = calculateWeightPackSalePricing({
@@ -116,24 +128,25 @@ describe("promotion pack (PACK_FIXED_TOTAL)", () => {
     expect(heavy.subtotalCents).toBe(18_000n);
   });
 
-  // D-044's deliberately-conservative resolution of the "how does card surcharge interact with
-  // PACK_FIXED_TOTAL" ambiguity: the pack's fixed total is also payment-method-invariant, exactly
-  // like it's already weight-invariant. A card payment never adds a surcharge on top of a pack.
-  it("charges the exact same pack total for CASH, DEBIT and CREDIT — a pack never carries a card surcharge", () => {
+  // D-044 correction (2026-09-24): the user confirmed there is NO exception for packs — every
+  // card payment carries the surcharge on the full commercial result, packs included. The
+  // required example: "2 kg por $18.000" -> DEBIT/CREDIT = $19.800 (18.000 * 1,10), not $18.000.
+  it("surcharges the pack's WHOLE fixed total for DEBIT/CREDIT — no pack exception (the required $18.000 -> $19.800 example)", () => {
     const cash = calculateWeightPackSalePricing({ listPriceCents: 10_000n, weightGrams: 2_050, paymentMethod: "CASH", cashDiscountBps: 1_000n, packPriceCents: 18_000n });
+    expect(cash.subtotalCents).toBe(18_000n);
+    expect(cash.cardSurchargeCents).toBe(0n);
     const debit = calculateWeightPackSalePricing({ listPriceCents: 10_000n, weightGrams: 2_050, paymentMethod: "DEBIT", cashDiscountBps: 1_000n, packPriceCents: 18_000n });
+    expect(debit.subtotalCents).toBe(19_800n);
+    expect(debit.cardSurchargeCents).toBe(1_800n);
     const credit = calculateWeightPackSalePricing({ listPriceCents: 10_000n, weightGrams: 2_050, paymentMethod: "CREDIT", cashDiscountBps: 1_000n, packPriceCents: 18_000n });
-    expect(debit.subtotalCents).toBe(cash.subtotalCents);
-    expect(credit.subtotalCents).toBe(cash.subtotalCents);
-    expect(debit.cardSurchargeCents).toBe(0n);
-    expect(credit.cardSurchargeCents).toBe(0n);
+    expect(credit.subtotalCents).toBe(19_800n);
   });
 
   it("still computes a correct (small but positive) discount for a real piece near the edge of the list-price guard", () => {
-    // Since the pack is now compared only against listSubtotalCents (never a cash/card price —
-    // see D-044), promotionDiscountCents can no longer go negative/need clamping the way the
-    // pre-D-044 cash-discounted comparison could: the pack_price > list_subtotal guard above
-    // already guarantees listSubtotalCents >= subtotalCents whenever this function doesn't throw.
+    // Since the pack is compared only against listSubtotalCents (never a payment-method-adjusted
+    // one), promotionDiscountCents can no longer go negative/need clamping the way the pre-D-044
+    // comparison could: the pack_price > list_subtotal guard above already guarantees
+    // listSubtotalCents >= cashSubtotalCents whenever this function doesn't throw.
     const result = calculateWeightPackSalePricing({
       listPriceCents: 10_000n, weightGrams: 1_900, paymentMethod: "CASH", cashDiscountBps: 1_000n, packPriceCents: 18_000n
     });
@@ -164,19 +177,27 @@ describe("promotion pack (PACK_FIXED_TOTAL)", () => {
     expect(withRemainder.discountCents).toBe(1_000n);
   });
 
-  it("charges the same pack total regardless of payment method, but the remainder DOES carry a card surcharge (40 hamburguesas = 1 pack $28.000; 45 = pack + 5 normal)", () => {
+  // D-044 correction: the required examples. "40 unidades por $28.000" -> DEBIT = $30.800
+  // (28.000 * 1,10). 45 units (1 pack + 5 loose, $32.000 CASH-equivalent) -> DEBIT = $35.200
+  // (32.000 * 1,10) — the surcharge applies to the WHOLE total, never only to the remainder.
+  it("surcharges the UNIT pack's whole total for DEBIT/CREDIT, including an exact multiple with no remainder", () => {
+    const pack = { id: "pack-40", packQuantityUnits: 40, packPriceCents: 28_000n };
+    const cash = calculateUnitPackSalePricing({ listPriceCents: 800n, quantityUnits: 40, paymentMethod: "CASH", cashDiscountBps: 1_000n, pack });
+    expect(cash.subtotalCents).toBe(28_000n);
+    const debit = calculateUnitPackSalePricing({ listPriceCents: 800n, quantityUnits: 40, paymentMethod: "DEBIT", cashDiscountBps: 1_000n, pack });
+    expect(debit.subtotalCents).toBe(30_800n);
+    expect(debit.cardSurchargeCents).toBe(2_800n);
+  });
+
+  it("surcharges the WHOLE total of a pack + remainder sale, not just the remainder (the required 45-hamburguesas example)", () => {
     const pack = { id: "pack-40", packQuantityUnits: 40, packPriceCents: 28_000n };
     const cash = calculateUnitPackSalePricing({ listPriceCents: 800n, quantityUnits: 45, paymentMethod: "CASH", cashDiscountBps: 1_000n, pack });
-    expect(cash.subtotalCents).toBe(32_000n); // 28.000 + 5*800, no surcharge for cash
+    expect(cash.subtotalCents).toBe(32_000n); // 28.000 (pack) + 5*800 (remainder) = the CASH-equivalent total
     expect(cash.cardSurchargeCents).toBe(0n);
 
     const debit = calculateUnitPackSalePricing({ listPriceCents: 800n, quantityUnits: 45, paymentMethod: "DEBIT", cashDiscountBps: 1_000n, pack });
-    expect(debit.subtotalCents).toBe(32_400n); // 28.000 (pack, unchanged) + 5*880 (remainder + 10%)
-    expect(debit.cardSurchargeCents).toBe(400n);
-
-    const debitFullPack = calculateUnitPackSalePricing({ listPriceCents: 800n, quantityUnits: 40, paymentMethod: "DEBIT", cashDiscountBps: 1_000n, pack });
-    expect(debitFullPack.subtotalCents).toBe(28_000n); // exact multiple: 100% pack, 0 remainder, no surcharge at all
-    expect(debitFullPack.cardSurchargeCents).toBe(0n);
+    expect(debit.subtotalCents).toBe(35_200n); // 32.000 * 1,10 — the WHOLE total, not 28.000 + 5*880
+    expect(debit.cardSurchargeCents).toBe(3_200n);
   });
 
   it("does not invent a discount for a UNIT quantity below the pack size", () => {

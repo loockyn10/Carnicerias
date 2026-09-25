@@ -44,7 +44,7 @@ Ejemplo: precio cargado $10.000, recargo configurado 10% → CASH = $10.000, TRA
 
 El nombre técnico histórico sigue conteniendo `cash_discount` (`organization_cash_discounts.cash_discount_bps`, `sale_items.cash_discount_bps`), pero la regla de producto vigente es **recargo por tarjeta**, nunca un descuento por ningún medio de pago. `sale_items.cash_discount_cents` queda siempre en 0 para toda venta nueva (ningún medio da descuento); el monto real del recargo se registra en `sale_items.card_surcharge_cents` (`>= 0`). Backend, POS online, POS offline y sync aplican la misma regla.
 
-**PACK_FIXED_TOTAL nunca lleva recargo por tarjeta**: el total fijo de un pack (ver "Promociones" abajo) es invariante al medio de pago, igual que ya es invariante al peso/cantidad real — pagar con tarjeta no le agrega nada. Sólo el remanente de un pack `UNIT` (unidades sueltas por fuera del pack) es una venta normal y sí lleva el recargo.
+**PACK_FIXED_TOTAL SÍ lleva recargo por tarjeta** (corregido 2026-09-24, sin excepción): el total de un pack (ver "Promociones" abajo) sigue siendo invariante al peso/cantidad real, pero no al medio de pago — pagar con tarjeta recarga el total completo del pack. Ejemplo: "Vacío 2kg por $18.000" con tarjeta = $19.800. Para un pack `UNIT` con remanente, el recargo se aplica al total comercial completo (packs enteros + remanente juntos), nunca sólo al remanente: 45 hamburguesas (1 pack de 40 a $28.000 + 5 sueltas a $800 = $32.000 en efectivo) con tarjeta = $35.200, no $28.000 + 5×$880.
 
 ## Orden de ajustes
 

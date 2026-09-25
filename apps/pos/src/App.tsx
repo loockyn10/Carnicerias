@@ -842,20 +842,25 @@ export default function App() {
       const listPriceCents = line.originalPricePerKgCents ?? line.pricePerKgCents;
       let pricing: ReturnType<typeof calculateSalePricing>;
       if (line.quantityUnits != null) {
-        // Línea UNIT: si tenía un pack, hay que recalcularlo contra el rule actual (el precio
-        // total del pack sí puede necesitar re-derivar cash/promo discount con el nuevo método de
-        // pago, aunque el TOTAL del pack en sí no cambie).
+        // Línea UNIT: si tenía un pack, hay que recalcularlo contra el rule actual —
+        // computeUnitLine siempre recalcula desde pack.packPriceCents (el precio fijo real del
+        // pack), nunca desde line.subtotalCents, porque ese subtotal puede venir ya recargado por
+        // tarjeta de un cálculo anterior con otro método de pago (D-044: el recargo se aplica al
+        // total comercial completo, packs incluidos, sin excepción).
         const pack = line.discountRuleId ? discounts.find((rule) => rule.id === line.discountRuleId) ?? null : null;
         pricing = computeUnitLine(listPriceCents, line.quantityUnits, pack, method, BigInt(cashDiscountBps)).pricing;
       } else if (line.promotionMode === "PACK_FIXED_TOTAL" && line.discountRuleId) {
-        // Línea pack WEIGHT: no escala con el peso ni con el descuento por pago (precio total
-        // fijo, ver calculateWeightPackSalePricing) — recalcularla como threshold perdería el
-        // pack al cambiar el método de pago. subtotalCents de una línea pack siempre ES el precio
-        // del pack (nunca cambia con el método de pago), así que sirve directo como
-        // packPriceCents al recalcular.
+        // Línea pack WEIGHT: no escala con el peso — recalcularla como threshold perdería el
+        // pack al cambiar el método de pago. El recargo por tarjeta SÍ se aplica sobre el total
+        // del pack (D-044, sin excepción), así que subtotalCents de la línea puede ya venir
+        // recargado de un cálculo anterior con otro método de pago — nunca se reutiliza
+        // directamente como packPriceCents (eso compondría el recargo). Se busca el precio de
+        // pack real y fijo en la regla vigente, igual que ya hace la rama UNIT de abajo.
+        const pack = discounts.find((rule) => rule.id === line.discountRuleId && rule.promotionMode === "PACK_FIXED_TOTAL");
+        if (!pack?.packPriceCents) return line;
         pricing = calculateWeightPackSalePricing({
           listPriceCents, weightGrams: line.weightGrams, paymentMethod: method,
-          cashDiscountBps: BigInt(cashDiscountBps), packPriceCents: line.subtotalCents
+          cashDiscountBps: BigInt(cashDiscountBps), packPriceCents: BigInt(pack.packPriceCents)
         });
       } else {
         pricing = calculateSalePricing({
@@ -1606,9 +1611,10 @@ export default function App() {
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}
-                      {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}
                       {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
                     </>}
+                    {/* El recargo por tarjeta se aplica al total comercial completo, packs incluidos, sin excepción (D-044) — se muestra siempre que corresponda, no sólo fuera de un pack. */}
+                    {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}
                     <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
                 } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
               </div>
