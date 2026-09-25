@@ -214,22 +214,45 @@ aplicó sobre `202609240035` en el lugar, confirmando primero que seguía sin
 aplicarse a ningún entorno) y SQLite `010_card_surcharge_pricing.sql`.
 `cargo test` 39/39 OK, `pnpm check` OK en los 7 proyectos.
 
+**Actualizado 2026-09-25** — se auditó el runtime real (no sólo el código) porque
+el usuario probó el POS instalado y observó la regla vieja (tarjeta = precio
+base, efectivo/transferencia = descuento). Causas encontradas, ninguna es un
+bug de código nuevo:
+
+1. El ejecutable/instalador en `apps/pos/src-tauri/target/release/` está
+   compilado el 2026-09-24 02:14, **antes** de los commits `2ee343a` (D-044
+   round 1) y `39113d2` (D-044 round 2/corrección) — corre código enteramente
+   anterior a D-044. Requiere recompilar (`pnpm --filter @carnicerias/pos
+   build:desktop`) y reinstalar.
+2. `supabase migration list --linked` confirma que `202609240035` **sí** llegó
+   a aplicarse al remoto — con el contenido de la primera versión (pack
+   invariante al medio de pago), no con la corrección del mismo día. Editarla
+   en el lugar (creyendo que seguía local-only) sólo actualizó el archivo
+   local. Se agregó `202609250036_card_surcharge_pack_exception_fix.sql`
+   (incremental, sólo `CREATE OR REPLACE FUNCTION` sobre
+   `complete_discounted_sale`/`sync_offline_sale`, sin DDL nuevo) con los
+   mismos cuerpos ya corregidos. **Todavía sin `db push`.**
+3. `get_pos_commercial_config` en remoto ya devuelve `cashDiscountBps`
+   correctamente (bug de la migración 031 ya corregido y desplegado); el valor
+   configurado real es 1000 bps (10%).
+
 Pendiente:
 
+- Decidir y ejecutar `supabase db push` para `202609250036` (no se hizo en
+  esta sesión, sin autorización explícita).
+- Recompilar y reinstalar el POS Desktop con el código actual.
 - Ejecutar `pnpm db:reset && pnpm db:test` (`supabase/tests/card_surcharge_pricing.test.sql`,
   32 aserciones) en un entorno con Docker/CI Linux funcional.
 - Regenerar `packages/database/src/database.types.ts` con `pnpm db:types` (se
   editó a mano) y revisar `packages/database/src/database.rpc-null-overrides.ts`
   contra el resultado.
-- Confirmar con `supabase migration list --linked` qué migraciones (incluida
-  `202609240035`) llegaron a aplicarse al remoto antes de asumir el estado real.
-- Smoke manual en POS: cargar un producto a $10.000 con 10% de recargo
-  configurado, confirmar que Efectivo y Transferencia muestran $10.000 y
-  Tarjeta $11.000; cambiar de Efectivo a Tarjeta y viceversa sobre una línea ya
-  agregada y confirmar que el ticket recalcula sin volver a agregar el
-  producto (y que Efectivo vuelve exactamente al precio base, sin residuo);
-  vender un pack WEIGHT ("Vacío 2kg/$18.000") con Tarjeta y confirmar que
-  cobra $19.800 (no $18.000); vender un UNIT pack con remanente (45
+- Smoke manual en POS **con el build nuevo instalado**: cargar un producto a
+  $10.000 con 10% de recargo configurado, confirmar que Efectivo y
+  Transferencia muestran $10.000 y Tarjeta $11.000; ticket con dos líneas
+  ($10.000 + $20.000) y togglear Efectivo→Tarjeta→Efectivo→Tarjeta,
+  confirmando siempre $30.000/$33.000/$30.000/$33.000 sin residuo en ninguna
+  línea; vender un pack WEIGHT ("Vacío 2kg/$18.000") con Tarjeta y confirmar
+  que cobra $19.800 (no $18.000); vender un UNIT pack con remanente (45
   hamburguesas: pack de 40 a $28.000 + 5 sueltas) con Tarjeta y confirmar que
   cobra $35.200 sobre el total completo (no $32.400, que sería recargar sólo
   el remanente). Repetir offline (reinicio + sync) y confirmar que el servidor
