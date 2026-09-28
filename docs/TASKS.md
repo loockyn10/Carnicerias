@@ -2,6 +2,38 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Clock-in falla en release NSIS, funciona en tauri dev (investigación abierta)
+
+Smoke real 2026-09-28: PIN online funciona en el instalador release (grant/token de Fede quedan
+cacheados correctamente en SQLite, `grant_valid_until` válido, migración SQLite 11 aplicada) pero
+"Marcar entrada" falla con un error genérico. `local_employee_shifts`/`sync_outbox` quedan en cero
+filas tras el intento: el fallo ocurre antes de cualquier escritura local, consistente con una
+excepción en la llamada RPC online (`record_employee_time_event`) o en un guard-clause previo,
+no con SQLite/migración 011 (confirmado embebida y aplicada, columna `last_heartbeat_at` presente).
+
+**Corregido en esta sesión (necesario para diagnosticar, no toca heartbeat/pricing/balanza)**: el
+banner de error de `apps/pos/src/App.tsx` ocultaba el mensaje real en varios catches del ciclo de
+vida del turno (`recordTime`/`finishOperatorSession`/`selectOperator`) — `invoke()` de Tauri v2
+rechaza comandos Rust `Result<T, String>` con el string plano, no una instancia de `Error`, y esos
+catches sólo miraban `err instanceof Error`. Se reutilizó `apps/pos/src/lib/error-messages.ts`
+(ya existente para el diagnóstico de PIN) y se etiquetó cada catch con la etapa
+(`OPERATOR_CONTEXT`/`DEVICE_CONTEXT`/`ONLINE_RPC`/`LOCAL_SQLITE`). Instalador nuevo generado con
+este fix: `apps/pos/src-tauri/target/release/bundle/nsis/Carnicerías POS_0.1.0_x64-setup.exe`.
+
+**Hipótesis descartadas con evidencia real** (inspección read-only de
+`%APPDATA%\com.carnicerias.pos\carnicerias-pos.sqlite` vía `node:sqlite`, no se llamó a ningún RPC
+con efectos secundarios): sesión Supabase ausente en el origen del release (refutada — el PIN online
+requiere `auth.uid()` y funcionó, mismo `pos_operator_grants` flow que usa `record_employee_time_event`);
+CSP bloqueando llamadas a Supabase (refutada — PIN online pasa por el mismo `connect-src`); migración
+SQLite 011 no embebida/aplicada (refutada — `schema_migrations` tiene la fila 11 y la columna existe).
+
+Pendiente (usuario, no se puede reproducir la GUI nativa de Windows desde esta sesión):
+
+- Instalar el build nuevo (arriba) y repetir el smoke: PIN → Marcar entrada.
+- Copiar el mensaje `[ETAPA] ...` y la línea "Diagnóstico" completa que ahora muestra el banner rojo
+  (incluye código Postgres/Supabase si lo hay) — con eso se identifica la causa exacta sin más
+  hipótesis a ciegas.
+
 ## P1 — Validar heartbeat/lease de control horario (D-045) contra Postgres real y hardware
 
 Implementado 2026-09-28 (ver `docs/CURRENT_STATE.md` y D-045 en `docs/DECISIONS.md`): heartbeat cada

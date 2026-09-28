@@ -84,6 +84,10 @@ const PAYMENT_METHOD_BUTTONS: { value: PaymentMethod; label: string; activeClass
 const SHIFT_DURATION_REFRESH_MS = 60_000;
 const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
 
+// Marks a failure already reported via reportStageError (message + diagnostics already set),
+// so an outer catch around a staged sequence doesn't overwrite it with a less specific message.
+class HandledStageError extends Error {}
+
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
 }
@@ -333,6 +337,7 @@ export default function App() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDiagnostics, setErrorDiagnostics] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -1156,24 +1161,50 @@ export default function App() {
     setUser(null);
   }
 
+  // Tauri v2's invoke() rejects Rust Result<T, String> commands with the raw string, not an
+  // Error instance — the old `err instanceof Error ? err.message : "generic fallback"` catches
+  // in this file silently dropped that message for every Tauri command failure (device/operator
+  // context, local SQLite writes), which is exactly what made clock-in show only a generic error.
+  // Reuses the same describeCaughtValue/resolveErrorMessage/formatDiagnostics helpers already
+  // built for the PIN login diagnostics below (./lib/error-messages), tagged with which stage of
+  // the operation failed so a real cause (device context vs online RPC vs local SQLite) is visible
+  // instead of guessed at.
+  function reportStageError(stage: string, err: unknown, fallback: string) {
+    const caught = describeCaughtValue(err);
+    console.error(`[pos] ${stage.toLowerCase()}_failed`, caught);
+    setError(`[${stage}] ${resolveErrorMessage(err, fallback)}`);
+    setErrorDiagnostics(formatDiagnostics(caught));
+  }
+
+  async function runStage<T>(stage: string, fallback: string, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (err) {
+      reportStageError(stage, err, fallback);
+      throw new HandledStageError();
+    }
+  }
+
   async function selectOperator(active: LocalOperator) {
-    setError(null);
+    setError(null); setErrorDiagnostics(null);
     try {
       const currentShift = await loadShift(active);
       setOperator(active);
       setClockInRequired(!currentShift);
     } catch (shiftError) {
       await localDatabase.clearActiveOperator().catch(() => undefined);
-      throw new Error(shiftError instanceof Error ? shiftError.message : "No se pudo recuperar el turno");
+      const caught = describeCaughtValue(shiftError);
+      console.error("[pos] load_shift_failed", caught);
+      throw new Error(`[OPERATOR_CONTEXT] ${resolveErrorMessage(shiftError, "No se pudo recuperar el turno")}${caught.code || caught.details ? ` (${formatDiagnostics(caught)})` : ""}`);
     }
   }
 
   async function finishOperatorSession() {
     if (!operator || shiftInFlight.current) return;
     shiftInFlight.current = true;
-    setError(null);
+    setError(null); setErrorDiagnostics(null);
     try {
-      const result = await localDatabase.closeActiveOperatorShift();
+      const result = await runStage("LOCAL_SQLITE", "No se pudo finalizar la sesión del operador", () => localDatabase.closeActiveOperatorShift());
       setExitModalOpen(false);
       setClockInRequired(false);
       setOperator(null);
@@ -1188,7 +1219,7 @@ export default function App() {
         setNotice("El turno continúa pendiente de revisión administrativa");
       }
     } catch (exitError) {
-      setError(exitError instanceof Error ? exitError.message : "No se pudo finalizar la sesión del operador");
+      if (!(exitError instanceof HandledStageError)) reportStageError("LOCAL_SQLITE", exitError, "No se pudo finalizar la sesión del operador");
     } finally {
       shiftInFlight.current = false;
     }
@@ -1204,24 +1235,31 @@ export default function App() {
   }
 
   async function recordTime(action: "CLOCK_IN" | "CLOCK_OUT"): Promise<LocalShift | null> {
-    if (!operator || !localRuntime || shiftInFlight.current) return null;
-    shiftInFlight.current = true; setError(null);
+    if (!operator) { reportStageError("OPERATOR_CONTEXT", "No hay un operador con sesión activa", "No hay un operador con sesión activa"); return null; }
+    if (!localRuntime) { reportStageError("DEVICE_CONTEXT", "No se pudo leer el contexto local del dispositivo (get_local_runtime)", "No se pudo leer el contexto del dispositivo"); return null; }
+    if (shiftInFlight.current) return null;
+    shiftInFlight.current = true; setError(null); setErrorDiagnostics(null);
     try {
       let updated: LocalShift;
       if (navigator.onLine && !user?.offline && operator.operatorToken) {
-        const { data, error: eventError } = await supabase.rpc("record_employee_time_event", { p_device_id: localRuntime.deviceId, p_event_id: crypto.randomUUID(), p_shift_id: shift?.shiftId ?? crypto.randomUUID(), p_employee_id: operator.profileId, p_operator_token: operator.operatorToken, p_action: action });
-        if (eventError) throw eventError;
-        const remote = data as unknown as Omit<LocalShift, "employeeId">;
+        const operatorToken = operator.operatorToken;
+        const remote = await runStage("ONLINE_RPC", "No se pudo registrar el fichaje online", async () => {
+          const { data, error: eventError } = await supabase.rpc("record_employee_time_event", { p_device_id: localRuntime.deviceId, p_event_id: crypto.randomUUID(), p_shift_id: shift?.shiftId ?? crypto.randomUUID(), p_employee_id: operator.profileId, p_operator_token: operatorToken, p_action: action });
+          if (eventError) throw eventError;
+          return data as unknown as Omit<LocalShift, "employeeId">;
+        });
         updated = { ...remote, employeeId: operator.profileId };
-        await localDatabase.applyServerShift(updated);
-      } else updated = await localDatabase.recordOfflineTimeEvent(action);
+        await runStage("LOCAL_SQLITE", "El fichaje se registró en el servidor pero no se pudo guardar localmente", () => localDatabase.applyServerShift(updated));
+      } else {
+        updated = await runStage("LOCAL_SQLITE", "No se pudo registrar el fichaje offline", () => localDatabase.recordOfflineTimeEvent(action));
+      }
       setShift(updated.status === "CLOSED" ? null : updated);
       if (action === "CLOCK_IN" && updated.status === "OPEN") setClockInRequired(false);
       setNotice(action === "CLOCK_IN" ? "Entrada registrada" : updated.status === "REQUIRES_REVIEW" ? "El turno requiere revisión administrativa" : "Salida registrada");
       if (!navigator.onLine) setLocalRuntime(await localDatabase.runtime());
       return updated;
     } catch (timeError) {
-      setError(timeError instanceof Error ? timeError.message : "No se pudo registrar el fichaje");
+      if (!(timeError instanceof HandledStageError)) reportStageError("LOCAL_SQLITE", timeError, "No se pudo registrar el fichaje");
       return null;
     }
     finally { shiftInFlight.current = false; }
@@ -1372,7 +1410,16 @@ export default function App() {
         </div>
       ) : null}
 
-      {error ? <div className="mx-4 mt-4 rounded-xl border border-red-800 bg-red-950 px-4 py-3 text-red-100">{error}</div> : null}
+      {error ? (
+        <div className="mx-4 mt-4 rounded-xl border border-red-800 bg-red-950 px-4 py-3 text-red-100">
+          <p>{error}</p>
+          {errorDiagnostics ? (
+            <p className="mt-1 break-all text-xs text-red-300">
+              <span className="font-bold uppercase tracking-wide">Diagnóstico</span> · {errorDiagnostics}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {notice ? <div className="pos-toast" role="status">✓ {notice}</div> : null}
 
       <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
