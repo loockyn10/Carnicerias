@@ -262,13 +262,39 @@ parámetros fijos del Kretz y lo da por válido sólo si recibe un frame
 parseable, evitando falsos positivos; se niega a correr con una conexión
 ya activa.
 
-**REQUIERE VERIFICACIÓN**: no se conectó una Novel Eco 2 real a *este*
-build/repositorio (el hardware probado fue en otra PC, con otro build), ni
-se compiló contra `i686-unknown-linux-gnu` en esta sesión (sin Docker/CI
-Linux disponible). `detect_scale_port` tampoco se ejerció contra hardware
-real todavía. Validado sin hardware: tests Rust (parser + estado, incluidos
-los `real_hardware_*` nuevos), tests `vitest` de frescura de lectura, build
-Windows NSIS x64 completo con el nuevo crate y el comando nuevo.
+**Actualizado 2026-09-28 (ronda 2, smoke real con este build)**: se probó
+físicamente contra una Novel Eco 2 real y apareció un problema de UX no
+técnico de protocolo — el panel de peso del modal alternaba ~2 veces por
+segundo entre "Esperando una lectura estable…" y el peso + botón "Usar
+este peso" (parpadeo, casi imposible de clickear), y además el flujo
+deseado cambió: ya no se quiere click manual, sino auto-confirmar la línea
+al estabilizarse el peso. Causa raíz del parpadeo: la condición "lectura
+fresca" comparaba cada lectura contra un reloj (`scaleModalNow`) sondeado
+por su propio `setInterval` de 500 ms, desincronizado del evento real
+`scale://update` (también ~500 ms) — cada lectura nueva llegaba con
+timestamp más nuevo que el último tick del reloj, dando edad negativa y
+tumbando la condición en casi todos los renders. Rediseño: nuevo motor de
+estabilidad puro y testeable (`advanceWeightStability`,
+`packages/business-logic/src/scale.ts`) que compara lecturas sólo entre sí
+(nunca contra un reloj sondeado), confirma automáticamente tras ~600 ms
+dentro de ±3 g, se traba en `STABLE` (no puede confirmar dos veces) y se
+reinicia con `CLOSED`/`DISCONNECTED`. El modal ahora tiene layout fijo
+(nunca desmonta/remonta estructura) y el botón "Usar este peso" se quitó
+del flujo normal. Detalle completo en `docs/SCALE_INTEGRATION.md`.
+
+**REQUIERE VERIFICACIÓN**: no se compiló contra `i686-unknown-linux-gnu`
+en esta sesión (sin Docker/CI Linux disponible). `detect_scale_port`
+todavía no se probó contra hardware real. El fix de auto-confirmación de
+esta ronda tampoco se probó todavía con hardware físico (se construyó a
+partir del smoke real reportado por el usuario, pendiente de confirmar en
+un próximo smoke). Validado sin hardware: tests Rust (44/44, sin cambios
+en esta ronda), 17 tests `vitest` del motor de estabilidad en
+`packages/business-logic` (cubren los 7 escenarios críticos: 0 g nunca
+confirma, peso variable nunca confirma, tolerancia sin ventana no confirma
+prematuro, ventana completa sí confirma, confirma exactamente una vez,
+cerrar modal cancela, desconexión a mitad de estabilización no confirma y
+exige ventana nueva completa al reconectar), build Windows NSIS x64
+completo.
 
 ## Desposte / Producción — implementada 2026-09-22, corregida a Admin el mismo día
 

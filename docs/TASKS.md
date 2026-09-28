@@ -62,17 +62,27 @@ Implementado en el sprint 2026-09-16 (ver `docs/CURRENT_STATE.md` y
 persistencia local, integración con el modal de peso existente, tests sin
 hardware, build Windows.
 
-**Actualizado 2026-09-28**: protocolo confirmado contra hardware real
-(CH340 + CH341SER 3.5.2019.1, frame `00.410`→410 g) en una PC Windows
+**Actualizado 2026-09-28 (ronda 1)**: protocolo confirmado contra hardware
+real (CH340 + CH341SER 3.5.2019.1, frame `00.410`→410 g) en una PC Windows
 distinta a la de desarrollo — no en este build. Se agregó autodetección de
-puerto (`detect_scale_port`, botón "Detectar balanza"), también sin
-ejercer contra hardware real todavía.
+puerto (`detect_scale_port`, botón "Detectar balanza").
+
+**Actualizado 2026-09-28 (ronda 2)**: smoke real con este build hecho —
+encontró parpadeo del panel de peso (~2/s) y pidió cambiar el flujo a
+auto-confirmación sin click. Corregido: nuevo motor de estabilidad
+(`advanceWeightStability`) reemplaza la comparación contra reloj sondeado
+que causaba el parpadeo; el modal ahora confirma sola la línea al
+estabilizarse el peso (~600 ms, ±3 g). Detalle en `docs/CURRENT_STATE.md`
+y `docs/SCALE_INTEGRATION.md`. Sin smoke físico todavía de este fix
+puntual.
 
 Pendiente:
 
-- Conectar una Novel Eco 2 real **a un build de este repositorio** y seguir
-  el checklist de smoke test de `docs/SCALE_INTEGRATION.md` (Windows y
-  Linux), incluida la autodetección de puerto nueva.
+- Smoke físico de la auto-confirmación nueva: abrir un producto `WEIGHT`,
+  apoyar un peso real y confirmar que la línea se agrega sola sin
+  parpadeo ni clicks, que 0 kg nunca confirma, y que sacar el producto de
+  la balanza después de agregada la línea no la modifica.
+- Probar `detect_scale_port` ("Detectar balanza") contra hardware real.
 - Confirmar `cargo check`/build contra `i686-unknown-linux-gnu` con el
   crate `serialport` agregado (requiere Docker o GitHub Actions).
 

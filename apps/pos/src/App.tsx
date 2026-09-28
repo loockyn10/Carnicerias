@@ -8,9 +8,11 @@ import {
   calculateSalePricing,
   calculateWeightPackSalePricing,
   calculateUnitPackSalePricing,
-  isScaleReadingFresh,
+  advanceWeightStability,
+  initialWeightStabilityState,
   sumMoney,
-  type ScaleKind
+  type ScaleKind,
+  type WeightStabilityState
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
@@ -305,7 +307,9 @@ export default function App() {
   const [scaleDetecting, setScaleDetecting] = useState(false);
   const [scaleDetectMessage, setScaleDetectMessage] = useState<string | null>(null);
   const [simulatedWeightInput, setSimulatedWeightInput] = useState("");
-  const [scaleModalNow, setScaleModalNow] = useState(() => Date.now());
+  const [weightStability, setWeightStability] = useState<WeightStabilityState>(initialWeightStabilityState());
+  const weightModalOpenedAtMsRef = useRef<number | null>(null);
+  const weightAutoConfirmedRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [provisioningOpen, setProvisioningOpen] = useState(false);
@@ -751,12 +755,43 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
+  // Weight auto-confirm: opening the WEIGHT modal (with a non-manual scale
+  // configured) starts a fresh stability run; anything else (closing the
+  // modal, a UNIT product, no scale) clears it. Never polls a clock — see
+  // `advanceWeightStability` for why that used to cause UI flicker.
   useEffect(() => {
-    if (!selectedProduct || scale.config.kind === "MANUAL") return;
-    setScaleModalNow(Date.now());
-    const interval = window.setInterval(() => setScaleModalNow(Date.now()), 500);
-    return () => window.clearInterval(interval);
+    if (selectedProduct?.unitType === "WEIGHT" && scale.config.kind !== "MANUAL") {
+      weightModalOpenedAtMsRef.current = Date.now();
+      weightAutoConfirmedRef.current = false;
+      setWeightStability(initialWeightStabilityState());
+    } else {
+      weightModalOpenedAtMsRef.current = null;
+    }
   }, [selectedProduct, scale.config.kind]);
+
+  useEffect(() => {
+    if (weightModalOpenedAtMsRef.current === null) return;
+    if (scale.connectionState !== "CONNECTED") {
+      setWeightStability((current) => advanceWeightStability(current, { type: "DISCONNECTED" }));
+      return;
+    }
+    const reading = scale.reading;
+    if (!reading) return;
+    const openedAtMs = weightModalOpenedAtMsRef.current;
+    const receivedAtMs = new Date(reading.receivedAt).getTime();
+    if (!Number.isFinite(receivedAtMs)) return;
+    setWeightStability((current) =>
+      advanceWeightStability(current, { type: "READING", grams: reading.grams, receivedAtMs, openedAtMs })
+    );
+  }, [scale.reading, scale.connectionState]);
+
+  useEffect(() => {
+    if (weightStability.status !== "STABLE" || weightStability.grams === null) return;
+    if (weightAutoConfirmedRef.current) return;
+    if (selectedProduct?.unitType !== "WEIGHT") return;
+    weightAutoConfirmedRef.current = true;
+    commitSelectedProductLine(weightStability.grams);
+  }, [weightStability]);
 
   useEffect(() => {
     if (!diagnosticsOpen || !desktop) return;
@@ -925,8 +960,14 @@ export default function App() {
       && (rule.branchId === branchId || rule.branchId === null)) ?? null;
   }, [discounts, selectedProduct, branchId]);
 
-  function saveLine(event: SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault();
+  /**
+   * Builds and commits the ticket line for `selectedProduct`. `explicitWeightGrams`
+   * lets the scale auto-confirm path hand over the already-settled weight
+   * directly (bypassing `weightInput`'s string parsing) instead of only
+   * ever reading from the manual field; the manual/form path still goes
+   * through `weightInput` as always.
+   */
+  function commitSelectedProductLine(explicitWeightGrams?: number) {
     if (!selectedProduct) return;
 
     try {
@@ -952,7 +993,7 @@ export default function App() {
           subtotalCents: computed.pricing.subtotalCents
         };
       } else {
-        const grams = parseWeightToGrams(weightInput);
+        const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
         const pack = sellAsPack ? packRuleForSelectedProduct : null;
         const computed = computeWeightLine(selectedProduct.pricePerKgCents, grams, sellAsPack, pack, discounts, selectedProduct.productId, branchId, method, BigInt(cashDiscountBps));
         line = {
@@ -979,6 +1020,11 @@ export default function App() {
     } catch (weightError) {
       setError(weightError instanceof Error ? weightError.message : "Cantidad inválida");
     }
+  }
+
+  function saveLine(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    commitSelectedProductLine();
   }
 
   async function completeSale() {
@@ -1168,7 +1214,6 @@ export default function App() {
   }
 
   const activeBranch = branches.find((branch) => branch.id === branchId);
-  const freshScaleReading = isScaleReadingFresh(scale.connectionState, scale.reading, scaleModalNow) ? scale.reading : null;
   const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";
   if (desktop && localRuntime?.deviceStatus === "ACTIVE" && localRuntime.branchId && !operator) {
     return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={selectOperator} operators={operators} />;
@@ -1586,24 +1631,28 @@ export default function App() {
             {selectedProduct.unitType === "WEIGHT" ? (
               <>
                 {desktop && scale.config.kind !== "MANUAL" ? (
+                  // Fixed layout (same three lines regardless of state) so a new
+                  // scale://update event — arriving ~2/s while connected — never
+                  // mounts/unmounts a different DOM structure; only the text and
+                  // color inside each line change. This is what keeps the panel
+                  // flicker-free (see `advanceWeightStability` in business-logic
+                  // for the stability engine driving the status line below).
                   <div className="mt-5 rounded-2xl border border-stone-700 bg-stone-950 p-4">
                     <p className={`text-xs font-black uppercase tracking-wide ${scale.connectionState === "CONNECTED" ? "text-emerald-400" : scale.connectionState === "ERROR" ? "text-red-400" : "text-stone-500"}`}>
-                      {scale.connectionState === "CONNECTED" ? "⚖ Balanza conectada" : scale.connectionState === "CONNECTING" ? "⚖ Conectando…" : "⚖ Balanza desconectada"}
+                      {scale.connectionState === "CONNECTED" ? "⚖ Balanza conectada" : scale.connectionState === "CONNECTING" ? "⚖ Conectando…" : scale.connectionState === "ERROR" ? "⚖ Balanza con error" : "⚖ Balanza desconectada"}
                     </p>
-                    {freshScaleReading ? (
-                      <button
-                        type="button"
-                        className="mt-2 flex w-full items-center justify-between rounded-xl bg-stone-800 px-4 py-3 text-left hover:bg-stone-700"
-                        onClick={() => setWeightInput((freshScaleReading.grams / 1_000).toFixed(3).replace(".", ","))}
-                      >
-                        <span className="font-black text-stone-100">{formatWeight(freshScaleReading.grams)}</span>
-                        <span className="text-xs font-bold text-rose-300">Usar este peso</span>
-                      </button>
-                    ) : (
-                      <p className="mt-2 text-sm text-stone-500">
-                        {scale.connectionState === "CONNECTED" ? "Esperando una lectura estable…" : "Ingresá el peso manualmente."}
-                      </p>
-                    )}
+                    <p className="mt-2 text-3xl font-black text-stone-100">
+                      {formatWeight(scale.connectionState === "CONNECTED" ? (scale.reading?.grams ?? 0) : 0)}
+                    </p>
+                    <p className="mt-1 text-sm text-stone-500">
+                      {scale.connectionState !== "CONNECTED"
+                        ? "Ingresá el peso manualmente."
+                        : weightStability.status === "STABLE"
+                          ? "Peso estable"
+                          : weightStability.status === "STABILIZING"
+                            ? "Estabilizando…"
+                            : "Esperando peso…"}
+                    </p>
                   </div>
                 ) : null}
                 <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">

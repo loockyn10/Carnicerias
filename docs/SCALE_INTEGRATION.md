@@ -194,14 +194,46 @@ sólo dentro del modal de diagnóstico, no en la pantalla normal del cajero.
 ## Integración con la venta
 
 Sin cambios en pricing, promociones, descuentos ni snapshots. Dentro del
-modal existente "Agregar al ticket" (mismo flujo de ingreso de peso que ya
-existía) aparece, sólo si hay una balanza no-manual configurada, un panel
-con el estado de conexión y, si la lectura está vigente, un botón "Usar
-este peso" que copia el peso a gramos enteros al campo manual existente
-(mismo formato que ya usa el campo `Peso manual en kg`). El empleado sigue
-teniendo que tocar "Confirmar línea": ninguna pesada agrega una línea
-automáticamente. Productos `UNIT` no muestran este panel (siguen sin usar
-peso).
+modal existente "Agregar al ticket" aparece, sólo si hay una balanza
+no-manual configurada, un panel de estado (mismo layout fijo siempre:
+título de conexión, peso en vivo grande, línea de estado) que **no
+requiere ningún click** (rediseñado 2026-09-28, ver `docs/DECISIONS.md`
+si aplica): cuando la lectura queda estable, la línea se confirma y el
+modal se cierra solos.
+
+**Auto-confirmación** (`advanceWeightStability`,
+`packages/business-logic/src/scale.ts`): un peso se considera estable y
+dispara la confirmación cuando permanece dentro de una tolerancia de
+±3 g durante ~600 ms continuos, contados sólo con lecturas posteriores a
+la apertura del modal (nunca una lectura vieja de un cliente anterior) y
+sólo con peso > 0 (`0,000 kg` nunca confirma; se espera hasta que aparezca
+peso real). El motor es una máquina de estados pura
+(`WAITING → STABILIZING → STABLE`) que **se traba** en `STABLE`: cualquier
+evento posterior (más lecturas, incluso muy distintas) no la modifica más,
+lo que garantiza confirmar como máximo una vez por apertura de modal; un
+evento `CLOSED` (cerrar el modal) o `DISCONNECTED` (desconexión o error
+mientras estabiliza) la reinicia a `WAITING` sin confirmar nada. El
+frontend además mantiene una ref explícita (`weightAutoConfirmedRef`) como
+segunda barrera contra doble confirmación.
+
+El botón "Usar este peso" se eliminó del flujo normal (ya no tiene
+utilidad con auto-confirmación). El campo `Peso manual en kg` sigue
+existiendo siempre como fallback: sin balanza, desconectada, en error, o
+si el empleado prefiere tipear, escribe el peso y toca "Confirmar línea"
+como antes — ese camino no cambió. Productos `UNIT` no usan ninguna parte
+de este flujo (siguen sin balanza).
+
+**Causa del flicker anterior (corregida en el mismo cambio)**: la versión
+previa decidía si mostrar el peso comparando la lectura contra un reloj
+(`scaleModalNow`) actualizado por su propio `setInterval` cada 500 ms,
+independiente del evento `scale://update` real (también ~500 ms pero con
+otro desfasaje). Cada lectura nueva llegaba con un timestamp más nuevo que
+el último tick del interval, dando una edad momentáneamente negativa y
+tumbando la condición de "lectura fresca" en casi todos los renders —
+visualmente, un parpadeo a la misma frecuencia que la transmisión real. El
+motor nuevo nunca compara contra un reloj sondeado: sólo compara lecturas
+entre sí (`receivedAt` de cada lectura contra la anterior), eliminando la
+carrera de raíz.
 
 ## Limitaciones conocidas
 
@@ -228,8 +260,10 @@ Pasos para el primer smoke test físico (mañana, con la balanza a mano):
    siguiendo su manual (ver perilla/menú de configuración del equipo).
 2. Conectar por RS232 DB-9 (nativo o adaptador USB→RS232 real, no TTL).
 3. Windows: abrir el POS, Diagnóstico → Balanza → tipo "KRETZ Novel Eco 2",
-   elegir el puerto `COM*` que aparezca, Conectar. Colocar un peso conocido
-   y confirmar que "Usar este peso" muestre el valor correcto en kg.
+   "Detectar balanza" (o elegir el puerto `COM*` manualmente + Conectar).
+   Abrir un producto `WEIGHT`, colocar un peso conocido sobre la balanza y
+   confirmar que, al quedar estable (~600 ms sin variar más de ±3 g), la
+   línea se agrega sola al ticket con el peso correcto, sin ningún click.
 4. Linux: confirmar que el dispositivo aparece como `/dev/ttyUSB*` o
    `/dev/ttyS*` (`ls /dev/tty*` antes/después de conectar el adaptador), que
    el usuario pertenece a `dialout` (`groups`), y repetir el paso 3 con

@@ -12,8 +12,24 @@ export {
   calculateUnitPackSalePricing, divideRoundHalfUp, validateBasisPoints
 } from "./pricing";
 export type { QuantityDiscount, SalePricing, UnitPackPromotion } from "./pricing";
-export { isScaleReadingFresh, SCALE_CONNECTION_STATES, SCALE_KINDS, SCALE_READING_TTL_MS } from "./scale";
-export type { ScaleConnectionState, ScaleKind, ScaleReading } from "./scale";
+export {
+  advanceWeightStability,
+  initialWeightStabilityState,
+  isScaleReadingFresh,
+  SCALE_CONNECTION_STATES,
+  SCALE_KINDS,
+  SCALE_READING_TTL_MS,
+  WEIGHT_STABILITY_TOLERANCE_GRAMS,
+  WEIGHT_STABILITY_WINDOW_MS
+} from "./scale";
+export type {
+  ScaleConnectionState,
+  ScaleKind,
+  ScaleReading,
+  WeightStabilityEvent,
+  WeightStabilityState,
+  WeightStabilityStatus
+} from "./scale";
 export {
   allocateProductionCost,
   assertOutputsHavePrices,
