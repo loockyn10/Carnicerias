@@ -48,7 +48,7 @@ La sincronización se dispara al iniciar, después de mutaciones locales, al rec
 
 La sesión/autorización del dispositivo puede persistir. Después de reiniciar debe exigirse nuevamente selección de operador y PIN; no se restaura automáticamente el operador activo.
 
-Después del PIN se recupera el turno local/remoto y, si falta, el fichaje de entrada bloquea el uso normal. `Salir` y el cierre normal de la ventana usan una operación SQLite idempotente que cierra el turno, agrega el evento `SHIFT` al outbox y limpia el operador activo antes de intentar red. La sincronización puede ser best-effort durante el cierre; nunca es condición para terminar la aplicación.
+Después del PIN se recupera el turno local/remoto y, si falta, el fichaje de entrada bloquea el uso normal. `Salir` y el cierre normal de la ventana usan una operación SQLite idempotente que cierra el turno, agrega el evento `SHIFT` al outbox y limpia el operador activo antes de intentar red. La sincronización puede ser best-effort durante el cierre; nunca es condición para terminar la aplicación. Para el cierre que la plataforma no entrega (kill forzado, corte eléctrico), la app reconcilia el turno huérfano al reiniciar usando el último heartbeat local persistido, en vez de dejarlo abierto indefinidamente (D-045).
 
 ## Identidad de operador
 
@@ -139,7 +139,7 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 - El estado de stock por sucursal (`/admin`, `/admin/branches`, `/admin/stock`) se lee mediante la RPC `SECURITY DEFINER get_branch_stock_status`, que agrega directamente sobre `stock_movements` autorizando una vez por sucursal en vez de RLS fila por fila (mismo patrón que `get_replenishment_plan`). La vista `branch_stock_status` se mantiene para sus otros consumidores (atención, comparar sucursales, detalle de sucursal).
 - Rendiciones son snapshots históricos inmutables; una venta offline tardía genera advertencia, no recálculo silencioso.
 - Rentabilidad usa revenue final y costo snapshot; presenta ganancia bruta, no neta.
-- Timekeeping conserva turnos y tarifas históricas, usa timestamp servidor online y outbox offline.
+- Timekeeping conserva turnos y tarifas históricas, usa timestamp servidor online y outbox offline. Un turno `OPEN` emite heartbeat cada ~30 s (local siempre, reflejado al servidor si hay conexión); heartbeat vencido (grace 90 s) o restart tras un cierre no limpio cierran el turno usando el último heartbeat conocido, nunca inventando la hora hasta la reconexión (D-045).
 
 ## Migraciones
 

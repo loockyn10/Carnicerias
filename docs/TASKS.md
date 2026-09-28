@@ -2,6 +2,42 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P1 — Validar heartbeat/lease de control horario (D-045) contra Postgres real y hardware
+
+Implementado 2026-09-28 (ver `docs/CURRENT_STATE.md` y D-045 en `docs/DECISIONS.md`): heartbeat cada
+~30 s mientras el turno está `OPEN` (local siempre + servidor si hay conexión), grace 90 s, cierre
+inferido usando el último heartbeat conocido tanto server-side (`mark_overdue_shifts` extendido) como
+al reiniciar el POS (`reconcile_stale_open_shifts`, Rust). Migraciones `202609280037_shift_heartbeat_lease.sql`
+(Postgres) y `011_shift_heartbeat.sql` (SQLite). `cargo test` 49/49 OK (5 tests nuevos + 2 actualizados),
+`pnpm check` OK en los 7 proyectos, `pnpm --filter @carnicerias/pos build`, `pnpm --filter @carnicerias/admin build`
+y `pnpm --filter @carnicerias/pos build:desktop` (NSIS x64) OK. Docker Desktop no estuvo operativo en esta
+sesión (mismo bloqueo que el resto del historial reciente): la migración Postgres se revisó manualmente
+línea por línea pero no corrió contra Postgres real.
+
+Pendiente:
+
+- Ejecutar `pnpm db:reset && pnpm db:test` en un entorno con Docker/CI Linux funcional (no hay test pgTAP
+  dedicado todavía para `record_shift_heartbeat`/el sweep extendido — agregar `supabase/tests/shift_heartbeat_lease.test.sql`
+  cuando se pueda correr).
+- Regenerar `packages/database/src/database.types.ts` con `pnpm db:types` (se editó a mano: columnas
+  nuevas de `employee_shifts` y el RPC `record_shift_heartbeat`) y confirmar que coincide con el schema real.
+- Confirmar con `supabase migration list --linked` si `202609280037` llegó a aplicarse al remoto antes de
+  asumir que está pendiente.
+- Smoke físico con el build nuevo instalado (usuario, no Claude/Codex):
+  - marcar entrada, esperar >90 s con la app abierta y confirmar que el turno sigue `OPEN` (el heartbeat
+    lo mantiene vivo);
+  - matar el proceso por Administrador de tareas con el turno abierto; esperar >90 s; confirmar en
+    `/admin/timekeeping` que el turno pasó a "Turnos pendientes de revisión" con el badge de cierre
+    automático y una hora de salida cercana al momento del kill, no a cuando se revisó;
+  - repetir el mismo kill estando el POS offline; reabrir la app (todavía offline) y confirmar que pide
+    PIN de nuevo en vez de restaurar al operador activo, y que localmente el turno ya quedó cerrado;
+    reconectar y confirmar que el servidor recibe la salida con la hora del último heartbeat local, no
+    la de reconexión;
+  - confirmar que "Salir" y el cierre normal de ventana (Alt+F4, botón cerrar) siguen sin regresiones
+    (comportamiento sin cambios respecto a antes de este sprint);
+  - corregir un cierre automático desde Admin y confirmar que el badge desaparece y `auto_closed_by_heartbeat`
+    vuelve a `false`.
+
 ## P1 — Performance Admin con evidencia de producción
 
 Hecho en el sprint 2026-09-16 (local, ver `CURRENT_STATE.md`):

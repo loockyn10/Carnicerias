@@ -19,6 +19,7 @@ const WEIGHT_DISCOUNT_PACK_MODE_SCHEMA: &str = include_str!("../migrations/007_w
 const PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA: &str = include_str!("../migrations/008_product_category_assignments.sql");
 const UNIT_SALE_SUPPORT_SCHEMA: &str = include_str!("../migrations/009_unit_sale_support.sql");
 const CARD_SURCHARGE_PRICING_SCHEMA: &str = include_str!("../migrations/010_card_surcharge_pricing.sql");
+const SHIFT_HEARTBEAT_SCHEMA: &str = include_str!("../migrations/011_shift_heartbeat.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -284,7 +285,7 @@ struct CloseActiveOperatorResult { clock_out_created: bool, shift: Option<LocalS
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct OfflineTimeEvent { schema_version: i64, event_id: String, shift_id: String, employee_id: String, device_id: String, operator_token: String, action: String, occurred_at: String }
+struct OfflineTimeEvent { schema_version: i64, event_id: String, shift_id: String, employee_id: String, device_id: String, operator_token: String, action: String, occurred_at: String, #[serde(default)] inferred: bool }
 
 fn now() -> String {
     Utc::now().to_rfc3339()
@@ -404,6 +405,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.execute("insert into schema_migrations(version, applied_at) values (10, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    let shift_heartbeat_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 11)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !shift_heartbeat_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(SHIFT_HEARTBEAT_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (11, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
 
     let timestamp = now();
     connection
@@ -421,6 +429,70 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
             [now()],
         )
         .map_err(|error| error.to_string())?;
+    reconcile_stale_open_shifts(connection)?;
+    Ok(())
+}
+
+// A shift still OPEN in local_employee_shifts at the moment this runs can only be one
+// the previous process run left behind without going through the normal close path:
+// a clean "Salir"/window-close always closes it first via
+// close_active_operator_shift_in_connection before the process exits (see
+// on_window_event / the CloseRequested handlers), and the in-memory OperatorSessionState
+// flag that gates that path always starts false on every fresh process. So finding an
+// OPEN row here means the app crashed, was killed, or lost power with that shift open.
+//
+// Reconcile it now using the last locally-recorded heartbeat as the shift's effective
+// end (never "now" — that would count time up to this restart/reconnection as worked,
+// which is exactly what docs/DOMAIN_RULES.md "Control horario" forbids inventing). This
+// both frees the employee to clock in again immediately instead of silently resuming a
+// shift that may be hours or days stale, and gives the server real evidence to close the
+// same shift with (p_inferred=true forces REQUIRES_REVIEW + auto_closed_by_heartbeat,
+// see app_private.apply_employee_time_event) once this event reaches it.
+fn reconcile_stale_open_shifts(connection: &mut Connection) -> Result<(), String> {
+    let timestamp = now();
+    let stale: Vec<(String, String, String, String, Option<String>)> = {
+        let mut statement = connection
+            .prepare("select id, employee_id, device_id, clock_in_at, last_heartbeat_at from local_employee_shifts where status = 'OPEN' and clock_out_at is null")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
+    };
+    for (shift_id, employee_id, device_id, clock_in_at, last_heartbeat_at) in stale {
+        // No heartbeat was ever recorded (died within the first tick): the only honest
+        // evidence left is the clock-in itself, never "now"/this restart's timestamp.
+        let inferred_at = last_heartbeat_at.unwrap_or(clock_in_at);
+        let operator_token: Option<String> = connection
+            .query_row("select operator_token from local_pos_operators where profile_id = ?1", [&employee_id], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())?
+            .flatten();
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute(
+            "update local_employee_shifts set clock_out_at=?2,clock_out_source='OFFLINE',status='REQUIRES_REVIEW',updated_at=?3 where id=?1",
+            params![shift_id, inferred_at, timestamp],
+        ).map_err(|error| error.to_string())?;
+        // Without a cached operator token the server can't authenticate this device's
+        // synthetic event; the local row is still closed above so a fresh clock-in isn't
+        // blocked, and the server's own heartbeat-lease sweep (independent of this local
+        // reconciliation) remains the source of truth once this device reconnects.
+        if let Some(token) = operator_token {
+            let event_id = Uuid::new_v4().to_string();
+            let payload = OfflineTimeEvent {
+                schema_version: 1, event_id: event_id.clone(), shift_id: shift_id.clone(),
+                employee_id, device_id, operator_token: token,
+                action: "CLOCK_OUT".into(), occurred_at: inferred_at, inferred: true,
+            };
+            transaction.execute(
+                "insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,attempts,created_at,next_attempt_at) values(?1,'SHIFT',?2,'EVENT',?3,'PENDING',0,?4,?4)",
+                params![event_id, shift_id, serde_json::to_string(&payload).map_err(|error| error.to_string())?, timestamp],
+            ).map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -810,7 +882,7 @@ fn record_offline_time_event_in_connection(connection: &mut Connection, action: 
         if let Some(open)=existing { if open.status=="REQUIRES_REVIEW" { return Err("Tenés un turno anterior pendiente de revisión".into()); } open }
         else { let created=LocalShift{shift_id:Uuid::new_v4().to_string(),employee_id:employee.clone(),clock_in_at:timestamp.clone(),clock_out_at:None,clock_in_source:"OFFLINE".into(),clock_out_source:None,status:"OPEN".into()}; tx.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) values(?1,?2,?3,?4,?5,'OFFLINE','OPEN',?5)",params![created.shift_id,employee,branch,device,timestamp]).map_err(|e|e.to_string())?; created }
     } else { let mut open=existing.ok_or_else(||"No hay un turno activo para marcar salida".to_string())?; let max_hours=metadata(&tx,"max_shift_hours")?.and_then(|v|v.parse::<i64>().ok()).unwrap_or(12); let started=chrono::DateTime::parse_from_rfc3339(&open.clock_in_at).map_err(|e|e.to_string())?; let current=chrono::DateTime::parse_from_rfc3339(&timestamp).map_err(|e|e.to_string())?; if current.signed_duration_since(started).num_hours()>=max_hours { tx.execute("update local_employee_shifts set status='REQUIRES_REVIEW',updated_at=?2 where id=?1",params![open.shift_id,timestamp]).map_err(|e|e.to_string())?; open.status="REQUIRES_REVIEW".into(); tx.commit().map_err(|e|e.to_string())?; return Ok(open); } tx.execute("update local_employee_shifts set clock_out_at=?2,clock_out_source='OFFLINE',status='CLOSED',updated_at=?2 where id=?1",params![open.shift_id,timestamp]).map_err(|e|e.to_string())?; open.clock_out_at=Some(timestamp.clone()); open.clock_out_source=Some("OFFLINE".into()); open.status="CLOSED".into(); open };
-    let payload=OfflineTimeEvent{schema_version:1,event_id:event_id.clone(),shift_id:shift.shift_id.clone(),employee_id:employee,device_id:device,operator_token:token,action:action.to_string(),occurred_at:timestamp.clone()};
+    let payload=OfflineTimeEvent{schema_version:1,event_id:event_id.clone(),shift_id:shift.shift_id.clone(),employee_id:employee,device_id:device,operator_token:token,action:action.to_string(),occurred_at:timestamp.clone(),inferred:false};
     tx.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,attempts,created_at,next_attempt_at) values(?1,'SHIFT',?2,'EVENT',?3,'PENDING',0,?4,?4)",params![event_id,shift.shift_id,serde_json::to_string(&payload).map_err(|e|e.to_string())?,timestamp]).map_err(|e|e.to_string())?;
     tx.commit().map_err(|e|e.to_string())?; Ok(shift)
 }
@@ -849,6 +921,30 @@ fn record_offline_time_event(state: State<'_, DatabaseState>, action: String) ->
 fn close_active_operator_shift(state: State<'_, DatabaseState>, session: State<'_, OperatorSessionState>) -> Result<CloseActiveOperatorResult, String> {
     let mut connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
     close_authenticated_operator_session(&mut connection, &session.0)
+}
+
+// Local half of the presence lease (see docs/DOMAIN_RULES.md "Control horario"): persisted
+// every ~30s from the frontend regardless of connectivity, so reconcile_stale_open_shifts has
+// real evidence of the last moment this device was alive if the process dies before its next
+// tick. Resolves the target shift from local_active_operator rather than trusting a caller-
+// supplied shift id, same pattern as record_offline_time_event_in_connection. No-op (returns
+// None) if there's no active operator with an OPEN shift — never an error, since a heartbeat
+// tick racing a clock-out/logout is expected, not exceptional.
+fn record_shift_heartbeat_local_in_connection(connection: &Connection) -> Result<Option<String>, String> {
+    let timestamp = now();
+    let updated = connection.execute(
+        "update local_employee_shifts set last_heartbeat_at=?1,updated_at=?1
+         where status='OPEN' and clock_out_at is null
+           and employee_id=(select profile_id from local_active_operator where singleton=1)",
+        params![timestamp],
+    ).map_err(|error| error.to_string())?;
+    Ok(if updated > 0 { Some(timestamp) } else { None })
+}
+
+#[tauri::command]
+fn record_shift_heartbeat_local(state: State<'_, DatabaseState>) -> Result<Option<String>, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    record_shift_heartbeat_local_in_connection(&connection)
 }
 
 fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Result<(), String> {
@@ -1383,6 +1479,7 @@ pub fn run() {
             apply_server_shift,
             record_offline_time_event,
             close_active_operator_shift,
+            record_shift_heartbeat_local,
             confirm_local_sale,
             get_recent_local_sales,
             get_due_outbox,
@@ -1420,13 +1517,14 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'promotion_mode'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'quantity_units'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_weight_discounts') where name = 'pack_price_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_employee_shifts') where name = 'last_heartbeat_at'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from sqlite_master where type='table' and name='catalog_product_categories'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select color_hex from catalog_categories where id='color-category'", [], |row| row.get::<_,String>(0)).unwrap(), "#E99BAD");
         assert!(payment_method_receives_discount("CASH"));
@@ -1467,11 +1565,11 @@ mod tests {
             [],
         ).unwrap();
 
-        // Now bring the connection up to date — this is where migrations 9 (rebuild) and 10 (new
-        // card_surcharge_cents column) run.
+        // Now bring the connection up to date — this is where migrations 9 (rebuild), 10 (new
+        // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -1854,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn timekeeping_schema_preserves_shift_and_separates_two_events() {
+    fn timekeeping_schema_preserves_migrations_and_separates_two_events() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize_connection(&mut connection).unwrap();
         let first = verifier("1234", "device-one").unwrap();
@@ -1864,8 +1962,105 @@ mod tests {
         connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,created_at,next_attempt_at) values('in','SHIFT','shift','EVENT','{}','PENDING','2026-09-13T08:00:00Z','2026-09-13T08:00:00Z')", []).unwrap();
         connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,created_at,next_attempt_at) values('out','SHIFT','shift','EVENT','{}','PENDING','2026-09-13T15:30:00Z','2026-09-13T15:30:00Z')", []).unwrap();
         initialize_connection(&mut connection).unwrap();
-        assert_eq!(connection.query_row("select count(*) from local_employee_shifts where clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        // No local_pos_operators row exists for 'employee' here, so restart reconciliation
+        // (see reconcile_stale_open_shifts) has no cached token to synthesize a sync event
+        // with — it still closes the orphaned local row (falling back to clock_in_at, since
+        // no heartbeat was ever recorded) so it doesn't silently stay "open" forever, but adds
+        // no new outbox event. Migrations aren't replayed either: still exactly the two
+        // pre-existing SHIFT events.
+        assert_eq!(connection.query_row("select count(*) from local_employee_shifts where clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        let (status, clock_out_at): (String, Option<String>) = connection.query_row(
+            "select status, clock_out_at from local_employee_shifts where id='shift'", [], |row| Ok((row.get(0)?, row.get(1)?))
+        ).unwrap();
+        assert_eq!(status, "REQUIRES_REVIEW");
+        assert_eq!(clock_out_at.as_deref(), Some("2026-09-13T08:00:00Z"));
         assert_eq!(connection.query_row("select count(*) from sync_outbox where aggregate_type='SHIFT'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+    }
+
+    #[test]
+    fn heartbeat_updates_last_heartbeat_at_for_the_active_operators_open_shift() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let timestamp = now();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('employee','Fede','Operador',1,1,0,'token','2099-01-01T00:00:00Z',?1)", [&timestamp]).unwrap();
+        connection.execute("insert into local_active_operator(singleton,profile_id,selected_at) values(1,'employee',?1)", [&timestamp]).unwrap();
+        connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) select 'shift','employee','branch',device_id,?1,'ONLINE','OPEN',?1 from local_device where singleton=1", [&timestamp]).unwrap();
+
+        assert!(connection.query_row("select last_heartbeat_at from local_employee_shifts where id='shift'", [], |row| row.get::<_, Option<String>>(0)).unwrap().is_none());
+        let heartbeat_at = record_shift_heartbeat_local_in_connection(&connection).unwrap();
+        assert!(heartbeat_at.is_some());
+        assert_eq!(connection.query_row("select last_heartbeat_at from local_employee_shifts where id='shift'", [], |row| row.get::<_, Option<String>>(0)).unwrap(), heartbeat_at);
+    }
+
+    #[test]
+    fn heartbeat_is_a_noop_without_an_active_operator() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        assert_eq!(record_shift_heartbeat_local_in_connection(&connection).unwrap(), None);
+    }
+
+    #[test]
+    fn reconcile_stale_open_shifts_closes_orphaned_shift_using_last_heartbeat() {
+        // The scenario this whole feature exists for: Task Manager kill / forced shutdown /
+        // power loss never delivers CloseRequested, so the shift is still OPEN when the app
+        // starts again. The last locally-recorded heartbeat — not "now" — is the honest
+        // evidence of when it actually ended (docs/DOMAIN_RULES.md "Control horario").
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let clock_in_at = "2026-09-28T08:00:00Z";
+        let last_heartbeat = "2026-09-28T10:15:00Z";
+        connection.execute("update local_device set organization_id='org',branch_id='branch',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('employee','Fede','Operador',1,1,0,'token','2099-01-01T00:00:00Z',?1)", [clock_in_at]).unwrap();
+        // A crash never runs close_authenticated_operator_session, so local_active_operator is
+        // left behind exactly like this.
+        connection.execute("insert into local_active_operator(singleton,profile_id,selected_at) values(1,'employee',?1)", [clock_in_at]).unwrap();
+        connection.execute(
+            "insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,last_heartbeat_at,updated_at) select 'shift','employee','branch',device_id,?1,'ONLINE','OPEN',?2,?1 from local_device where singleton=1",
+            params![clock_in_at, last_heartbeat],
+        ).unwrap();
+
+        reconcile_stale_open_shifts(&mut connection).unwrap();
+
+        let (status, clock_out_at): (String, Option<String>) = connection.query_row(
+            "select status, clock_out_at from local_employee_shifts where id='shift'", [], |row| Ok((row.get(0)?, row.get(1)?))
+        ).unwrap();
+        assert_eq!(status, "REQUIRES_REVIEW");
+        assert_eq!(clock_out_at.as_deref(), Some(last_heartbeat));
+        let (occurred_at, inferred): (String, i64) = connection.query_row(
+            "select json_extract(payload,'$.occurredAt'), json_extract(payload,'$.inferred') from sync_outbox where aggregate_type='SHIFT' and json_extract(payload,'$.action')='CLOCK_OUT'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        // Never invents time up to "now"/reconnection — the outbox event carries the exact
+        // last-known heartbeat.
+        assert_eq!(occurred_at, last_heartbeat);
+        assert_eq!(inferred, 1);
+        // The employee isn't blocked from clocking in again: the row is no longer "open".
+        assert_eq!(connection.query_row("select count(*) from local_employee_shifts where employee_id='employee' and clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn reconcile_stale_open_shifts_falls_back_to_clock_in_at_without_a_heartbeat() {
+        // Died before ever sending a heartbeat (e.g. within the first 30s): the only honest
+        // evidence left is the clock-in itself, never "now".
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let clock_in_at = "2026-09-28T08:00:00Z";
+        connection.execute("update local_device set organization_id='org',branch_id='branch',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('employee','Fede','Operador',1,1,0,'token','2099-01-01T00:00:00Z',?1)", [clock_in_at]).unwrap();
+        connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) select 'shift','employee','branch',device_id,?1,'ONLINE','OPEN',?1 from local_device where singleton=1", [clock_in_at]).unwrap();
+
+        reconcile_stale_open_shifts(&mut connection).unwrap();
+
+        assert_eq!(connection.query_row("select clock_out_at from local_employee_shifts where id='shift'", [], |row| row.get::<_, Option<String>>(0)).unwrap().as_deref(), Some(clock_in_at));
+    }
+
+    #[test]
+    fn reconcile_stale_open_shifts_is_a_noop_when_nothing_is_open() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        reconcile_stale_open_shifts(&mut connection).unwrap();
+        assert_eq!(connection.query_row("select count(*) from sync_outbox where aggregate_type='SHIFT'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
 
     #[test]

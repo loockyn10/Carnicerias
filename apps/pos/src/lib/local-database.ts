@@ -114,6 +114,7 @@ export const localDatabase = {
   applyServerShift: (shift: LocalShift) => desktopVoid("apply_server_shift", { shift }),
   recordOfflineTimeEvent: (action: "CLOCK_IN" | "CLOCK_OUT") => desktopOnly<LocalShift>("record_offline_time_event", { action }),
   closeActiveOperatorShift: () => desktopOnly<CloseActiveOperatorResult>("close_active_operator_shift"),
+  recordShiftHeartbeatLocal: () => desktopOnly<string | null>("record_shift_heartbeat_local"),
   commercialConfig: () => desktopOnly<LocalCommercialConfig>("get_local_commercial_config"),
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),

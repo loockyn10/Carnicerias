@@ -250,7 +250,18 @@ Una transferencia mueve stock ya existente de una sucursal origen a una sucursal
 - corrección queda auditada.
 - salir del operador o cerrar normalmente la ventana con un turno abierto registra primero el clock-out en SQLite/outbox y no cierra la sesión Auth del dispositivo;
 - esa salida local es idempotente: repetir el cierre no crea dos clock-outs;
-- crash, kill forzado o corte eléctrico no garantizan ejecutar lógica de cierre y no autorizan a inventar una hora de salida.
+- crash, kill forzado o corte eléctrico no garantizan ejecutar lógica de cierre; no autorizan a inventar una hora de salida arbitraria (D-015/D-024 siguen vigentes para el caso sin evidencia), pero si existe una lease de heartbeat con evidencia real de presencia, esa evidencia sí puede usarse para fijar el fin efectivo del turno (ver D-045).
+
+### Heartbeat / lease de presencia (D-045, 2026-09-28)
+
+Mientras existe un operador activo con turno `OPEN`, el POS emite un heartbeat cada ~30 s (local siempre; reflejado al servidor de forma idempotente sólo si hay conexión). El heartbeat pertenece al turno/operador/dispositivo: actualiza un `last_heartbeat_at` en el propio turno, nunca genera una fila histórica nueva por tick.
+
+Dos causas distintas de `REQUIRES_REVIEW`, no deben confundirse:
+
+- **turno vencido, heartbeat vigente** (empleado sigue con la app abierta pasado el máximo normal, ver default 12 h abajo): sin cambios respecto al comportamiento previo — pasa a revisión, `clock_out_at` queda `null`, no hay evidencia de cuándo terminó.
+- **heartbeat vencido** (el dispositivo dejó de emitir heartbeats: kill forzado, corte eléctrico, crash — grace ~90 s desde el último heartbeat recibido): el turno pasa a revisión y además se fija `clock_out_at` = último heartbeat conocido (nunca "ahora"/momento de reconexión), marcado `auto_closed_by_heartbeat` para que Admin lo distinga de una salida genuina. Libera al empleado para marcar entrada de nuevo de inmediato; Admin conserva la capacidad de corregir la hora exacta con motivo.
+
+Detección server-side (`app_private.mark_overdue_shifts`, RPC `record_shift_heartbeat`) y detección local al reiniciar el POS después de un cierre no limpio (usa el último heartbeat persistido en SQLite, nunca inventa horas hasta la reconexión) son mecanismos independientes y complementarios; cualquiera de los dos alcanza para cerrar el turno.
 
 Limitación no prioritaria: si un clock-out offline excede el límite, es deseable conservar en el futuro el timestamp/intento como evidencia aunque el turno permanezca `REQUIRES_REVIEW`.
 

@@ -82,6 +82,7 @@ const PAYMENT_METHOD_BUTTONS: { value: PaymentMethod; label: string; activeClass
 ];
 
 const SHIFT_DURATION_REFRESH_MS = 60_000;
+const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
@@ -735,6 +736,38 @@ export default function App() {
       unlisten?.();
     };
   }, [desktop]);
+
+  // Presence heartbeat (docs/DOMAIN_RULES.md "Control horario"): while a shift is OPEN,
+  // persist a lease tick locally every ~30s regardless of connectivity (so a crash/kill/
+  // power loss leaves real evidence of the last moment this device was alive for the
+  // next-startup reconciliation, see reconcile_stale_open_shifts in src-tauri), and
+  // reflect it to the server best-effort when reachable (record_shift_heartbeat updates
+  // the shift's own last_heartbeat_at in place, never a new row per tick). Failures here
+  // are silent by design: the next tick retries, and nothing besides staleness detection
+  // depends on any single heartbeat succeeding.
+  useEffect(() => {
+    if (!desktop || !operator || shift?.status !== "OPEN") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        await localDatabase.recordShiftHeartbeatLocal();
+      } catch { /* best-effort, next tick retries */ }
+      if (cancelled || !navigator.onLine || user?.offline || !localRuntime?.deviceId || !operator.operatorToken) return;
+      try {
+        await supabase.rpc("record_shift_heartbeat", {
+          p_device_id: localRuntime.deviceId,
+          p_employee_id: operator.profileId,
+          p_operator_token: operator.operatorToken
+        });
+      } catch { /* best-effort, next tick retries */ }
+    };
+    void tick();
+    const interval = window.setInterval(() => void tick(), SHIFT_HEARTBEAT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [desktop, operator, shift?.status, localRuntime?.deviceId, user?.offline]);
 
   useEffect(() => {
     if (!exitModalOpen || shift?.status !== "OPEN") return;
