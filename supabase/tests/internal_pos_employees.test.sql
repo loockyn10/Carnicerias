@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(37);
+select plan(38);
 
 select has_column('public', 'profiles', 'auth_user_id', 'profiles exposes an optional Auth link');
 select ok(not (select attnotnull from pg_attribute where attrelid = 'public.profiles'::regclass and attname = 'auth_user_id'), 'Auth link is nullable');
@@ -59,6 +59,7 @@ select is((select cardinality(branch_ids) from public.list_organization_members(
 
 select lives_ok($$select public.register_pos_device('a4000000-0000-4000-8000-000000000001', 'a3000000-0000-4000-8000-000000000001', 'Caja interna')$$, 'admin registers an authorized device');
 select ok((public.get_pos_operator_roster('a4000000-0000-4000-8000-000000000001') -> 'operators') @> '[{"displayName":"Operadora Interna"}]'::jsonb, 'internal employee appears in the branch roster');
+select ok(not (public.get_pos_operator_roster('a4000000-0000-4000-8000-000000000001') -> 'operators') @> '[{"displayName":"Internal Employee Admin"}]'::jsonb, 'organization admin does not appear in the POS operator selector');
 select is((public.verify_pos_operator_pin('a4000000-0000-4000-8000-000000000001', (select id from public.profiles where display_name = 'Operadora Interna'), '2468') ->> 'ok')::boolean, true, 'internal employee authenticates with PIN');
 reset role;
 select ok(exists(select 1 from public.pos_operator_grants where operator_profile_id = (select id from public.profiles where display_name = 'Operadora Interna') and revoked_at is null), 'PIN verification issues a device-bound grant');
