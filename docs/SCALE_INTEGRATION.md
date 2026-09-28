@@ -106,9 +106,24 @@ stderr, nunca bloquea el arranque de la app).
 
 Config → Diagnóstico (el mismo modal de diagnóstico técnico que ya existía)
 → sección "Balanza": tipo, puerto (con botón "Actualizar" que vuelve a
-enumerar puertos vía `list_scale_ports`), autoconectar, Conectar/Desconectar.
-No se hardcodea `COM3` ni `/dev/ttyUSB0`; si no hay puertos detectados se
-muestra explícitamente "No se detectaron puertos serie."
+enumerar puertos vía `list_scale_ports`), botón "Detectar balanza",
+autoconectar, Conectar/Desconectar. No se hardcodea `COM3` ni
+`/dev/ttyUSB0`; si no hay puertos detectados se muestra explícitamente "No
+se detectaron puertos serie."
+
+"Detectar balanza" (`detect_scale_port`, agregado 2026-09-28) prueba en
+orden cada puerto serie disponible: lo abre con los parámetros fijos del
+Kretz (9600 8N2), escucha hasta 1.5 s y lo considera válido sólo si recibe
+al menos un frame que el parser puede convertir en peso — evita falsos
+positivos de un puerto que abre pero no es la balanza. Se niega a correr
+si ya hay una conexión activa (para no abrir el mismo puerto dos veces).
+Si encuentra un puerto, configura tipo `KRETZ_NOVEL_ECO_2` + ese puerto y
+conecta automáticamente; si no encuentra ninguno, informa "No se detectó
+la balanza en ningún puerto disponible." sin bloquear el resto del modal.
+Sin hardware conectado a esta sesión de desarrollo, esta lógica se validó
+por inspección de código y de los tests del parser reutilizado
+(`KretzFrameParser`), no con una detección real end-to-end; queda dentro
+del mismo smoke test físico pendiente de la sección de abajo.
 
 Esto queda fuera del flujo normal del cajero (no aparece en la pantalla de
 venta salvo el indicador chico de estado y el atajo dentro del modal de
@@ -143,6 +158,15 @@ funciona con la Novel Eco 2. Puede usarse RS232 nativo o un adaptador
 USB→RS232 real; la aplicación no depende de ninguna marca específica de
 adaptador, sólo de que el sistema operativo lo expone como un puerto serie
 estándar (`COM*` en Windows, `/dev/ttyUSB*`/`/dev/ttyS*` en Linux).
+
+**Confirmado en hardware real (2026-09-28)**, en una PC Windows distinta a
+la de desarrollo: adaptador USB-RS232 con chipset **CH340**, driver
+**CH341SER 3.5.2019.1**, enumerado como `COM5` en esa PC. El puerto es
+específico de cada equipo (dependiente del adaptador/orden de enumeración
+de Windows): nunca se hardcodea `COM5` ni ningún otro puerto en el código;
+cada instalación detecta o elige el suyo. Frame real recibido y verificado
+contra el parser: `00.410` → 410 g (ver tests `real_hardware_*` en
+`scale/parser.rs`).
 
 ## Diagnóstico básico
 

@@ -40,6 +40,11 @@ const SCALE_CONFIG_METADATA_KEY: &str = "scale_config";
 /// Fixed by the KRETZ Novel Eco 2 manual (RS232, 8N2); not user-configurable.
 const KRETZ_BAUD_RATE: u32 = 9_600;
 const SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(300);
+/// How long `detect_scale_port` listens on each candidate port before
+/// concluding it is not the Kretz. Long enough to catch at least one frame
+/// of the documented ~2 Hz continuous transmission with margin, short
+/// enough that scanning a handful of ports stays a few seconds, not tens.
+const DETECT_PROBE_DURATION: Duration = Duration::from_millis(1_500);
 /// The documented continuous mode transmits ~2 Hz; ticking a little slower
 /// keeps the simulated adapter's behaviour comparable without busy-looping.
 const SIMULATED_TICK_INTERVAL: Duration = Duration::from_millis(500);
@@ -321,6 +326,61 @@ pub fn list_scale_ports() -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// Opens one candidate port with the Kretz's fixed serial parameters and
+/// listens briefly for at least one frame the parser can turn into a
+/// weight. Used only by `detect_scale_port`; never touches shared state, so
+/// it cannot race with an active connection reading the same port.
+fn probe_port_for_kretz_frames(path: &str) -> bool {
+    let Ok(mut port) = serialport::new(path, KRETZ_BAUD_RATE)
+        .data_bits(DataBits::Eight)
+        .parity(Parity::None)
+        .stop_bits(StopBits::Two)
+        .timeout(SERIAL_READ_TIMEOUT)
+        .open()
+    else {
+        return false;
+    };
+    let mut framer = KretzFrameParser::new();
+    let mut buffer = [0_u8; 256];
+    let deadline = std::time::Instant::now() + DETECT_PROBE_DURATION;
+    while std::time::Instant::now() < deadline {
+        match port.read(&mut buffer) {
+            Ok(0) => continue,
+            Ok(count) => {
+                if framer.feed(&buffer[..count]).into_iter().any(|result| result.is_ok()) {
+                    return true;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => continue,
+            // A port that errors out (unplugged mid-probe, access revoked) is
+            // not a match; move on rather than treating it as a hard failure.
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// Tries every available serial port with the Kretz's fixed parameters and
+/// returns the first one that produces a parseable weight frame, or `None`
+/// if none did. Refuses to run while a connection is already active so it
+/// never opens a port the reader thread already owns.
+#[tauri::command]
+pub fn detect_scale_port(scale: State<'_, ScaleRuntimeState>) -> Result<Option<String>, String> {
+    let already_active = {
+        let shared = scale.shared.lock().map_err(|_| lock_error())?;
+        matches!(shared.connection_state, ScaleConnectionState::Connected | ScaleConnectionState::Connecting)
+    };
+    if already_active {
+        return Err("Desconectá la balanza antes de detectarla en otro puerto".to_string());
+    }
+    for path in list_scale_ports() {
+        if probe_port_for_kretz_frames(&path) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 #[tauri::command]

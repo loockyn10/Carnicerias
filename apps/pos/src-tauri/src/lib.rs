@@ -1397,6 +1397,7 @@ pub fn run() {
             scale::get_scale_snapshot,
             scale::set_scale_config,
             scale::list_scale_ports,
+            scale::detect_scale_port,
             scale::connect_scale,
             scale::disconnect_scale,
             scale::set_simulated_scale_weight,

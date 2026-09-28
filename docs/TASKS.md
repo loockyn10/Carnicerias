@@ -62,10 +62,17 @@ Implementado en el sprint 2026-09-16 (ver `docs/CURRENT_STATE.md` y
 persistencia local, integración con el modal de peso existente, tests sin
 hardware, build Windows.
 
+**Actualizado 2026-09-28**: protocolo confirmado contra hardware real
+(CH340 + CH341SER 3.5.2019.1, frame `00.410`→410 g) en una PC Windows
+distinta a la de desarrollo — no en este build. Se agregó autodetección de
+puerto (`detect_scale_port`, botón "Detectar balanza"), también sin
+ejercer contra hardware real todavía.
+
 Pendiente:
 
-- Conectar una Novel Eco 2 real y seguir el checklist de smoke test de
-  `docs/SCALE_INTEGRATION.md` (Windows y Linux).
+- Conectar una Novel Eco 2 real **a un build de este repositorio** y seguir
+  el checklist de smoke test de `docs/SCALE_INTEGRATION.md` (Windows y
+  Linux), incluida la autodetección de puerto nueva.
 - Confirmar `cargo check`/build contra `i686-unknown-linux-gnu` con el
   crate `serialport` agregado (requiere Docker o GitHub Actions).
 

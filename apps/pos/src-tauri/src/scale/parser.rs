@@ -179,6 +179,51 @@ mod tests {
         assert_eq!(parse_weight_frame(b"12.345"), Ok(12_345));
     }
 
+    // Real hardware confirmation (2026-09-28): a Novel Eco 2 through a CH340
+    // USB-RS232 adapter (CH341SER 3.5.2019.1 driver) at 9600 8N2 was tested
+    // on a separate Windows PC; these are the exact frames it produced.
+    #[test]
+    fn real_hardware_four_hundred_ten_grams() {
+        assert_eq!(parse_weight_frame(b"00.410"), Ok(410));
+    }
+
+    #[test]
+    fn real_hardware_one_kilogram_with_leading_zero() {
+        assert_eq!(parse_weight_frame(b"01.000"), Ok(1_000));
+    }
+
+    #[test]
+    fn real_hardware_zero_with_three_digit_integer_part() {
+        assert_eq!(parse_weight_frame(b"000.000"), Ok(0));
+    }
+
+    #[test]
+    fn real_hardware_frame_with_crlf_framing() {
+        // Some serial setups append LF after the documented CR terminator;
+        // it must land as ignored noise before the next STX, not corrupt
+        // the next frame.
+        let mut parser = KretzFrameParser::new();
+        let mut chunk = vec![STX];
+        chunk.extend_from_slice(b"00.410");
+        chunk.push(CR);
+        chunk.push(b'\n');
+        chunk.push(STX);
+        chunk.extend_from_slice(b"01.000");
+        chunk.push(CR);
+        assert_eq!(parser.feed(&chunk), vec![Ok(410), Ok(1_000)]);
+    }
+
+    #[test]
+    fn real_hardware_frame_fragmented_byte_by_byte() {
+        let mut parser = KretzFrameParser::new();
+        let frame = [STX, b'0', b'0', b'.', b'4', b'1', b'0', CR];
+        let mut results = Vec::new();
+        for byte in frame {
+            results.extend(parser.feed(&[byte]));
+        }
+        assert_eq!(results, vec![Ok(410)]);
+    }
+
     #[test]
     fn rejects_invalid_characters() {
         assert_eq!(parse_weight_frame(b"AB.CDE"), Err(ScaleFrameError::InvalidCharacters));

@@ -251,11 +251,24 @@ desconectar la balanza no interrumpe la venta. Modo `SIMULATED` es una
 herramienta de prueba dentro del modal de diagnóstico (fijar peso, simular
 desconexión), no un modo operativo normal.
 
-**REQUIERE VERIFICACIÓN**: no se conectó una Novel Eco 2 real ni se
-compiló contra `i686-unknown-linux-gnu` en esta sesión (sin Docker/CI Linux
-disponible). Validado sin hardware: 20 tests Rust nuevos (parser + estado,
-ver "Validación actual"), 9 tests `vitest` de frescura de lectura, build
-Windows NSIS x64 completo con el nuevo crate.
+**Actualizado 2026-09-28**: el protocolo se confirmó contra una Novel Eco 2
+real (adaptador USB-RS232 CH340, driver CH341SER 3.5.2019.1) en una PC
+Windows **distinta** a la de desarrollo — frame real `00.410` → 410 g,
+9600 8N2, coincide byte a byte con lo ya documentado/parseado (ver
+`docs/SCALE_INTEGRATION.md`, tests `real_hardware_*` en `scale/parser.rs`).
+Se agregó `detect_scale_port` (comando Tauri + botón "Detectar balanza" en
+el modal de Diagnóstico): prueba cada puerto serie disponible con los
+parámetros fijos del Kretz y lo da por válido sólo si recibe un frame
+parseable, evitando falsos positivos; se niega a correr con una conexión
+ya activa.
+
+**REQUIERE VERIFICACIÓN**: no se conectó una Novel Eco 2 real a *este*
+build/repositorio (el hardware probado fue en otra PC, con otro build), ni
+se compiló contra `i686-unknown-linux-gnu` en esta sesión (sin Docker/CI
+Linux disponible). `detect_scale_port` tampoco se ejerció contra hardware
+real todavía. Validado sin hardware: tests Rust (parser + estado, incluidos
+los `real_hardware_*` nuevos), tests `vitest` de frescura de lectura, build
+Windows NSIS x64 completo con el nuevo crate y el comando nuevo.
 
 ## Desposte / Producción — implementada 2026-09-22, corregida a Admin el mismo día
 

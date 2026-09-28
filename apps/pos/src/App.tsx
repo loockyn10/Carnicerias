@@ -302,6 +302,8 @@ export default function App() {
   const scale = useScaleSnapshot(desktop);
   const [scalePorts, setScalePorts] = useState<string[]>([]);
   const [scaleBusy, setScaleBusy] = useState(false);
+  const [scaleDetecting, setScaleDetecting] = useState(false);
+  const [scaleDetectMessage, setScaleDetectMessage] = useState<string | null>(null);
   const [simulatedWeightInput, setSimulatedWeightInput] = useState("");
   const [scaleModalNow, setScaleModalNow] = useState(() => Date.now());
   const [authReady, setAuthReady] = useState(false);
@@ -794,6 +796,26 @@ export default function App() {
       setError(connectError instanceof Error ? connectError.message : "No se pudo conectar la balanza");
     } finally {
       setScaleBusy(false);
+    }
+  }
+
+  async function detectScaleNow() {
+    setScaleDetecting(true);
+    setScaleDetectMessage(null);
+    try {
+      const detectedPort = await scaleBridge.detectPort();
+      if (!detectedPort) {
+        setScaleDetectMessage("No se detectó la balanza en ningún puerto disponible.");
+        return;
+      }
+      await updateScaleConfig({ kind: "KRETZ_NOVEL_ECO_2", port: detectedPort });
+      setScalePorts((current) => (current.includes(detectedPort) ? current : [...current, detectedPort].sort()));
+      setScaleDetectMessage(`Balanza detectada en ${detectedPort}.`);
+      await connectScaleNow();
+    } catch (detectError) {
+      setScaleDetectMessage(detectError instanceof Error ? detectError.message : "No se pudo detectar la balanza");
+    } finally {
+      setScaleDetecting(false);
     }
   }
 
@@ -1522,10 +1544,12 @@ export default function App() {
                   Conectar automáticamente al iniciar
                 </label>
                 <div className="flex flex-wrap items-center gap-3">
+                  <button type="button" className="rounded-xl border border-stone-600 px-4 py-2 text-sm font-black disabled:opacity-40" disabled={scaleDetecting || scaleBusy || scale.connectionState !== "DISCONNECTED"} onClick={() => void detectScaleNow()}>{scaleDetecting ? "Detectando…" : "Detectar balanza"}</button>
                   <button type="button" className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-black disabled:opacity-40" disabled={scaleBusy || scale.config.kind === "MANUAL"} onClick={() => void connectScaleNow()}>Conectar</button>
                   <button type="button" className="rounded-xl border border-stone-600 px-4 py-2 text-sm font-black disabled:opacity-40" disabled={scaleBusy || scale.connectionState === "DISCONNECTED"} onClick={() => void scaleBridge.disconnect()}>Desconectar</button>
                   <span className="text-xs text-stone-400">Estado: {scale.connectionState}{scale.lastError ? ` · ${scale.lastError}` : ""}</span>
                 </div>
+                {scaleDetectMessage ? <p className="text-xs font-bold text-amber-300">{scaleDetectMessage}</p> : null}
                 {scale.config.kind === "SIMULATED" ? (
                   <div className="rounded-xl border border-dashed border-stone-700 p-3">
                     <p className="text-xs font-bold uppercase text-stone-500">Herramienta de prueba (sólo para configuración/desarrollo)</p>

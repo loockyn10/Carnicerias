@@ -38,6 +38,7 @@ export const scaleBridge = {
   getConfig: () => desktopOnly<ScaleConfig>("get_scale_config"),
   setConfig: (config: ScaleConfig) => desktopOnly<ScaleSnapshot>("set_scale_config", { config }),
   listPorts: () => desktopOnly<string[]>("list_scale_ports"),
+  detectPort: () => desktopOnly<string | null>("detect_scale_port"),
   snapshot: () => desktopOnly<ScaleSnapshot>("get_scale_snapshot"),
   connect: () => desktopOnly<ScaleSnapshot>("connect_scale"),
   disconnect: () => desktopOnly<ScaleSnapshot>("disconnect_scale"),
