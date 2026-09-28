@@ -339,6 +339,7 @@ export default function App() {
   const [shift, setShift] = useState<LocalShift | null>(null);
   const [clockInRequired, setClockInRequired] = useState(false);
   const [exitModalOpen, setExitModalOpen] = useState(false);
+  const [cancelTicketModalOpen, setCancelTicketModalOpen] = useState(false);
   const [shiftNow, setShiftNow] = useState(() => Date.now());
   const shiftInFlight = useRef(false);
   const saleInFlight = useRef(false);
@@ -734,6 +735,13 @@ export default function App() {
     const interval = window.setInterval(() => setShiftNow(Date.now()), SHIFT_DURATION_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [exitModalOpen, shift?.status]);
+
+  useEffect(() => {
+    if (!cancelTicketModalOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setCancelTicketModalOpen(false); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cancelTicketModalOpen]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1308,11 +1316,7 @@ export default function App() {
             {ticket.length ? (
               <button
                 className="text-sm font-bold text-red-400 hover:text-red-300"
-                onClick={() => {
-                  if (!window.confirm("¿Cancelar todo el ticket?")) return;
-                  setTicket([]);
-                  setPaymentMethod(null);
-                }}
+                onClick={() => setCancelTicketModalOpen(true)}
               >
                 Cancelar
               </button>
@@ -1418,6 +1422,34 @@ export default function App() {
             <div className="mt-6 flex justify-end gap-3">
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" disabled={shiftInFlight.current} onClick={() => setExitModalOpen(false)}>Cancelar</button>
               <button className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500 disabled:opacity-50" disabled={shiftInFlight.current} onClick={() => void finishOperatorSession()}>Marcar salida y salir</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {cancelTicketModalOpen ? (
+        <div
+          className="pos-modal-backdrop fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cancel-ticket-title"
+          onClick={(event) => { if (event.target === event.currentTarget) setCancelTicketModalOpen(false); }}
+        >
+          <section className="pos-modal-panel w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-7 shadow-2xl">
+            <h2 className="text-3xl font-black" id="cancel-ticket-title">Cancelar ticket</h2>
+            <p className="mt-4 text-stone-300">¿Seguro que querés cancelar este ticket?<br />Se eliminarán todos los productos cargados.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" onClick={() => setCancelTicketModalOpen(false)}>Volver</button>
+              <button
+                className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500"
+                onClick={() => {
+                  setTicket([]);
+                  setPaymentMethod(null);
+                  setCancelTicketModalOpen(false);
+                }}
+              >
+                Cancelar ticket
+              </button>
             </div>
           </section>
         </div>
