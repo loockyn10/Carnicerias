@@ -7,7 +7,7 @@ import { localDayStart, stockPriority } from "../../../lib/multibranch";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
 
-type Filter = "all" | "alerts" | "critical" | "inactive";
+type Filter = "all" | "alerts" | "critical";
 type Sort = "name" | "revenue" | "alerts";
 
 export default async function BranchesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -18,12 +18,12 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const params = await searchParams;
   const value = (key: string) => typeof params[key] === "string" ? params[key] : "";
   const q = value("q").trim().toLocaleLowerCase("es");
-  const filter: Filter = ["alerts", "critical", "inactive"].includes(value("filter")) ? value("filter") as Filter : "all";
+  const filter: Filter = ["alerts", "critical"].includes(value("filter")) ? value("filter") as Filter : "all";
   const sort: Sort = ["revenue", "alerts"].includes(value("sort")) ? value("sort") as Sort : "name";
   const today = localDayStart(context.timezone);
   const supabase = await createClient();
   const [branchesResult, salesResult, stockResult] = await Promise.all([
-    perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).order("name")),
+    perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
     perf.measure("stock", supabase.rpc("get_branch_stock_status"))
   ]);
@@ -45,7 +45,7 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   }
   const visible = [...rows.values()]
     .filter((row) => row.name.toLocaleLowerCase("es").includes(q))
-    .filter((row) => filter === "all" || (filter === "alerts" && row.out + row.low > 0) || (filter === "critical" && row.out > 0) || (filter === "inactive" && !row.active))
+    .filter((row) => filter === "all" || (filter === "alerts" && row.out + row.low > 0) || (filter === "critical" && row.out > 0))
     .sort((a, b) => sort === "revenue" ? b.revenue - a.revenue || a.name.localeCompare(b.name, "es") : sort === "alerts" ? (b.out + b.low) - (a.out + a.low) || a.name.localeCompare(b.name, "es") : a.name.localeCompare(b.name, "es"));
   perf.mark("transform", transformStartedAt);
   perf.flush();
@@ -57,7 +57,7 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
     </div>
     <form className="mt-3 grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-[1fr_12rem_13rem_auto]">
       <input className="rounded-lg border border-stone-300 px-3 py-2" defaultValue={value("q")} name="q" placeholder="Buscar sucursal…" />
-      <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={filter} name="filter"><option value="all">Todas</option><option value="alerts">Con alertas</option><option value="critical">Stock crítico</option><option value="inactive">Inactivas</option></select>
+      <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={filter} name="filter"><option value="all">Todas</option><option value="alerts">Con alertas</option><option value="critical">Stock crítico</option></select>
       <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={sort} name="sort"><option value="name">Nombre</option><option value="revenue">Mayor facturación</option><option value="alerts">Más alertas</option></select>
       <button className="rounded-lg border px-4 py-2 font-bold">Aplicar</button>
     </form>

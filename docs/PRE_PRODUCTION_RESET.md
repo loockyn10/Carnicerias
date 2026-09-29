@@ -189,3 +189,28 @@ exista):
   sucursal creada por error, no para operación normal.
 
 Ver D-035 en `docs/DECISIONS.md`.
+
+## Reset de datos operativos (conserva sucursales, empleados y catálogo)
+
+Distinto de `scripts/pre-production-reset.sql` (que además borra sucursales y
+empleados internos). Script: `supabase/scripts/reset_operational_data.sql`, con
+`reset_operational_data.preview.sql` (solo lectura, conteos). No es una
+migración: `supabase db push` nunca lo ejecuta.
+
+- Alcance: una organización (`reset_params.organization_id`).
+- Borra: ventas/items/pagos, movimientos y operaciones de stock, transferencias,
+  despostes, rendiciones, fichajes/turnos, recibos de sync de ventas. El stock
+  queda en 0 porque `stock_levels` deriva de `stock_movements`.
+- Conserva (verificado por conteos antes/después dentro de la transacción):
+  sucursales y su estado, dispositivos, perfiles/membresías, PIN, tarifas por
+  hora, catálogo, precios e historial, configuración comercial.
+- `audit_logs`: borra solo los `entity_type` operativos (sales, settlements,
+  production_batches, stock_transfers, stock_operations, employee_shift); el resto
+  del historial administrativo se conserva. No toca `pos_catalog_changes`,
+  `pos_operator_grants` ni `pos_pin_attempts`.
+- Por defecto es dry-run (`confirm = 'NO'`): ejecuta todo, verifica y aborta con
+  el reporte antes/después. Para persistir: `'RESET-OPERATIONAL-DATA'`.
+- Antes del reset remoto hay que limpiar el SQLite de cada POS real con
+  `apps/pos/scripts/reset_local_operational_data.sql` (POS cerrado, `sqlite3 -bail`).
+  Si no, ventas/turnos pendientes en el outbox local se resubirían: el servidor
+  no rechaza eventos viejos.
