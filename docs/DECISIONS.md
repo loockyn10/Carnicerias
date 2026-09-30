@@ -538,3 +538,41 @@ Además, se confirmó que el ejecutable/instalador del POS Desktop en `apps/pos/
 **Capas**: Postgres (`202609280037_shift_heartbeat_lease.sql`: columnas nuevas + índice, `record_shift_heartbeat` nuevo, `mark_overdue_shifts`/`apply_employee_time_event`/`sync_offline_time_event`/`correct_employee_shift`/`get_timekeeping_report` vía `CREATE OR REPLACE`, mismo patrón que D-039/D-044), SQLite (`011_shift_heartbeat.sql`, columna nueva), Rust (`record_shift_heartbeat_local`, `reconcile_stale_open_shifts` — corre en cada arranque de `initialize_connection`, antes de que se pueda seleccionar operador), POS (`apps/pos/src/App.tsx`, tick cada 30 s mientras `shift.status==='OPEN'`, local siempre + remoto best-effort), Admin (`/admin/timekeeping`: badge "Cierre automático (heartbeat perdido)" y el formulario de corrección prellena la hora inferida).
 
 **Motivo:** el negocio no puede tolerar que un turno siga contando horas después de que el empleado dejó físicamente de operar el POS, pero tampoco quiere perder la capacidad de revisión/corrección existente ni arriesgar horas inventadas para el caso genuinamente sin evidencia.
+
+---
+
+## D-046 — Importador genérico: nunca pisa ni fusiona lo que no creó; preview obligatorio
+
+**Status:** Active
+
+La migración desde SimplyGest (y cualquier fuente futura) pasa por una capa genérica en base de datos: `import_batches` → `import_rows` (staging) → `external_entity_links` (`source_system + entity_type + external_id → UUID interno`), con RPCs `create/stage/preview/apply/cancel_import_batch`. El esquema no conoce SimplyGest; el mapeo de columnas vive en un mapper fuera de la base. Reglas:
+
+- **Preview obligatorio y fiel**: `apply` no corre sin un preview vigente y re-clasifica cada fila antes de escribir; si algo cambió, aborta (`40001`). Todo el lote se escribe en una transacción.
+- **Idempotencia por código externo, no por nombre**: el mismo `external_id` siempre resuelve al mismo registro; un archivo sin cambios (hash igual) da `IGNORE`.
+- **Sin fusiones silenciosas**: un SKU/barcode/nombre que choca con un registro no creado por la importación es `ERROR`; adoptar registros existentes requiere declarar `options.linkExistingBy`. Dos filas que apuntan al mismo registro → la segunda es `ERROR`.
+- Reutiliza las RPCs existentes (`save_product`, `set_product_price`, `set_product_cost`, `set_product_categories`, …): todas las guardas (D-040), historial append-only y triggers de sync del POS aplican igual que a una edición manual.
+- Permisos nuevos `imports.read`/`imports.write` (sólo `admin`); además se exige el permiso de la entidad (`products.write`/`stock.write`). Tope de 1000 filas por lote por el `statement_timeout` de la API.
+
+**Motivo:** una migración masiva que duplica productos o pisa precios corregidos a mano es peor que no migrar; el dueño debe ver "650 nuevos / 120 actualizaciones / 15 errores" antes de confirmar y poder re-ejecutar sin miedo.
+
+---
+
+## D-047 — Stock migrado entra al ledger como `OPENING_BALANCE`; no existe `current_stock`
+
+**Status:** Active
+
+El stock actual de otro sistema se convierte en un movimiento `OPENING_BALANCE` (positivo, `import_batch_id`) de `stock_movements`, el mismo ledger de D-029/D-034. No se agrega ninguna columna mutable de stock. Una apertura por (sucursal, producto) en toda la historia (índice único parcial): si el producto ya tiene movimientos en la sucursal, la fila se ignora; corregir es un ajuste por conteo físico. No genera eventos de reposición. Tipo propio (no `PURCHASE`/`ADJUSTMENT_POSITIVE`) para distinguir arrastre de stock en el corte de compras reales y de correcciones.
+
+**Motivo:** una segunda fuente de verdad divergiría del ledger; un tipo propio mantiene trazables y separables los informes.
+
+---
+
+## D-048 — Códigos de barras en tabla propia; `sku` sigue siendo el código interno
+
+**Status:** Active
+
+`product_barcodes(organization_id, product_id, barcode)` con `unique (organization_id, barcode)`: un producto puede tener varios códigos y un código resuelve exactamente a un producto. `products.sku` no cambia (código interno, único por organización). Se guardan normalizados (trim, sin espacios, mayúsculas). RPCs `set_product_barcodes` (reemplaza el conjunto, idempotente) y `resolve_product_barcode`. Un cambio de barcodes registra un cambio `PRODUCT` en `pos_catalog_changes` para que viaje por el cursor de sync existente.
+
+Alcance: el POS todavía **no** recibe ni usa barcodes (siguiente sprint: `barcodes` en `pull_pos_state`, tabla SQLite, resolución local offline y alta al ticket). Los productos por peso de carnicería no cambian (cero barcodes).
+
+**Motivo:** un escáner emite el código del empaque; modelarlo aparte del SKU evita ambigüedad y permite múltiples códigos sin tocar el catálogo de carnicería.

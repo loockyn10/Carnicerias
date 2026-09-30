@@ -1,0 +1,14 @@
+-- Opening-balance movement type for the EXISTING stock ledger (public.stock_movements).
+--
+-- Stock migrated from another system (SimplyGest) must enter as ledger movements, never as a
+-- mutable "current_stock" column: an opening balance is just one more append-only movement
+-- (positive quantity) so every derived view/RPC (stock_levels, get_branch_stock_status,
+-- get_pos_branch_stock, replenishment) keeps summing the same single source of truth.
+--
+-- It gets its own type instead of reusing PURCHASE/ADJUSTMENT_POSITIVE so reports can tell
+-- "initial stock carried over at cut-over" apart from real purchases and from count corrections.
+--
+-- ALTER TYPE ... ADD VALUE cannot be referenced in the same transaction that adds it (hard
+-- PostgreSQL restriction), so this is deliberately its own single-statement migration; the
+-- constraints/indexes that use the value live in the next migration (same pattern as 025).
+alter type public.stock_movement_type add value if not exists 'OPENING_BALANCE';

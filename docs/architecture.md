@@ -143,11 +143,18 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 - Rentabilidad usa revenue final y costo snapshot; presenta ganancia bruta, no neta.
 - Timekeeping conserva turnos y tarifas históricas, usa timestamp servidor online y outbox offline. Un turno `OPEN` emite heartbeat cada ~30 s (local siempre, reflejado al servidor si hay conexión); heartbeat vencido (grace 90 s) o restart tras un cierre no limpio cierran el turno usando el último heartbeat conocido, nunca inventando la hora hasta la reconexión (D-045).
 
+## Catálogo de almacén, barcodes e importaciones
+
+- Un mismo catálogo sirve carnicería (`WEIGHT`, kg) y almacén (`UNIT`, ej. "Coca Cola 2.25 L"); `products.unit_type` decide la forma de venta. `products.sku` = código interno; los códigos de escáner viven en `product_barcodes` (varios por producto, único por organización; D-048). El POS aún no los recibe: el camino previsto es `barcodes` dentro de cada ítem de `pull_pos_state` → tabla SQLite `catalog_product_barcodes` → resolución local offline. Los cambios de barcodes ya se registran como `PRODUCT` en `pos_catalog_changes` para el cursor incremental.
+- Importaciones (D-046, detalle en `docs/IMPORTS.md`): `import_batches`/`import_rows`/`external_entity_links` + RPCs `create/stage/preview/apply/cancel_import_batch`; el mapeo de fuente a payload canónico es externo a la base, los payloads/resumen están tipados en `packages/types`. Toda escritura de negocio reutiliza las RPCs existentes.
+- Stock migrado = movimiento `OPENING_BALANCE` del ledger (D-047), una vez por sucursal+producto; no hay columna de stock actual.
+- Los checks ejecutados con un shim de Postgres (PGlite) están descritos en `CURRENT_STATE.md`; la validación oficial sigue siendo `pnpm db:reset && pnpm db:test`.
+
 ## Migraciones
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–033 y SQLite 001–008. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–044 y SQLite 001–012. El estado remoto sigue pendiente de verificación autenticada.
 
 ## PWA y balanza
 

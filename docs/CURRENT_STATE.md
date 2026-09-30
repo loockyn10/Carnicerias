@@ -396,6 +396,27 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
   `pnpm db:types`. `pnpm typecheck`/`lint`/`test`/`build` sí corrieron limpio
   en todo el monorepo con estos cambios incluidos.
 
+## Foundation de almacén e importaciones — implementada 2026-09-30 (sin datos importados)
+
+**Qué ya soportaba el modelo (auditoría previa, sin cambios):** `products.sku` (texto, mayúsculas, único por organización, editable en Admin, sincronizado al POS); `unit_type` `WEIGHT`/`UNIT` con venta POS end-to-end de ambos (D-042); precio por kg/unidad con vigencia y alcance global/sucursal (`product_prices`, `set_product_price`); costo con vigencia (`product_costs`, `set_product_cost`); categoría principal + adicionales (D-041); `active` (desactivar, no borrar); `inventory_role`; stock derivado del ledger `stock_movements` (gramos o unidades, sin clamp) con `get_pos_branch_stock` hacia el POS; reposición ya cuenta ventas `UNIT` (034). "Vacío kg" y "Coca Cola 2.25 L · UNIT" ya eran representables.
+
+**Lo que faltaba y se agregó (migraciones `041`–`044`, sin tocar columnas existentes ni productos de carnicería):**
+
+- Barcodes: tabla `product_barcodes` + `set_product_barcodes`/`resolve_product_barcode` (D-048). No existía ningún soporte previo.
+- Importaciones: `import_batches`, `import_rows`, `external_entity_links`, permisos `imports.read/write`, RPCs `create/stage/preview/apply/cancel/get_import_batch` con manejadores `category`, `product`, `stock_opening_balance` (D-046; `docs/IMPORTS.md`). Contrato tipado en `packages/types`.
+- Stock migrado: tipo `OPENING_BALANCE` del ledger + `stock_movements.import_batch_id` + una apertura por sucursal/producto (D-047); `log_restock_event` ignora aperturas (`CREATE OR REPLACE`, mismo cuerpo + una condición).
+- Índice `products_normalized_name_idx` (búsqueda por nombre normalizado del importador).
+
+**No cambió:** POS (Rust/SQLite/React), pricing, orden de descuentos, sync offline, RLS existente, ni ninguna RPC de ventas. El POS **no** recibe todavía barcodes (ver TASKS).
+
+**Brechas vigentes para operar un almacén completo (no resueltas en este sprint):**
+
+- No existen `customers`, `suppliers` ni listas de precio/precios por cliente. `stock_operations.supplier` es texto libre; `sales` no tiene cliente; `product_prices` sólo distingue global/sucursal (no lista ni cliente); no hay cuenta corriente.
+- Admin de stock todavía sólo-`WEIGHT` en: `get_branch_stock_status` (→ `/admin`, `/admin/branches`, `/admin/stock`, resumen de stock), selector de productos de `/admin/stock` (ingresos/mermas/ajustes), y `create_stock_transfer`/`/admin/transfers`. Reposición (`get_replenishment_plan`) y `/admin/branch-stock` sí manejan `UNIT`. Antes de importar productos `UNIT` reales hay que cerrar esto, o el stock de almacén sería invisible/no operable desde Admin.
+- Barcodes sin UX en Admin (alta sólo por RPC) ni en POS.
+
+**Validación (2026-09-30):** `pnpm check` (typecheck+lint+test) OK en los 7 proyectos. Docker Desktop no arrancó en esta sesión (mismo bloqueo histórico), así que **`supabase test db` real no corrió**. En su lugar, las 44 migraciones se aplicaron completas sobre Postgres 18 real (PGlite/WASM, con `pgcrypto` y `btree_gist`, emulando roles `authenticated`/`anon`, `auth.uid()` y `auth.users`), ejecutadas sentencia por sentencia como hace el CLI, y `supabase/tests/import_infrastructure.test.sql` (120 aserciones: barcodes, permisos, aislamiento entre organizaciones, preview con 7 clases de error, dedupe, idempotencia re-importando el mismo archivo, vínculo con producto existente + historial de precio, apertura de stock sin duplicar, preview obsoleto) pasó 120/120 con un shim de pgTAP (verificado mutando expectativas a propósito: detecta fallas). El resto de la suite pgTAP (`supabase/tests/*.test.sql`) da **idéntico** resultado con y sin las migraciones nuevas (los fallos que quedan en ese entorno emulado son los ya conocidos de `online_pos`/`shift_heartbeat_lease`/etc., p. ej. `authenticated` con privilegios por defecto). Carga: 1000 productos sobre 3000 preexistentes → preview 0,3 s, apply 2,2 s, segunda corrida del mismo archivo = 1000 `IGNORE`, 0 productos nuevos. `database.types.ts` se editó a mano (UTF-16 como lo genera `pnpm db:types` en PowerShell) con las tablas/RPC/enum nuevos; `rpc-null-overrides` ganó `create_import_batch` y `resolve_product_barcode`. `cargo test` (POS, sin cambios en Rust/SQLite) 55/55 OK.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -435,6 +456,15 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
 33. `202609230033_product_multi_category.sql`
 34. `202609230034_unit_sale_support.sql`
 35. `202609240035_card_surcharge_pricing.sql`
+36. `202609250036_card_surcharge_pack_exception_fix.sql`
+37. `202609280037_shift_heartbeat_lease.sql`
+38. `202609280038_fix_apply_employee_time_event_overload.sql`
+39. `202609280039_hide_admins_from_pos_operator_roster.sql`
+40. `202609300040_pos_branch_stock.sql`
+41. `202609300041_opening_balance_movement_type.sql`
+42. `202609300042_product_barcodes.sql`
+43. `202609300043_import_infrastructure.sql`
+44. `202609300044_import_engine.sql`
 
 ### SQLite POS
 
@@ -448,6 +478,8 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
 8. `008_product_category_assignments.sql`
 9. `009_unit_sale_support.sql`
 10. `010_card_surcharge_pricing.sql`
+11. `011_shift_heartbeat.sql`
+12. `012_branch_stock_projection.sql`
 
 ### Estado remoto
 

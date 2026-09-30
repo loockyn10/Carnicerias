@@ -109,6 +109,10 @@ Principios:
 - configuración;
 - auditoría.
 
+## Dirección de producto (2026-09-30)
+
+El sistema evoluciona para reemplazar SimplyGest y operar el negocio completo: carnicería (productos por peso) + almacén (productos por unidad con código de barras, y más adelante clientes mayoristas, precios especiales, proveedores y compras). Principios sin cambio: una sola fuente de verdad de stock (el ledger), POS offline-first, sucursal por dispositivo. Ver `docs/IMPORTS.md` y `TASKS.md`.
+
 ## Fuera de alcance actual
 
 - stock central/depósito del dueño;

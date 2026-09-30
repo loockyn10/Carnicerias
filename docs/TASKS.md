@@ -2,6 +2,27 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Validar y desplegar la foundation de almacén/importador (acción del usuario)
+
+Implementado 2026-09-30 (ver `docs/IMPORTS.md`, `CURRENT_STATE.md` "Foundation de almacén e importaciones", D-046/047/048). **No se importó ningún dato real.** Pendiente (usuario):
+
+- `git push` y `supabase db push`: aplica `202609300041`–`044` en orden (la 041 es un `ALTER TYPE` aislado a propósito; no fusionarla con la 043). Sin ellas nada cambia para el POS/Admin actuales.
+- `pnpm db:reset && pnpm db:test` donde haya Docker: corre `supabase/tests/import_infrastructure.test.sql` (120 aserciones) por primera vez contra Supabase real. Sólo se validó contra Postgres 18 (PGlite) con un shim de pgTAP. Los fallos preexistentes de otros archivos ya documentados no se relacionan.
+- `pnpm db:types` cuando haya Docker: `database.types.ts` recibió a mano las tablas/RPC/enum nuevos; comparar y, si difiere, actualizar `database.rpc-null-overrides.ts` (`create_import_batch`, `resolve_product_barcode`).
+- No hace falta instalador nuevo del POS (Rust/SQLite/React sin cambios).
+- Antes de cualquier importación real: ensayar el flujo completo en un proyecto Supabase descartable y conseguir exportaciones reales de SimplyGest (productos, rubros, códigos de barras, stock por sucursal) para escribir el mapper.
+
+## P1 — Plan de sprints para reemplazar SimplyGest (orden recomendado)
+
+Cada sprint requiere decisión explícita antes de tocar pricing, orden de descuentos, ledger, sync offline o RLS (ver `CLAUDE.md`).
+
+1. **Almacén operable en Admin (`UNIT`)**: cerrar el solo-`WEIGHT` de `get_branch_stock_status`, selector de `/admin/stock` (ingresos/mermas/ajustes) y `create_stock_transfer`/`/admin/transfers`; alta/edición de barcodes en el modal de producto (`set_product_barcodes`); vista de conteo inicial. Cierra la brecha de que el stock `UNIT` no se pueda ver ni operar desde Admin. Bloquea la importación real de almacén.
+2. **Importador real**: mapper SimplyGest en `packages/business-logic` (puro, con tests: kg→g, decimal→centavos, rubro→categoría, separar barcodes) + pantalla `/admin/imports` (subir CSV/Excel, mapeo de columnas, partir en lotes ≤1000, resumen "N nuevos / N actualizaciones / N ignorados / N errores", descarga de errores, confirmar). Orden de carga: categorías → productos (precio/costo/barcodes) → stock inicial por sucursal. Ensayo en proyecto descartable; luego producción.
+3. **POS: escaneo de código de barras**: `barcodes` dentro de cada ítem de `pull_pos_state` (aditivo; backfill de `pos_catalog_changes` para dispositivos con cursor > 0), SQLite `013_product_barcodes.sql`, resolución local offline, alta al ticket (`UNIT`: cantidad +1 por escaneo; `WEIGHT`: abre el modal de peso), scanner tipo teclado (HID) sin robar foco. Validar online, offline, restart, reconnect, idempotencia y SQLite existente (`cargo test`).
+4. **Proveedores y compras**: `suppliers` (con importación vía `external_entity_links`, ampliando su `check`), compra/recepción → movimientos `PURCHASE` + costo vigente (`product_costs`), reemplaza `stock_operations.supplier` (texto libre) sin perder el historial, cuentas a pagar si se confirma el requisito.
+5. **Clientes mayoristas y precios especiales**: `customers`, lista de precios y/o precio por cliente con vigencia append-only (mismo patrón que `product_prices`, precedencia definida), selección de cliente en el POS (con impacto offline: sincronizar clientes/listas a SQLite), cuenta corriente/cobranzas. **Requiere decisión explícita de dónde entra el precio de cliente en el orden de ajustes** (hoy: precio de lista → recargo tarjeta → promoción, D-044) y cómo interactúa con promociones.
+6. **Corte (cutover) y cierre de SimplyGest**: conteo físico como `OPENING_BALANCE`, período en paralelo con conciliación (ventas/stock/caja), definición de qué historia se migra (propuesta: ventas históricas no se importan; SimplyGest queda como archivo de sólo lectura), y evaluación de facturación/comprobantes fiscales si hoy los emite SimplyGest (no cubierta por este repo).
+
 ## P0 — Desplegar "productos con stock primero" en el POS
 
 Implementado 2026-09-30 (ver `docs/ARCHITECTURE.md`, "Stock en la pantalla de venta"). Pendiente (usuario):

@@ -8,6 +8,10 @@ Medir performance autenticada en producción, corregir únicamente cuellos demos
 
 Agregar instalación formal y modo standalone sin convertir el Admin en offline-first ni cachear agresivamente datos vivos.
 
+## Reemplazo de SimplyGest (carnicería + almacén)
+
+Foundation lista (barcodes, importador genérico, stock de apertura); plan de sprints en `TASKS.md` ("Plan de sprints para reemplazar SimplyGest"): almacén operable en Admin → importador real → escaneo en POS → proveedores/compras → clientes/listas de precio → corte.
+
 ## Futuro según necesidad comercial
 
 - completar venta POS de productos `UNIT`;

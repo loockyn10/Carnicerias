@@ -54,7 +54,8 @@ export const STOCK_MOVEMENT_TYPES = [
   "TRANSFER_OUT",
   "RETURN",
   "PRODUCTION_CONSUME",
-  "PRODUCTION_YIELD"
+  "PRODUCTION_YIELD",
+  "OPENING_BALANCE"
 ] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
@@ -111,4 +112,98 @@ export interface TicketLine {
   costCentsSnapshot?: bigint | null;
   profitMarkupBpsSnapshot?: bigint | null;
   subtotalCents: bigint;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Data import contract (see docs/IMPORTS.md). Generic and source-agnostic: a parser/mapper for a
+// specific source system (e.g. SimplyGest) turns its CSV/Excel rows into these canonical payloads
+// and sends them through the import RPCs; nothing below is specific to any source.
+// ---------------------------------------------------------------------------------------------
+
+export const IMPORT_ENTITY_TYPES = ["category", "product", "stock_opening_balance"] as const;
+export type ImportEntityType = (typeof IMPORT_ENTITY_TYPES)[number];
+
+export const IMPORT_BATCH_STATUSES = ["STAGING", "READY", "APPLIED", "CANCELLED"] as const;
+export type ImportBatchStatus = (typeof IMPORT_BATCH_STATUSES)[number];
+
+/** Classification of one staged row, decided by preview_import_batch (never by the client). */
+export const IMPORT_ROW_ACTIONS = ["CREATE", "UPDATE", "IGNORE", "ERROR"] as const;
+export type ImportRowAction = (typeof IMPORT_ROW_ACTIONS)[number];
+
+/** Keys an existing, not-yet-linked entity may be matched by (options.linkExistingBy). */
+export const IMPORT_LINK_KEYS = ["sku", "barcode", "name"] as const;
+export type ImportLinkKey = (typeof IMPORT_LINK_KEYS)[number];
+
+/** Hard cap per batch enforced by stage_import_rows; larger files are split by the uploader. */
+export const IMPORT_MAX_ROWS_PER_BATCH = 1000;
+
+export interface ImportBatchOptions {
+  /** Existing entities this batch is allowed to adopt instead of reporting a conflict. */
+  linkExistingBy?: ImportLinkKey[];
+  /** Category for NEW products whose row names none (products only). */
+  defaultCategoryId?: EntityId;
+}
+
+/** One staged row as sent to stage_import_rows. `externalId` is the source system's own code. */
+export interface ImportRowInput<TPayload> {
+  rowNumber: number;
+  externalId: string | null;
+  payload: TPayload;
+  /** The untouched source row, kept for audit/debugging. */
+  raw?: Record<string, unknown>;
+}
+
+export interface ImportCategoryPayload {
+  name: string;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+/** Money is integer cents, weight is integer grams — same units as the rest of the platform. */
+export interface ImportProductPayload {
+  name: string;
+  /** WEIGHT (Vacío, kg) or UNIT (Coca Cola 2.25 L). Forma de venta of the product. */
+  unitType: UnitType;
+  sku?: string;
+  /** Several barcodes per product are allowed; a barcode resolves to exactly one product. */
+  barcodes?: string[];
+  /** Exactly one of these may be used to name the category; else batch.defaultCategoryId. */
+  categoryExternalId?: string;
+  categoryName?: string;
+  /** Global list price: per kg for WEIGHT, per unit for UNIT. Omit to leave the price untouched. */
+  priceCents?: number;
+  costCents?: number;
+  active?: boolean;
+  inventoryRole?: ProductInventoryRole;
+}
+
+/**
+ * Opening stock of ONE branch (the batch's branch). `externalId` of the row is the PRODUCT's
+ * external code. WEIGHT products use quantityGrams, UNIT products quantityUnits — exactly one.
+ * It becomes an OPENING_BALANCE movement in the ledger, never a mutable stock column.
+ */
+export interface ImportStockOpeningPayload {
+  quantityGrams?: number;
+  quantityUnits?: number;
+  note?: string;
+}
+
+export interface ImportRowError {
+  rowNumber: number;
+  externalId: string | null;
+  reason: string;
+  message: string;
+}
+
+/** What the admin reviews before confirming ("800 filas · 650 nuevos · 120 actualizaciones …"). */
+export interface ImportPreviewSummary {
+  totalRows: number;
+  pending: number;
+  create: number;
+  update: number;
+  ignore: number;
+  error: number;
+  byReason: Record<string, number>;
+  /** First 50 error rows; the full list is queryable from import_rows. */
+  errors: ImportRowError[];
 }

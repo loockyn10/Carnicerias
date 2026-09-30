@@ -170,6 +170,31 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
+  // p_branch_id/p_file_name/p_file_sha256/p_options are `default null`/optional in SQL (only the
+  // stock opening import needs a branch); explicit null and omitted are identical there.
+  create_import_batch: {
+    Args: {
+      p_branch_id?: string | null
+      p_entity_type: string
+      p_file_name?: string | null
+      p_file_sha256?: string | null
+      p_options?: Json
+      p_source_system: string
+    }
+    Returns: string
+  }
+  // products.sku is nullable (products without an internal code); the generator types a
+  // `returns table` column from its declared SQL type only, so it cannot see that.
+  resolve_product_barcode: {
+    Args: { p_barcode: string }
+    Returns: {
+      active: boolean
+      product_id: string
+      product_name: string
+      sku: string | null
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
   set_product_price: {
     Args: {
       p_branch_id: string | null

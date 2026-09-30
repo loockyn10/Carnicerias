@@ -111,11 +111,21 @@ Un producto tiene una categoría **principal** (`products.category_id`, sigue fi
 
 Las tabs de categoría del POS **no se infieren desde los productos**: existe un directorio de categorías explícito (`get_pos_categories`/`categories` en `pull_pos_state`, tabla SQLite `catalog_categories`) con id/nombre/color/orden, independiente de qué producto sea principal de cada categoría. Una categoría con al menos una asignación (principal o secundaria) genera su tab con su propio nombre/color; una categoría sin ninguna asignación puede omitirse.
 
+## Códigos de barras
+
+- `products.sku` es el código **interno** (texto, mayúsculas, único por organización). El código del empaque que emite un escáner es un **barcode** (`product_barcodes`): varios por producto, uno sólo resuelve a un producto dentro de la organización (D-048).
+- Se normalizan (sin espacios, mayúsculas) y aceptan `A-Z 0-9 . _ -` (3 a 64 caracteres); no se valida dígito verificador (hay códigos internos de la fuente).
+- Un producto `WEIGHT` ("Vacío") y uno `UNIT` ("Coca Cola 2.25 L", con barcode) conviven en el mismo catálogo; la forma de venta decide si el ticket pide peso o cantidad (ver "Unidades y precisión").
+
 ## Stock
 
 Stock operativo = resultado del ledger/movimientos de stock.
 
 Evitar estados derivados paralelos que puedan divergir.
+
+### Stock migrado (apertura)
+
+El stock inicial traído de otro sistema es un movimiento `OPENING_BALANCE` del ledger (positivo, una vez por sucursal+producto, `WEIGHT` en gramos / `UNIT` en unidades), nunca una columna de stock actual (D-047). No es una compra ni dispara avisos de reposición. Ver `IMPORTS.md`.
 
 Operaciones relevantes deben quedar trazables.
 
