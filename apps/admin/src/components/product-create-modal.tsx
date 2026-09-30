@@ -6,7 +6,7 @@ import { ProductPricingFields } from "./product-pricing-fields";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories }: { categories: { id: string; name: string }[] }) {
+export function ProductCreateModal({ categories, branches }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[] }) {
   const [open, setOpen] = useState(false);
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
@@ -33,6 +33,16 @@ export function ProductCreateModal({ categories }: { categories: { id: string; n
             ))}
           </div>
         </div> : null}
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-sm font-bold">Se vende en</p>
+          <p className="mt-1 text-xs text-stone-500">Sólo las sucursales marcadas ven este producto en su POS.</p>
+          <div className="mt-2 flex flex-wrap gap-4 text-sm">
+            {branches.map((branch) => (
+              <label className="flex items-center gap-2" key={branch.id}><input defaultChecked name="branch_ids" type="checkbox" value={branch.id} /> {branch.name}</label>
+            ))}
+          </div>
+        </div>
+        <label className="grid gap-1 text-sm font-medium">Códigos de barras<textarea className={input} name="barcodes" placeholder="Uno por línea (opcional)" rows={2} /></label>
         <label className="grid gap-1 text-sm font-medium">Unidad<select className={input} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}><option value="WEIGHT">Peso</option><option value="UNIT">Unidad</option></select></label>
         <div className="rounded-lg bg-stone-50 p-3">
           <p className="text-sm font-bold">Se usa como</p>

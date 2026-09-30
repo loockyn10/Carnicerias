@@ -17,7 +17,8 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { buildCategoryTabs, hasStock, partitionByStock, productMatchesCategory, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
@@ -38,6 +39,9 @@ interface Branch {
   code: string;
 }
 
+/** Cards rendered per step of the product grid (see gridLimit). */
+const GRID_PAGE = 120;
+
 interface CatalogProduct {
   organizationId: string;
   branchId: string;
@@ -54,6 +58,8 @@ interface CatalogProduct {
   productSku: string | null;
   unitType: "WEIGHT" | "UNIT";
   pricePerKgCents: bigint;
+  /** Scanner codes of the product, from the synced catalog (SQLite offline). */
+  barcodes: string[];
 }
 interface DiscountRule {
   id: string;
@@ -152,6 +158,31 @@ function computeUnitLine(
   }
   const pricing = calculateSalePricing({ listPriceCents, quantity: quantityUnits, quantityDivisor: 1, paymentMethod, cashDiscountBps, promotion: null });
   return { pricing, discountRuleId: null, discountType: null, discountValue: null, promotionMode: null };
+}
+
+/** The single active PACK_FIXED_TOTAL of a product for this branch (or global), if any. */
+function findPackRule(discounts: DiscountRule[], productId: string, branchId: string): DiscountRule | null {
+  return discounts.find((rule) => rule.productId === productId && rule.promotionMode === "PACK_FIXED_TOTAL"
+    && (rule.branchId === branchId || rule.branchId === null)) ?? null;
+}
+
+/** A UNIT ticket line for `quantityUnits` of `product`. Shared by the manual quantity dialog and
+ * the barcode scan so both price (packs, card surcharge) exactly the same way. */
+function buildUnitTicketLine(
+  product: CatalogProduct, quantityUnits: number, id: string, pack: DiscountRule | null,
+  paymentMethod: PaymentMethod, cashDiscountBps: bigint
+): TicketLine {
+  const computed = computeUnitLine(product.pricePerKgCents, quantityUnits, pack, paymentMethod, cashDiscountBps);
+  return {
+    id, productId: product.productId, productName: product.productName,
+    weightGrams: 0, quantityUnits, pricePerKgCents: computed.pricing.finalPriceCents,
+    originalPricePerKgCents: product.pricePerKgCents, discountRuleId: computed.discountRuleId,
+    discountType: computed.discountType, discountValue: computed.discountValue, promotionMode: computed.promotionMode,
+    discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
+    cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
+    promotionDiscountCents: computed.pricing.promotionDiscountCents,
+    subtotalCents: computed.pricing.subtotalCents
+  };
 }
 
 function formatShiftTime(timestamp: string): string {
@@ -327,6 +358,9 @@ export default function App() {
   // sincronizado, en cuyo caso no se deshabilita nada (ver lib/catalog.ts).
   const [branchStock, setBranchStock] = useState<BranchStock>(null);
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
+  // A Central with thousands of products must not render thousands of cards on a low-end POS: the grid
+  // shows the first GRID_PAGE and grows on demand. Search and barcode scan always work on the WHOLE catalog.
+  const [gridLimit, setGridLimit] = useState(GRID_PAGE);
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [cashDiscountBps, setCashDiscountBps] = useState(0);
@@ -343,6 +377,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [errorDiagnostics, setErrorDiagnostics] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Barcode scan result ("Producto no encontrado", "Sin stock", "+1 Coca Cola"): transient, separate
+  // from `error`/`notice` so a scan never clobbers (or is clobbered by) a sale/sync message.
+  const [scanFeedback, setScanFeedback] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
+  const ticketRef = useRef<TicketLine[]>([]);
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
@@ -580,7 +618,8 @@ export default function App() {
           productName: row.productName,
           productSku: row.productSku,
           unitType: row.unitType,
-          pricePerKgCents: BigInt(row.pricePerKgCents)
+          pricePerKgCents: BigInt(row.pricePerKgCents),
+          barcodes: row.barcodes
         })));
         setCategoryDirectory(directory);
         return;
@@ -606,7 +645,9 @@ export default function App() {
             productName: row.product_name,
             productSku: row.product_sku,
             unitType: row.unit_type,
-            pricePerKgCents: BigInt(row.price_per_kg_cents)
+            pricePerKgCents: BigInt(row.price_per_kg_cents),
+            // An older server (migration not pushed yet) has no barcodes column: scans just never match.
+            barcodes: (row.barcodes as string[] | undefined) ?? []
           }))
         );
         setCategoryDirectory(categoriesData.map((row) => ({ id: row.id, name: row.name, colorHex: row.color_hex, sortOrder: row.sort_order })));
@@ -955,6 +996,10 @@ export default function App() {
   );
   const searching = search.trim() !== "";
   const showOutOfStock = searching || outOfStockOpen;
+  useEffect(() => { setGridLimit(GRID_PAGE); }, [categoryId, search, branchId]);
+  const visibleAvailable = availableProducts.slice(0, gridLimit);
+  const visibleOutOfStock = outOfStockProducts.slice(0, Math.max(0, gridLimit - visibleAvailable.length));
+  const hiddenCount = (availableProducts.length - visibleAvailable.length) + (showOutOfStock ? outOfStockProducts.length - visibleOutOfStock.length : 0);
 
   const ticketTotal = useMemo(
     () => sumMoney(ticket.map((line) => line.subtotalCents)),
@@ -1061,8 +1106,7 @@ export default function App() {
   // por producto/sucursal — ver product_weight_discounts_pack_active_idx).
   const packRuleForSelectedProduct = useMemo(() => {
     if (!selectedProduct) return null;
-    return discounts.find((rule) => rule.productId === selectedProduct.productId && rule.promotionMode === "PACK_FIXED_TOTAL"
-      && (rule.branchId === branchId || rule.branchId === null)) ?? null;
+    return findPackRule(discounts, selectedProduct.productId, branchId);
   }, [discounts, selectedProduct, branchId]);
 
   /**
@@ -1091,17 +1135,7 @@ export default function App() {
       let line: TicketLine;
       if (isUnit) {
         if (!Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
-        const computed = computeUnitLine(selectedProduct.pricePerKgCents, quantityInput, packRuleForSelectedProduct, method, BigInt(cashDiscountBps));
-        line = {
-          id: editingLineId ?? crypto.randomUUID(), productId: selectedProduct.productId, productName: selectedProduct.productName,
-          weightGrams: 0, quantityUnits: quantityInput, pricePerKgCents: computed.pricing.finalPriceCents,
-          originalPricePerKgCents: selectedProduct.pricePerKgCents, discountRuleId: computed.discountRuleId,
-          discountType: computed.discountType, discountValue: computed.discountValue, promotionMode: computed.promotionMode,
-          discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
-          cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
-          promotionDiscountCents: computed.pricing.promotionDiscountCents,
-          subtotalCents: computed.pricing.subtotalCents
-        };
+        line = buildUnitTicketLine(selectedProduct, quantityInput, editingLineId ?? crypto.randomUUID(), packRuleForSelectedProduct, method, BigInt(cashDiscountBps));
       } else {
         const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
         const pack = sellAsPack ? packRuleForSelectedProduct : null;
@@ -1136,6 +1170,64 @@ export default function App() {
     event.preventDefault();
     commitSelectedProductLine();
   }
+
+  // ---- Barcode scanner (USB/HID keyboard wedge) ----------------------------------------------
+  // Resolves against the branch catalog already loaded from SQLite (only products enabled in this
+  // branch are in it) and the synced stock snapshot: no Supabase call per scan, works offline.
+  ticketRef.current = ticket;
+  const barcodeIndex = useMemo(() => buildBarcodeIndex(catalog), [catalog]);
+
+  function addScannedUnit(product: CatalogProduct) {
+    // Read/write through a ref so two scans landing before React re-renders both count.
+    const current = ticketRef.current;
+    const existing = current.find((line) => line.productId === product.productId && line.quantityUnits != null);
+    const quantity = (existing?.quantityUnits ?? 0) + 1;
+    const line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps));
+    const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
+    ticketRef.current = next;
+    setTicket(next);
+    setError(null);
+    setScanFeedback({ tone: "ok", text: `${product.productName} ×${String(quantity)}` });
+  }
+
+  function handleScan(rawCode: string) {
+    const outcome = resolveScan(barcodeIndex, branchStock, rawCode);
+    if (!outcome) return;
+    if (outcome.kind === "NOT_FOUND") { setScanFeedback({ tone: "warn", text: "Producto no encontrado" }); return; }
+    if (outcome.kind === "NO_STOCK") { setScanFeedback({ tone: "warn", text: `${outcome.product.productName}: Sin stock` }); return; }
+    if (outcome.kind === "OPEN_WEIGHT") { setScanFeedback(null); openWeight(outcome.product); return; }
+    addScannedUnit(outcome.product);
+  }
+
+  const scanHandlerRef = useRef(handleScan);
+  scanHandlerRef.current = handleScan;
+  const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
+    && !selectedProduct && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !loading;
+
+  useEffect(() => {
+    if (!scannerEnabled) return;
+    let buffer = emptyScanBuffer();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
+      // Somebody typing in a field on purpose (search box, weight, PIN…) is never a scan here;
+      // the search box has its own Enter handling below.
+      if (isEditableTarget(event.target)) { buffer = emptyScanBuffer(); return; }
+      const result = feedScanKey(buffer, event.key, event.timeStamp);
+      buffer = result.buffer;
+      if (result.scan !== null) {
+        event.preventDefault(); // the terminating Enter must not activate a focused button
+        scanHandlerRef.current(result.scan);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [scannerEnabled]);
+
+  useEffect(() => {
+    if (!scanFeedback) return;
+    const timeout = window.setTimeout(() => setScanFeedback(null), scanFeedback.tone === "warn" ? 3_500 : 1_800);
+    return () => window.clearTimeout(timeout);
+  }, [scanFeedback]);
 
   async function completeSale() {
     // Guard defensivo: no confiar sólo en el disabled del botón. Sin método de
@@ -1495,6 +1587,7 @@ export default function App() {
         </div>
       ) : null}
       {notice ? <div className="pos-toast" role="status">✓ {notice}</div> : null}
+      {scanFeedback ? <div className={`pos-toast ${scanFeedback.tone === "warn" ? "pos-toast-warn" : ""}`} role="status">{scanFeedback.tone === "ok" ? "✓ " : "⚠ "}{scanFeedback.text}</div> : null}
 
       <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
         <section className="pos-catalog min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
@@ -1509,10 +1602,18 @@ export default function App() {
             placeholder="Buscar producto o SKU…"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              // A scanner that typed into the focused search box: resolve it as a scan and clear the box.
+              const code = normalizeBarcode(search);
+              if (!code) return;
+              if (barcodeIndex.has(code)) { event.preventDefault(); setSearch(""); handleScan(code); }
+              else if (/^\d{6,}$/.test(code) && filteredProducts.length === 0) { event.preventDefault(); setSearch(""); setScanFeedback({ tone: "warn", text: "Producto no encontrado" }); }
+            }}
           />
           <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
             {branchStock !== null && availableProducts.length > 0 ? <h3 className="col-span-full text-xs font-black uppercase tracking-widest text-stone-400">Disponibles</h3> : null}
-            {availableProducts.map((product) => renderProductCard(product, false))}
+            {visibleAvailable.map((product) => renderProductCard(product, false))}
             {outOfStockProducts.length > 0 ? (
               searching ? (
                 <h3 className="col-span-full mt-2 text-xs font-black uppercase tracking-widest text-stone-500">Sin stock ({outOfStockProducts.length})</h3>
@@ -1527,7 +1628,8 @@ export default function App() {
                 </button>
               )
             ) : null}
-            {showOutOfStock ? outOfStockProducts.map((product) => renderProductCard(product, true)) : null}
+            {showOutOfStock ? visibleOutOfStock.map((product) => renderProductCard(product, true)) : null}
+            {hiddenCount > 0 ? <button className="col-span-full rounded-xl border border-stone-700 px-4 py-3 text-sm font-bold text-stone-300 hover:bg-stone-800" onClick={() => setGridLimit((limit) => limit + GRID_PAGE)} type="button">Mostrar más ({String(hiddenCount)} restantes) — o buscá por nombre / escaneá el código</button> : null}
           </div>
           {!loading && filteredProducts.length === 0 ? <p className="mt-10 text-center text-stone-500">No hay productos disponibles.</p> : null}
         </section>

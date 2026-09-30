@@ -48,6 +48,9 @@ insert into public.categories (id, organization_id, name, slug) values
 insert into public.products (id, organization_id, category_id, name, slug, unit_type) values
   ('75000000-0000-4000-8000-000000000001', '72000000-0000-4000-8000-000000000001', '74000000-0000-4000-8000-000000000001', 'Vacío Offline', 'vacio-offline', 'WEIGHT'),
   ('75000000-0000-4000-8000-000000000002', '72000000-0000-4000-8000-000000000001', '74000000-0000-4000-8000-000000000001', 'Asado Offline', 'asado-offline', 'WEIGHT');
+-- Legacy semantics for this fixture: every product is carried by every branch (surtido).
+insert into public.branch_product_assortment (organization_id, branch_id, product_id)
+select p.organization_id, b.id, p.id from public.products p join public.branches b on b.organization_id = p.organization_id;
 insert into public.product_prices (organization_id, product_id, price_cents, valid_from) values
   ('72000000-0000-4000-8000-000000000001', '75000000-0000-4000-8000-000000000001', 1200000, '2026-01-01T00:00:00Z'),
   ('72000000-0000-4000-8000-000000000001', '75000000-0000-4000-8000-000000000002', 1000000, '2026-01-01T00:00:00Z');

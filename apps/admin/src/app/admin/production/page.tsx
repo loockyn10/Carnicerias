@@ -18,6 +18,7 @@ import {
   type ProductionBatchStatus,
   type ProductionYieldSummary
 } from "../../../lib/production";
+import { fetchAllRows } from "../../../lib/fetch-all";
 import { createClient } from "../../../lib/supabase/server";
 import { removeProductionBatchOutputAction } from "../actions";
 
@@ -57,12 +58,12 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const [batchesResult, branchesResult, productsResult, settingsResult] = await Promise.all([
     perf.measure("batches", supabase.rpc("list_production_batches", { p_limit: 50, ...(statusFilter ? { p_status: statusFilter } : {}) })),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
-    perf.measure("products", supabase.from("products").select("id, name, sku, inventory_role, unit_type, approx_weight_grams").eq("organization_id", context.organizationId).eq("active", true).order("name")),
+    perf.measure("products", fetchAllRows((from, to) => supabase.from("products").select("id, name, sku, inventory_role, unit_type, approx_weight_grams").eq("organization_id", context.organizationId).eq("active", true).order("name").order("id").range(from, to))),
     perf.measure("productionBranch", supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).single())
   ]);
   const batches = jsonArray<ProductionBatchListItem>(batchesResult.data);
   const branches = branchesResult.data ?? [];
-  const products = productsResult.data ?? [];
+  const products = productsResult.data;
   const productionBranchId = settingsResult.data?.production_branch_id ?? null;
   const productionBranch = branches.find((branch) => branch.id === productionBranchId) ?? null;
   // Only a purchased weighed input can be desposted (media res, etc.); an output, though, can be

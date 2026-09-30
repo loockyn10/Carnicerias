@@ -9,9 +9,11 @@ const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
 interface BranchFormProps {
   branch?: { id: string; name: string; code: string; address: string | null; active: boolean };
+  /** New branches only: existing branches whose product assortment (surtido) can be copied. */
+  copyFromOptions?: { id: string; name: string }[];
 }
 
-export function BranchForm({ branch }: BranchFormProps) {
+export function BranchForm({ branch, copyFromOptions = [] }: BranchFormProps) {
   const router = useRouter();
   const [state, action, pending] = useActionState(saveBranchFormAction, {} as BranchFormState);
 
@@ -42,6 +44,13 @@ export function BranchForm({ branch }: BranchFormProps) {
     <label className="grid gap-1 text-sm font-bold">Dirección <span className="font-normal text-stone-500">(opcional)</span>
       <input className={input} defaultValue={branch?.address ?? ""} maxLength={200} name="address" />
     </label>
+    {!branch ? <label className="grid gap-1 text-sm font-bold">Copiar el surtido de <span className="font-normal text-stone-500">(opcional)</span>
+      <select className={input} defaultValue="" name="copy_assortment_from">
+        <option value="">Empezar sin productos habilitados</option>
+        {copyFromOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+      </select>
+      <span className="font-normal text-stone-500">Sin surtido el POS de la sucursal queda vacío hasta habilitar productos.</span>
+    </label> : null}
     <label className="flex items-center gap-2 text-sm font-bold">
       <input defaultChecked={branch?.active ?? true} name="active" type="checkbox" /> Activa
     </label>

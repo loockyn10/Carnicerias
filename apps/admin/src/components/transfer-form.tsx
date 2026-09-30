@@ -1,42 +1,26 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useState } from "react";
 
 import { createStockTransferFormAction, type StockTransferFormState } from "../app/admin/actions";
+import { ProductLines, type ProductLine } from "./product-lines";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
-interface Row { key: string; productId: string; quantityKg: string }
-
-function newRow(productId = "", quantityKg = ""): Row {
-  return { key: crypto.randomUUID(), productId, quantityKg };
-}
-
-export function TransferForm({ branches, products, initialSourceBranchId, initialItems }: {
+/**
+ * Transfer between branches. Each line is a product plus its quantity in the product own unit
+ * (kg for a weighed product, whole units for a counted one). The product picker only offers
+ * products enabled in the DESTINATION branch — stock must not land where the product is not sold.
+ */
+export function TransferForm({ branches, initialSourceBranchId, initialLines }: {
   branches: { id: string; name: string }[];
-  products: { id: string; name: string }[];
   initialSourceBranchId?: string | undefined;
-  initialItems?: { productId: string; weightGrams: number }[] | undefined;
+  initialLines?: ProductLine[] | undefined;
 }) {
-  const formRef = useRef<HTMLFormElement>(null);
   const [state, action, pending] = useActionState(createStockTransferFormAction, {} as StockTransferFormState);
-  const [rows, setRows] = useState<Row[]>(() =>
-    initialItems?.length
-      ? initialItems.map((item) => newRow(item.productId, (item.weightGrams / 1_000).toString()))
-      : [newRow()]
-  );
+  const [destinationId, setDestinationId] = useState("");
 
-  useEffect(() => {
-    if (state.transferId && !state.error) {
-      formRef.current?.reset();
-      setRows([newRow()]);
-    }
-  }, [state.error, state.transferId]);
-
-  const addRow = () => setRows((current) => [...current, newRow()]);
-  const removeRow = (key: string) => setRows((current) => (current.length > 1 ? current.filter((row) => row.key !== key) : current));
-
-  return <form action={action} className="mt-4 grid gap-3 rounded-2xl border bg-white p-5 shadow-sm" ref={formRef}>
+  return <form action={action} className="mt-4 grid gap-3 rounded-2xl border bg-white p-5 shadow-sm" key={state.transferId ?? "transfer"}>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="grid gap-1 text-sm font-bold">Origen
         <select className={input} defaultValue={initialSourceBranchId ?? ""} name="source_branch_id" required>
@@ -45,7 +29,7 @@ export function TransferForm({ branches, products, initialSourceBranchId, initia
         </select>
       </label>
       <label className="grid gap-1 text-sm font-bold">Destino
-        <select className={input} name="destination_branch_id" required>
+        <select className={input} name="destination_branch_id" onChange={(event) => setDestinationId(event.target.value)} required value={destinationId}>
           <option value="">Elegí una sucursal…</option>
           {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
         </select>
@@ -54,24 +38,7 @@ export function TransferForm({ branches, products, initialSourceBranchId, initia
 
     <div className="grid gap-2">
       <p className="text-sm font-bold">Productos</p>
-      {rows.map((row) => <div className="flex flex-wrap items-end gap-2" key={row.key}>
-        <label className="grid flex-1 gap-1 text-xs font-medium text-stone-500">Producto
-          <select className={input} defaultValue={row.productId} name="product_id" required>
-            <option value="">Elegí un producto…</option>
-            {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-          </select>
-        </label>
-        <label className="grid gap-1 text-xs font-medium text-stone-500">Peso (kg)
-          <input className={`${input} w-28`} defaultValue={row.quantityKg} min="0.001" name="quantity_kg" required step="0.001" type="number" />
-        </label>
-        <button
-          className="rounded-lg border border-stone-300 px-3 py-2 text-xs font-bold text-stone-500 disabled:opacity-40"
-          disabled={rows.length <= 1}
-          onClick={() => removeRow(row.key)}
-          type="button"
-        >Quitar</button>
-      </div>)}
-      <button className="mt-1 w-fit rounded-lg border border-dashed border-stone-300 px-3 py-2 text-sm font-bold text-stone-600 hover:bg-stone-50" onClick={addRow} type="button">+ Agregar línea</button>
+      <ProductLines branchId={destinationId || null} initialLines={initialLines ?? []} key={destinationId} />
     </div>
 
     <label className="grid gap-1 text-sm font-bold">Notas (opcional)

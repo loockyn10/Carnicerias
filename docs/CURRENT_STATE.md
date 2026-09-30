@@ -412,10 +412,33 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
 **Brechas vigentes para operar un almacén completo (no resueltas en este sprint):**
 
 - No existen `customers`, `suppliers` ni listas de precio/precios por cliente. `stock_operations.supplier` es texto libre; `sales` no tiene cliente; `product_prices` sólo distingue global/sucursal (no lista ni cliente); no hay cuenta corriente.
-- Admin de stock todavía sólo-`WEIGHT` en: `get_branch_stock_status` (→ `/admin`, `/admin/branches`, `/admin/stock`, resumen de stock), selector de productos de `/admin/stock` (ingresos/mermas/ajustes), y `create_stock_transfer`/`/admin/transfers`. Reposición (`get_replenishment_plan`) y `/admin/branch-stock` sí manejan `UNIT`. Antes de importar productos `UNIT` reales hay que cerrar esto, o el stock de almacén sería invisible/no operable desde Admin.
-- Barcodes sin UX en Admin (alta sólo por RPC) ni en POS.
+- *(Resuelto en la sección siguiente: stock `UNIT` en Admin, alta de barcodes en el modal de producto y scanner en el POS.)*
 
 **Validación (2026-09-30):** `pnpm check` (typecheck+lint+test) OK en los 7 proyectos. Docker Desktop no arrancó en esta sesión (mismo bloqueo histórico), así que **`supabase test db` real no corrió**. En su lugar, las 44 migraciones se aplicaron completas sobre Postgres 18 real (PGlite/WASM, con `pgcrypto` y `btree_gist`, emulando roles `authenticated`/`anon`, `auth.uid()` y `auth.users`), ejecutadas sentencia por sentencia como hace el CLI, y `supabase/tests/import_infrastructure.test.sql` (120 aserciones: barcodes, permisos, aislamiento entre organizaciones, preview con 7 clases de error, dedupe, idempotencia re-importando el mismo archivo, vínculo con producto existente + historial de precio, apertura de stock sin duplicar, preview obsoleto) pasó 120/120 con un shim de pgTAP (verificado mutando expectativas a propósito: detecta fallas). El resto de la suite pgTAP (`supabase/tests/*.test.sql`) da **idéntico** resultado con y sin las migraciones nuevas (los fallos que quedan en ese entorno emulado son los ya conocidos de `online_pos`/`shift_heartbeat_lease`/etc., p. ej. `authenticated` con privilegios por defecto). Carga: 1000 productos sobre 3000 preexistentes → preview 0,3 s, apply 2,2 s, segunda corrida del mismo archivo = 1000 `IGNORE`, 0 productos nuevos. `database.types.ts` se editó a mano (UTF-16 como lo genera `pnpm db:types` en PowerShell) con las tablas/RPC/enum nuevos; `rpc-null-overrides` ganó `create_import_batch` y `resolve_product_barcode`. `cargo test` (POS, sin cambios en Rust/SQLite) 55/55 OK.
+
+## Central como almacén: surtido por sucursal, scanner POS y stock `UNIT` en Admin — implementado 2026-09-30 (ronda 2, sin datos importados)
+
+**Auditoría de `branch_product_stock_settings`:** `(branch_id, product_id, minimum_stock_grams, target_stock_grams)` es una *política de reposición*; sus filas sólo existen si alguien configuró un umbral (la ausencia = "sin política") y nada del POS ni de los catálogos la leía para decidir qué se vende. No puede representar "habilitado en la sucursal" (un producto habilitado sin política no tendría fila, y una política no debería habilitar nada). Tampoco sirve "tener stock" (un producto agotado desaparecería). Se implementó la relación mínima correcta: `branch_product_assortment` (D-049).
+
+**Qué se hizo (migraciones `045`–`047` Postgres, `013` SQLite):**
+
+- **Surtido:** tabla + backfill (todo producto × toda sucursal existente queda habilitado: las carnicerías conservan su catálogo) + RPC `set_product_branches` (conjunto por producto, idempotente, avisa si queda stock), `set_branch_products` (masivo), `copy_branch_assortment`. Cambios de surtido viajan por `pos_catalog_changes` (con `branch_id`). `pull_pos_state`, `get_pos_catalog` y `get_pos_categories` filtran por surtido y entregan `barcodes`. Admin: "Se vende en" y "Códigos de barras" en crear/administrar producto; filtro "se vende en" y columna en el listado; alta de sucursal con copia de surtido.
+- **Importador (046):** los lotes de productos exigen sucursal destino; los productos nuevos se habilitan sólo ahí (Central); el stock inicial sólo al ledger de su sucursal y exige el producto habilitado (`NOT_IN_ASSORTMENT`). Categorías siguen sin sucursal.
+- **Scanner POS:** SQLite `013` (`catalog_product_barcodes`), Rust (`apply_catalog_pull_inner`/`local_catalog_inner` con barcodes; un producto que sale del surtido pierde sus códigos), `lib/catalog.ts` (`normalizeBarcode`, `buildBarcodeIndex`, `resolveScan`), `lib/scanner.ts` (ráfaga HID por cadencia) y `App.tsx` (suma 1 a la línea `UNIT`, `WEIGHT` abre el peso, "Sin stock", "Producto no encontrado"; también si el escáner escribe en el buscador). El grid renderiza por tramos de 120 tarjetas. Sin llamadas a Supabase por escaneo.
+- **Stock `UNIT` en Admin (047, D-051):** `branch_stock_status` (vista) y `get_branch_stock_status` ahora con `unit_type`, surtido, filtros y paginación; `get_branch_stock_summary`; `get_replenishment_plan` sólo con productos habilitados; transferencias `WEIGHT`+`UNIT` con destino habilitado y totales separados (`total_units`); `/admin/stock` (tabla filtrada y paginada, selector de producto con búsqueda/escaneo, líneas de compra, cantidades en kg o unidades según el producto), `/admin/transfers`, dashboards (`/admin`, `/admin/branches`, compare, attention, detalle de sucursal) sin cargar el catálogo entero. Helpers puros en `packages/business-logic/src/stock-quantity.ts`.
+- **Catálogo grande en Admin:** listado de productos paginado en SQL (`list_products_page`, búsqueda por nombre/SKU/barcode), `search_products`, `fetchAllRows` donde se necesitan todas las filas (Reposición, Stock por sucursal, selectores de Desposte y Promociones).
+- Efecto colateral: la tabla de `/admin/stock` mostraba todo como "NORMAL" porque comparaba contra estados que la RPC no devuelve (bug preexistente documentado más arriba); ahora usa `stockPriority`.
+
+**Brechas / decisiones pendientes:**
+
+- **Ruido de alertas al importar Central:** "crítico = sin stock" (DOMAIN_RULES, Reposición) es la regla vigente y no se tocó; los productos de almacén habilitados y sin stock aparecerán como críticos/sin stock en Admin (dashboard, Centro de atención, Reposición). Hace falta decidir una regla de "nunca stockeado/sin señal" antes de importar el catálogo completo.
+- Desposte y Promociones siguen cargando todos los productos en un `<select>` (con `fetchAllRows`: sin pérdida de filas pero pesado con miles); migrarlos al selector con búsqueda.
+- El editor masivo de precios opera sobre la página actual del listado (filtrá y paginá).
+- El servidor no valida el surtido al sincronizar una venta ya hecha offline (decisión deliberada, D-049).
+- Un escaneo no limita la cantidad al stock disponible (igual que la carga manual: sólo exige stock > 0); el terminador `Tab` no está soportado (sólo Enter).
+- Smoke físico con escáner USB real y con el instalador de Windows/Linux: pendiente (ver TASKS).
+
+**Validación (2026-09-30, ronda 2):** `pnpm check` OK en los 7 proyectos (POS 56 tests, business-logic 83, admin 40, sync 10); `pnpm --filter @carnicerias/admin build` y `@carnicerias/pos build` OK; `cargo test` 60/60 (5 nuevos de barcodes/surtido offline, `schema_migrations` = 13). Docker Desktop volvió a no estar operativo: `supabase test db` real no corrió. Postgres real sólo vía PGlite (PG 18) con shim de pgTAP: las 47 migraciones aplican; `branch_assortment.test.sql` (96 aserciones: surtido, sync incremental, `removedProductIds`, tabs, stock `UNIT`, transferencias mixtas, importador con destino, búsqueda/paginación, permisos y aislamiento entre organizaciones) 96/96 y `import_infrastructure.test.sql` 120/120 (verificados con mutaciones); el resto de la suite pgTAP da el mismo resultado que antes de estos cambios salvo los fixtures que debieron declarar el surtido (`branch_stock_status_rpc`, `offline_sync`, `online_pos`, `stock_transfers`) y una aserción nueva. UI del POS verificada en navegador real (Vite + Supabase simulado): Central muestra Vacío y Coca disponibles y Agua (habilitada, sin stock) como "Sin stock"; Avenida sólo Vacío y sin tab "Bebidas"; ráfaga de teclas de escáner: Coca suma ×1/×2, código desconocido → "Producto no encontrado", Agua → "Sin stock" sin agregar, Vacío abre el diálogo de peso, tipeo lento no se toma como escaneo, el buscador con escáner funciona y hubo **0 llamadas RPC** durante los escaneos. Admin sin verificación en navegador (requiere sesión real); sólo typecheck/lint/build. `database.types.ts` se editó a mano otra vez (UTF-16).
 
 ## Migraciones locales confirmadas
 
@@ -465,6 +488,9 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
 42. `202609300042_product_barcodes.sql`
 43. `202609300043_import_infrastructure.sql`
 44. `202609300044_import_engine.sql`
+45. `202609300045_branch_assortment.sql`
+46. `202609300046_import_destination_branch.sql`
+47. `202609300047_stock_unit_admin_and_catalog_paging.sql`
 
 ### SQLite POS
 
@@ -480,6 +506,7 @@ Sprint de UX/navegación puro: sin cambios de reglas de negocio, queries (salvo 
 10. `010_card_surcharge_pricing.sql`
 11. `011_shift_heartbeat.sql`
 12. `012_branch_stock_projection.sql`
+13. `013_product_barcodes.sql`
 
 ### Estado remoto
 

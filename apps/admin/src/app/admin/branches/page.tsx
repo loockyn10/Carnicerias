@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { StatusBadge } from "../../../components/admin-ui";
 import { requireAdminContext } from "../../../lib/admin";
-import { localDayStart, stockPriority } from "../../../lib/multibranch";
+import { localDayStart } from "../../../lib/multibranch";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
 
@@ -25,7 +25,7 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const [branchesResult, salesResult, stockResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
-    perf.measure("stock", supabase.rpc("get_branch_stock_status"))
+    perf.measure("stock", supabase.rpc("get_branch_stock_summary"))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error].find(Boolean);
   if (error) { perf.flush(); return <main className="mx-auto max-w-6xl p-8 text-red-800">No se pudieron cargar las sucursales: {error.message}</main>; }
@@ -40,8 +40,8 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   for (const stock of stockResult.data ?? []) {
     const row = rows.get(stock.branch_id);
     if (!row) continue;
-    const priority = stockPriority(stock.stock_status, stock.current_stock_grams, stock.minimum_stock_grams);
-    if (priority.rank === 0) row.out += 1; else if (priority.rank === 1) row.low += 1;
+    row.out = stock.out_of_stock_count;
+    row.low = stock.low_stock_count;
   }
   const visible = [...rows.values()]
     .filter((row) => row.name.toLocaleLowerCase("es").includes(q))

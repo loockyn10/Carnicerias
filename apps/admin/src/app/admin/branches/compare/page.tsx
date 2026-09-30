@@ -2,7 +2,7 @@ import { formatCurrency, formatWeight } from "@carnicerias/business-logic";
 import Link from "next/link";
 
 import { requireAdminContext } from "../../../../lib/admin";
-import { localDayStart, stockPriority } from "../../../../lib/multibranch";
+import { localDayStart } from "../../../../lib/multibranch";
 import { createClient } from "../../../../lib/supabase/server";
 import { createPerfLogger } from "../../../../lib/perf";
 
@@ -24,7 +24,7 @@ export default async function CompareBranchesPage({ searchParams }: { searchPara
   const [branchesResult, salesResult, stockResult, wasteResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("sales", supabase.from("sales").select("id, branch_id, total_cents, total_weight_grams").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, days))),
-    perf.measure("stock", supabase.from("branch_stock_status").select("branch_id, current_stock_grams, minimum_stock_grams, stock_status").eq("organization_id", context.organizationId)),
+    perf.measure("stock", supabase.rpc("get_branch_stock_summary")),
     perf.measure("waste", supabase.from("stock_movements").select("branch_id, quantity_grams").eq("organization_id", context.organizationId).eq("type", "WASTE").gte("occurred_at", localDayStart(context.timezone, days)))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error, wasteResult.error].find(Boolean);
@@ -38,7 +38,7 @@ export default async function CompareBranchesPage({ searchParams }: { searchPara
   for (const sale of salesResult.data ?? []) { const row = rows.get(sale.branch_id); if (row) { row.revenue += sale.total_cents; row.grams += sale.total_weight_grams; row.tickets += 1; } }
   for (const item of itemsResult.data as unknown as { sale_id: string; discount_cents: number }[]) { const row = rows.get(saleBranch.get(item.sale_id) ?? ""); if (row) row.discounts += item.discount_cents; }
   for (const movement of wasteResult.data ?? []) { const row = rows.get(movement.branch_id); if (row) row.waste += Math.abs(movement.quantity_grams); }
-  for (const stock of stockResult.data ?? []) { const row = rows.get(stock.branch_id ?? ""); if (!row) continue; const priority = stockPriority(stock.stock_status, stock.current_stock_grams ?? 0, stock.minimum_stock_grams ?? 0); if (priority.rank === 0) row.out += 1; else if (priority.rank === 1) row.low += 1; }
+  for (const stock of stockResult.data ?? []) { const row = rows.get(stock.branch_id); if (!row) continue; row.out = stock.out_of_stock_count; row.low = stock.low_stock_count; }
   const compared = [...rows.values()].sort((a, b) => {
     const averageA = a.tickets ? Math.round(a.revenue / a.tickets) : 0; const averageB = b.tickets ? Math.round(b.revenue / b.tickets) : 0;
     const values: Record<Sort, [string | number, string | number]> = { name: [a.name, b.name], revenue: [a.revenue, b.revenue], weight: [a.grams, b.grams], tickets: [a.tickets, b.tickets], average: [averageA, averageB], discounts: [a.discounts, b.discounts], waste: [a.waste, b.waste], out: [a.out, b.out], low: [a.low, b.low] };

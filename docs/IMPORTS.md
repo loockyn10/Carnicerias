@@ -14,7 +14,7 @@ Estado: **infraestructura implementada 2026-09-30 (migraciones `202609300041`–
 
 | Tabla | Rol |
 |---|---|
-| `import_batches` | Una corrida/archivo. `source_system`, `entity_type` (`category` · `product` · `stock_opening_balance`), `branch_id` (sólo stock), `file_sha256`, `options`, `status` (`STAGING → READY → APPLIED` \| `CANCELLED`), `preview_summary`, `applied_summary`. Historial: no se borra. |
+| `import_batches` | Una corrida/archivo. `source_system`, `entity_type` (`category` · `product` · `stock_opening_balance`), `branch_id` (**sucursal destino**: obligatoria en `product` y `stock_opening_balance`, prohibida en `category`), `file_sha256`, `options`, `status` (`STAGING → READY → APPLIED` \| `CANCELLED`), `preview_summary`, `applied_summary`. Historial: no se borra. |
 | `import_rows` | Filas en staging: `raw` (fila original, auditoría), `payload` (canónico), `content_hash` (sha256 del payload), y tras el preview `action` (`CREATE`/`UPDATE`/`IGNORE`/`ERROR`) + `reason_code` + `message`. |
 | `external_entity_links` | `(organization_id, source_system, entity_type, external_id) → internal_id` + `content_hash` de la última importación aplicada. **La PK es la garantía anti-duplicado.** Hoy `category` y `product`; `customer`/`supplier` se agregan ampliando el `check`. |
 | `product_barcodes` | Ver D-048. |
@@ -42,7 +42,9 @@ Límite por lote: 1000 filas (las RPC corren bajo el `statement_timeout` de la A
 
 - **category**: `{ name, sortOrder?, active? }`.
 - **product**: `{ name, unitType: WEIGHT|UNIT, sku?, barcodes?[], categoryExternalId? | categoryName?, priceCents?, costCents?, active?, inventoryRole? }`. Dinero en centavos enteros. Precio/costo omitidos = no se tocan. `WEIGHT` → precio por kg; `UNIT` → por unidad (convención existente de `product_prices`). `slug` lo genera la base. Sin categoría resoluble ni `options.defaultCategoryId` → `ERROR`.
-- **stock_opening_balance** (lote de **una sucursal**): `externalId` = código externo del **producto**; `{ quantityGrams }` para `WEIGHT` o `{ quantityUnits }` para `UNIT` (exactamente uno; el tipo incorrecto es `ERROR UNIT_MISMATCH`, atrapa el clásico kg-vs-unidades).
+- **stock_opening_balance** (lote de **una sucursal**, que además debe tener el producto habilitado): `externalId` = código externo del **producto**; `{ quantityGrams }` para `WEIGHT` o `{ quantityUnits }` para `UNIT` (exactamente uno; el tipo incorrecto es `ERROR UNIT_MISMATCH`, atrapa el clásico kg-vs-unidades).
+
+**Sucursal destino y surtido (D-049):** para la migración `destinationBranch = CENTRAL`. Un lote de `product` exige la sucursal; cada producto que **crea** queda habilitado sólo en ella (Avenida/Janssen no ven nada nuevo); un producto que sólo **actualiza** conserva su surtido. El `stock_opening_balance` escribe únicamente el ledger de la sucursal del lote (nunca toca otras) y marca `NOT_IN_ASSORTMENT` si el producto no está habilitado ahí.
 
 `options`: `linkExistingBy` (`product`: `sku`/`barcode`/`name`; `category`: `name`) y `defaultCategoryId`. Opciones desconocidas se rechazan.
 
@@ -65,4 +67,4 @@ Una importación **no** pisa lo editado a mano si el archivo no cambió (hash ig
 
 ## Pendiente para importar de verdad (ver `TASKS.md`)
 
-Mapper SimplyGest (CSV/Excel → payloads) + UI `/admin/imports`; barcodes en el pull del POS/SQLite; pantallas de stock/transferencias para `UNIT`; clientes/proveedores/listas de precio. Antes de cualquier importación real: probar el flujo completo en un proyecto Supabase descartable.
+Mapper SimplyGest (CSV/Excel → payloads) + UI `/admin/imports`; regla de alertas para productos de almacén sin stock; clientes/proveedores/listas de precio. (Hechos en la ronda 2: surtido por sucursal, barcodes en el pull del POS/SQLite + scanner, stock/transferencias `UNIT` en Admin.) Antes de cualquier importación real: probar el flujo completo en un proyecto Supabase descartable.

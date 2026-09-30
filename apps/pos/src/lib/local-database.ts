@@ -53,6 +53,7 @@ export interface LocalCatalogRow {
   unitType: "WEIGHT" | "UNIT";
   pricePerKgCents: string;
   priceValidFrom: string;
+  barcodes: string[];
 }
 
 /** The POS tab directory row — see get_local_categories / apply_catalog_pull in the Tauri

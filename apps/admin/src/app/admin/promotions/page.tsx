@@ -2,6 +2,7 @@ import { PromotionModal, type PromotionValue } from "../../../components/promoti
 import { PromotionsList, type PromotionRow } from "../../../components/promotions-list";
 import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
+import { fetchAllRows } from "../../../lib/fetch-all";
 import { createClient } from "../../../lib/supabase/server";
 
 const PRODUCTOS_TABS = [
@@ -61,7 +62,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const supabase = await createClient();
   const commercial = supabase as unknown as CommercialClient;
   const [productsResult, branchesResult, categoriesResult, discountsResult] = await Promise.all([
-    supabase.from("products").select("id, name, unit_type, active, category_id").eq("organization_id", context.organizationId).order("name"),
+    fetchAllRows((from, to) => supabase.from("products").select("id, name, unit_type, active, category_id").eq("organization_id", context.organizationId).order("name").order("id").range(from, to)),
     supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
     supabase.from("categories").select("id, name").eq("organization_id", context.organizationId),
     commercial.from("product_weight_discounts")
@@ -69,7 +70,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
       .eq("organization_id", context.organizationId).order("valid_from", { ascending: false })
   ]);
   const error = [productsResult.error, branchesResult.error, categoriesResult.error, discountsResult.error].find(Boolean);
-  const products = productsResult.data ?? [];
+  const products = productsResult.data;
   // Un producto activo, sea WEIGHT o UNIT, es elegible: la modalidad "Desde cierta cantidad"
   // sigue restringida a WEIGHT (sin cambios) pero "Pack a precio total" ya soporta ambos tipos —
   // ver promotion-modal.tsx. Éste era el motivo real por el que un producto UNIT recién creado

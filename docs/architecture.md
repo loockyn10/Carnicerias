@@ -145,7 +145,10 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 
 ## Catálogo de almacén, barcodes e importaciones
 
-- Un mismo catálogo sirve carnicería (`WEIGHT`, kg) y almacén (`UNIT`, ej. "Coca Cola 2.25 L"); `products.unit_type` decide la forma de venta. `products.sku` = código interno; los códigos de escáner viven en `product_barcodes` (varios por producto, único por organización; D-048). El POS aún no los recibe: el camino previsto es `barcodes` dentro de cada ítem de `pull_pos_state` → tabla SQLite `catalog_product_barcodes` → resolución local offline. Los cambios de barcodes ya se registran como `PRODUCT` en `pos_catalog_changes` para el cursor incremental.
+- Un mismo catálogo sirve carnicería (`WEIGHT`, kg) y almacén (`UNIT`, ej. "Coca Cola 2.25 L"); `products.unit_type` decide la forma de venta. `products.sku` = código interno; los códigos de escáner viven en `product_barcodes` (varios por producto, único por organización; D-048).
+- **Surtido por sucursal** (D-049): `branch_product_assortment`. `pull_pos_state` y `get_pos_catalog` sólo envían los productos habilitados en la sucursal del dispositivo y las tabs de categorías de ese surtido; los cambios de surtido y de barcodes se registran como `PRODUCT` (con `branch_id` para el surtido) en `pos_catalog_changes`, así que viajan por el cursor incremental existente (un producto que deja el surtido llega en `removedProductIds`). Sin segunda vía de sync.
+- **Scanner POS** (D-050): cada ítem del pull lleva `barcodes`; Rust los guarda en SQLite (`catalog_product_barcodes`, migración `013`, reemplazo por producto en cada pull) y `get_local_catalog` los devuelve; React arma un índice código→producto en memoria (`apps/pos/src/lib/catalog.ts`: `resolveScan`) y detecta la ráfaga del escáner por cadencia de teclas (`lib/scanner.ts`). Stock = snapshot `catalog_branch_stock` ya existente. Todo local: sin red por escaneo.
+- **Catálogo grande**: Admin pagina/filtra en SQL (`list_products_page`, `search_products`, `get_branch_stock_status`, `get_branch_stock_summary`) y usa `fetchAllRows` donde necesita todas las filas (PostgREST trunca en silencio en 1000); el POS renderiza el grid por tramos de 120 tarjetas (búsqueda y escaneo operan sobre todo el catálogo).
 - Importaciones (D-046, detalle en `docs/IMPORTS.md`): `import_batches`/`import_rows`/`external_entity_links` + RPCs `create/stage/preview/apply/cancel_import_batch`; el mapeo de fuente a payload canónico es externo a la base, los payloads/resumen están tipados en `packages/types`. Toda escritura de negocio reutiliza las RPCs existentes.
 - Stock migrado = movimiento `OPENING_BALANCE` del ledger (D-047), una vez por sucursal+producto; no hay columna de stock actual.
 - Los checks ejecutados con un shim de Postgres (PGlite) están descritos en `CURRENT_STATE.md`; la validación oficial sigue siendo `pnpm db:reset && pnpm db:test`.
@@ -154,7 +157,7 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–044 y SQLite 001–012. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–047 y SQLite 001–013. El estado remoto sigue pendiente de verificación autenticada.
 
 ## PWA y balanza
 

@@ -3,6 +3,7 @@ import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createPerfLogger } from "../../../lib/perf";
 import { calculateReplenishment } from "../../../lib/replenishment";
+import { fetchAllRows } from "../../../lib/fetch-all";
 import { createClient } from "../../../lib/supabase/server";
 
 const STOCK_TABS = [
@@ -18,7 +19,7 @@ export default async function ReplenishmentPage() {
   perf.mark("adminContext", contextStartedAt);
   const supabase = await createClient();
   const [planResult, branchesResult, settingsResult] = await Promise.all([
-    perf.measure("replenishmentPlan", supabase.rpc("get_replenishment_plan", { p_days: 7 })),
+    perf.measure("replenishmentPlan", fetchAllRows((from, to) => supabase.rpc("get_replenishment_plan", { p_days: 7 }).range(from, to))),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("settings", supabase.from("organizations").select("replenishment_target_days").eq("id", context.organizationId).single())
   ]);
@@ -29,7 +30,7 @@ export default async function ReplenishmentPage() {
   }
 
   const transformStartedAt = performance.now();
-  const rows = (planResult.data ?? []).map((row) => calculateReplenishment({
+  const rows = planResult.data.map((row) => calculateReplenishment({
     branchId: row.branch_id,
     branchName: row.branch_name,
     productId: row.product_id,

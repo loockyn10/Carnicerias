@@ -64,3 +64,59 @@ export function partitionByStock<T extends { productId: string }>(
   for (const product of products) (hasStock(stock, product.productId) ? available : outOfStock).push(product);
   return { available, outOfStock };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Barcode scan -> product resolution (LOCAL, offline: only the synced catalog and the synced stock
+// snapshot are read; there is never a server call per scan). The catalog handed in here is the
+// device branch catalog, i.e. it ALREADY contains only the products enabled in this branch
+// (surtido): a product not enabled here is indistinguishable from an unknown one, by design.
+// ---------------------------------------------------------------------------------------------
+
+/** Same normalization the server applies to stored barcodes (trim, drop whitespace, upper-case). */
+export function normalizeBarcode(raw: string): string | null {
+  const normalized = raw.replace(/\s+/g, "").toUpperCase();
+  return normalized === "" ? null : normalized;
+}
+
+export interface BarcodeProductLike {
+  productId: string;
+  unitType: "WEIGHT" | "UNIT";
+  barcodes: readonly string[];
+}
+
+/** barcode -> product for the whole branch catalog (one pass; O(1) per scan afterwards). */
+export function buildBarcodeIndex<T extends BarcodeProductLike>(products: readonly T[]): ReadonlyMap<string, T> {
+  const index = new Map<string, T>();
+  for (const product of products) {
+    for (const barcode of product.barcodes) {
+      const normalized = normalizeBarcode(barcode);
+      if (normalized) index.set(normalized, product);
+    }
+  }
+  return index;
+}
+
+export type ScanOutcome<T> =
+  /** No product of this branch has that code. */
+  | { kind: "NOT_FOUND"; code: string }
+  /** Enabled here but the branch stock is <= 0: shown as "Sin stock", never added. */
+  | { kind: "NO_STOCK"; product: T }
+  /** UNIT product with stock: each scan adds exactly one unit. */
+  | { kind: "ADD_UNIT"; product: T }
+  /** WEIGHT product: keep the existing weigh flow (open the weight dialog); a scan never turns a
+   * weighed product into a per-unit sale. */
+  | { kind: "OPEN_WEIGHT"; product: T };
+
+/** `null` for an empty/blank code (nothing to resolve, not even an error). */
+export function resolveScan<T extends BarcodeProductLike>(
+  index: ReadonlyMap<string, T>,
+  stock: BranchStock,
+  rawCode: string
+): ScanOutcome<T> | null {
+  const code = normalizeBarcode(rawCode);
+  if (code === null) return null;
+  const product = index.get(code);
+  if (!product) return { kind: "NOT_FOUND", code };
+  if (!hasStock(stock, product.productId)) return { kind: "NO_STOCK", product };
+  return product.unitType === "UNIT" ? { kind: "ADD_UNIT", product } : { kind: "OPEN_WEIGHT", product };
+}

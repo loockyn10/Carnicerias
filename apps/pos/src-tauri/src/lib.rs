@@ -21,6 +21,7 @@ const UNIT_SALE_SUPPORT_SCHEMA: &str = include_str!("../migrations/009_unit_sale
 const CARD_SURCHARGE_PRICING_SCHEMA: &str = include_str!("../migrations/010_card_surcharge_pricing.sql");
 const SHIFT_HEARTBEAT_SCHEMA: &str = include_str!("../migrations/011_shift_heartbeat.sql");
 const BRANCH_STOCK_PROJECTION_SCHEMA: &str = include_str!("../migrations/012_branch_stock_projection.sql");
+const PRODUCT_BARCODES_SCHEMA: &str = include_str!("../migrations/013_product_barcodes.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -61,6 +62,8 @@ struct LocalCatalogRow {
     unit_type: String,
     price_per_kg_cents: String,
     price_valid_from: String,
+    /// Normalized barcodes of the product (scanner codes), for LOCAL scan resolution.
+    barcodes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,6 +127,8 @@ struct CatalogPullRow {
     product_active: bool,
     price_per_kg_cents: String,
     price_valid_from: String,
+    #[serde(default)]
+    barcodes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -453,6 +458,14 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
+    let product_barcodes_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 13)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !product_barcodes_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(PRODUCT_BARCODES_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (13, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
     let timestamp = now();
     connection
         .execute(
@@ -594,6 +607,11 @@ fn get_local_runtime(state: State<'_, DatabaseState>) -> Result<LocalRuntime, St
 #[tauri::command]
 fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Result<Vec<LocalCatalogRow>, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    local_catalog_inner(&connection, &branch_id)
+}
+
+fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<LocalCatalogRow>, String> {
+    let branch_id = branch_id.to_string();
     let branch_name: String = connection
         .query_row("select branch_name from local_device where singleton = 1 and branch_id = ?1", [&branch_id], |row| row.get(0))
         .map_err(|_| "Device is not assigned to this branch".to_string())?;
@@ -610,6 +628,19 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
     for pair in assignment_rows {
         let (product_id, category_id) = pair.map_err(|error| error.to_string())?;
         category_ids_by_product.entry(product_id).or_default().push(category_id);
+    }
+
+    // Barcodes of every product, fetched once (same approach as the category assignments above).
+    let mut barcodes_by_product: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut barcode_statement = connection
+        .prepare("select product_id, barcode from catalog_product_barcodes order by barcode")
+        .map_err(|error| error.to_string())?;
+    let barcode_rows = barcode_statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for pair in barcode_rows {
+        let (product_id, barcode) = pair.map_err(|error| error.to_string())?;
+        barcodes_by_product.entry(product_id).or_default().push(barcode);
     }
 
     let mut statement = connection
@@ -631,6 +662,7 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
                 .get(&product_id)
                 .cloned()
                 .unwrap_or_else(|| vec![principal_category_id.clone()]);
+            let barcodes = barcodes_by_product.get(&product_id).cloned().unwrap_or_default();
             Ok(LocalCatalogRow {
                 organization_id: row.get(0)?,
                 branch_id: row.get(1)?,
@@ -646,6 +678,7 @@ fn get_local_catalog(state: State<'_, DatabaseState>, branch_id: String) -> Resu
                 unit_type: row.get(9)?,
                 price_per_kg_cents: row.get::<_, i64>(10)?.to_string(),
                 price_valid_from: row.get(11)?,
+                barcodes,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -677,6 +710,15 @@ fn apply_catalog_pull(
     user_email: String,
 ) -> Result<(), String> {
     let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    apply_catalog_pull_inner(&mut connection, &pull, &profile_id, &user_email)
+}
+
+fn apply_catalog_pull_inner(
+    connection: &mut Connection,
+    pull: &CatalogPullPayload,
+    profile_id: &str,
+    user_email: &str,
+) -> Result<(), String> {
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     let timestamp = now();
 
@@ -694,6 +736,11 @@ fn apply_catalog_pull(
     for product_id in &pull.removed_product_ids {
         transaction
             .execute("update catalog_products set active = 0, updated_at = ?2 where id = ?1", params![product_id, timestamp])
+            .map_err(|error| error.to_string())?;
+        // A product that left this branch assortment must stop resolving from a scan. If it is
+        // enabled again later, the pull that re-sends it re-sends its barcodes too.
+        transaction
+            .execute("delete from catalog_product_barcodes where product_id = ?1", params![product_id])
             .map_err(|error| error.to_string())?;
     }
 
@@ -739,6 +786,21 @@ fn apply_catalog_pull(
         // Full membership set for this product, delivered on every pull that touches it (not a
         // delta) — replace what's stored for just this product, same idempotent pattern as the
         // rest of this function.
+        // Barcodes: full set for this product, same replace-per-product pattern. A code that moved
+        // to another product (the server guarantees one owner) is re-pointed by the upsert.
+        transaction
+            .execute("delete from catalog_product_barcodes where product_id = ?1", params![row.product_id])
+            .map_err(|error| error.to_string())?;
+        for barcode in &row.barcodes {
+            transaction
+                .execute(
+                    "insert into catalog_product_barcodes(barcode, product_id) values (?1, ?2)
+                     on conflict(barcode) do update set product_id = excluded.product_id",
+                    params![barcode, row.product_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
         let category_ids = if row.category_ids.is_empty() { vec![row.category_id.clone()] } else { row.category_ids.clone() };
         transaction
             .execute("delete from catalog_product_categories where product_id = ?1", params![row.product_id])
@@ -1649,7 +1711,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 13);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -1701,7 +1763,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 13);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -2345,5 +2407,138 @@ mod tests {
         foreign.branch_id = "other-branch".into();
         assert!(apply_branch_stock_inner(&mut connection, &foreign).is_err());
         assert!(!local_branch_stock_inner(&connection, "branch").unwrap().snapshot_applied);
+    }
+    // ---- barcodes / assortment in the offline catalog --------------------------------------------
+
+    fn catalog_row(product_id: &str, name: &str, unit_type: &str, barcodes: &[&str]) -> CatalogPullRow {
+        CatalogPullRow {
+            organization_id: "org".into(),
+            branch_id: "central".into(),
+            branch_name: "Central".into(),
+            category_id: "cat".into(),
+            category_name: "Almacen".into(),
+            category_color_hex: None,
+            category_sort_order: 0,
+            category_active: true,
+            category_ids: vec!["cat".into()],
+            product_id: product_id.into(),
+            product_name: name.into(),
+            product_sku: None,
+            unit_type: unit_type.into(),
+            product_active: true,
+            price_per_kg_cents: "450000".into(),
+            price_valid_from: "2026-09-30T00:00:00Z".into(),
+            barcodes: barcodes.iter().map(|code| (*code).to_string()).collect(),
+        }
+    }
+
+    fn pull(catalog: Vec<CatalogPullRow>, removed: &[&str]) -> CatalogPullPayload {
+        CatalogPullPayload {
+            cursor: 1,
+            server_time: "2026-09-30T00:00:00Z".into(),
+            authorization_expires_at: "2026-10-01T00:00:00Z".into(),
+            organization_id: "org".into(),
+            branch_id: "central".into(),
+            branch_name: "Central".into(),
+            device_status: "ACTIVE".into(),
+            role_name: "admin".into(),
+            catalog,
+            removed_product_ids: removed.iter().map(|id| (*id).to_string()).collect(),
+            categories: vec![CatalogDirectoryCategory { id: "cat".into(), name: "Almacen".into(), color_hex: None, sort_order: 0 }],
+        }
+    }
+
+    fn catalog_fixture() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection
+    }
+
+    fn barcodes_of(connection: &Connection, product_id: &str) -> Vec<String> {
+        local_catalog_inner(connection, "central")
+            .unwrap()
+            .into_iter()
+            .find(|row| row.product_id == product_id)
+            .map(|row| row.barcodes)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn catalog_pull_stores_barcodes_locally_and_the_local_catalog_returns_them() {
+        let mut connection = catalog_fixture();
+        apply_catalog_pull_inner(
+            &mut connection,
+            &pull(vec![
+                catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010", "7790895000027"]),
+                catalog_row("vacio", "Vacio", "WEIGHT", &[]),
+            ], &[]),
+            "profile", "admin@example.test",
+        ).unwrap();
+        // Everything a scan needs is now in SQLite: no server call is involved from here on.
+        assert_eq!(barcodes_of(&connection, "coca"), vec!["7790895000010".to_string(), "7790895000027".to_string()]);
+        assert!(barcodes_of(&connection, "vacio").is_empty());
+        let catalog = local_catalog_inner(&connection, "central").unwrap();
+        assert_eq!(catalog.iter().find(|row| row.product_id == "coca").unwrap().unit_type, "UNIT");
+        assert_eq!(catalog.iter().find(|row| row.product_id == "vacio").unwrap().unit_type, "WEIGHT");
+    }
+
+    #[test]
+    fn a_product_that_leaves_the_branch_assortment_stops_being_in_the_local_catalog_and_its_barcodes_go() {
+        let mut connection = catalog_fixture();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010"])], &[]), "profile", "admin@example.test").unwrap();
+        assert!(!barcodes_of(&connection, "coca").is_empty());
+
+        // The server disables the product for this branch: it arrives in removedProductIds.
+        apply_catalog_pull_inner(&mut connection, &pull(vec![], &["coca"]), "profile", "admin@example.test").unwrap();
+        assert!(local_catalog_inner(&connection, "central").unwrap().iter().all(|row| row.product_id != "coca"));
+        assert_eq!(connection.query_row("select count(*) from catalog_product_barcodes", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+
+        // Enabled again later: the pull that re-sends the product re-sends its barcodes.
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010"])], &[]), "profile", "admin@example.test").unwrap();
+        assert_eq!(barcodes_of(&connection, "coca"), vec!["7790895000010".to_string()]);
+    }
+
+    #[test]
+    fn an_incremental_pull_replaces_the_barcode_set_of_the_changed_product_only() {
+        let mut connection = catalog_fixture();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![
+            catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010", "7790895000027"]),
+            catalog_row("agua", "Agua 500 cc", "UNIT", &["7791111111111"]),
+        ], &[]), "profile", "admin@example.test").unwrap();
+        // Only Coca changed on the server: one barcode was removed, another added.
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010", "7790895000034"])], &[]), "profile", "admin@example.test").unwrap();
+        assert_eq!(barcodes_of(&connection, "coca"), vec!["7790895000010".to_string(), "7790895000034".to_string()]);
+        assert_eq!(barcodes_of(&connection, "agua"), vec!["7791111111111".to_string()]);
+    }
+
+    #[test]
+    fn a_barcode_that_moves_to_another_product_is_repointed_not_duplicated() {
+        let mut connection = catalog_fixture();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010"])], &[]), "profile", "admin@example.test").unwrap();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("coca-light", "Coca Cola Light 2.25 L", "UNIT", &["7790895000010"])], &[]), "profile", "admin@example.test").unwrap();
+        assert_eq!(barcodes_of(&connection, "coca-light"), vec!["7790895000010".to_string()]);
+        assert_eq!(connection.query_row("select count(*) from catalog_product_barcodes where barcode = '7790895000010'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_pull_from_an_older_server_without_barcodes_still_applies() {
+        // `barcodes` is #[serde(default)]: a payload that predates the field must deserialize.
+        let payload = serde_json::json!({
+            "cursor": 1, "serverTime": "2026-09-30T00:00:00Z", "authorizationExpiresAt": "2026-10-01T00:00:00Z",
+            "organizationId": "org", "branchId": "central", "branchName": "Central", "deviceStatus": "ACTIVE", "roleName": "admin",
+            "catalog": [{
+                "organizationId": "org", "branchId": "central", "branchName": "Central", "categoryId": "cat", "categoryName": "Almacen",
+                "categoryColorHex": null, "categorySortOrder": 0, "categoryActive": true, "categoryIds": ["cat"],
+                "productId": "vacio", "productName": "Vacio", "productSku": null, "unitType": "WEIGHT", "productActive": true,
+                "pricePerKgCents": "1200000", "priceValidFrom": "2026-09-30T00:00:00Z"
+            }],
+            "removedProductIds": [],
+            "categories": [{ "id": "cat", "name": "Almacen", "colorHex": null, "sortOrder": 0 }]
+        });
+        let parsed: CatalogPullPayload = serde_json::from_value(payload).unwrap();
+        let mut connection = catalog_fixture();
+        apply_catalog_pull_inner(&mut connection, &parsed, "profile", "admin@example.test").unwrap();
+        assert!(barcodes_of(&connection, "vacio").is_empty());
+        assert_eq!(local_catalog_inner(&connection, "central").unwrap().len(), 1);
     }
 }

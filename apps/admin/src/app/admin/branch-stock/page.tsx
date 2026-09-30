@@ -3,6 +3,7 @@ import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { buildBranchStockRows, type BranchStockProductMeta } from "../../../lib/branch-stock";
 import { createPerfLogger } from "../../../lib/perf";
+import { fetchAllRows } from "../../../lib/fetch-all";
 import { createClient } from "../../../lib/supabase/server";
 
 const STOCK_TABS = [
@@ -23,10 +24,10 @@ export default async function BranchStockPage() {
   // use — current/minimum/target quantities come straight from stock_levels
   // and are unaffected by p_days. 1 is the RPC's minimum accepted value.
   const [planResult, branchesResult, categoriesResult, productsResult, devicesResult] = await Promise.all([
-    perf.measure("plan", supabase.rpc("get_replenishment_plan", { p_days: 1 })),
+    perf.measure("plan", fetchAllRows((from, to) => supabase.rpc("get_replenishment_plan", { p_days: 1 }).range(from, to))),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("categories", supabase.from("categories").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("sort_order")),
-    perf.measure("products", supabase.from("products").select("id, category_id, sku").eq("organization_id", context.organizationId).eq("active", true)),
+    perf.measure("products", fetchAllRows((from, to) => supabase.from("products").select("id, category_id, sku").eq("organization_id", context.organizationId).eq("active", true).order("id").range(from, to))),
     perf.measure("devices", supabase.from("pos_devices").select("branch_id, last_seen_at").eq("organization_id", context.organizationId))
   ]);
 
@@ -57,10 +58,10 @@ export default async function BranchStockPage() {
   }));
 
   const productMeta = new Map<string, BranchStockProductMeta>(
-    (productsResult.data ?? []).map((product) => [product.id, { sku: product.sku, categoryId: product.category_id }])
+    productsResult.data.map((product) => [product.id, { sku: product.sku, categoryId: product.category_id }])
   );
   const rows = buildBranchStockRows(
-    (planResult.data ?? []).map((entry) => ({
+    planResult.data.map((entry) => ({
       branchId: entry.branch_id,
       productId: entry.product_id,
       productName: entry.product_name,

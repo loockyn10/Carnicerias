@@ -8,6 +8,10 @@ export {
 } from "./measurements";
 export type { AppliedWeightDiscount, WeightDiscountRule } from "./measurements";
 export {
+  formatStockQuantity, parseStockQuantityInput, stockQuantityToInput, stockUnitLabel
+} from "./stock-quantity";
+export type { ParseStockQuantityOptions, StockUnit } from "./stock-quantity";
+export {
   calculatePriceFormation, calculateSalePricing, calculateWeightPackSalePricing,
   calculateUnitPackSalePricing, divideRoundHalfUp, validateBasisPoints
 } from "./pricing";

@@ -135,6 +135,9 @@ export interface CatalogPullRow {
   productActive: boolean;
   pricePerKgCents: string;
   priceValidFrom: string;
+  /** Normalized barcodes of the product (scanner codes). Optional: a server that predates them
+   * simply omits the key. Stored in SQLite so scans resolve locally/offline. */
+  barcodes?: string[];
 }
 
 /** The POS category tab directory: every active category with at least one product assignment

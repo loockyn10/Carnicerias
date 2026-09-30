@@ -117,6 +117,20 @@ Las tabs de categoría del POS **no se infieren desde los productos**: existe un
 - Se normalizan (sin espacios, mayúsculas) y aceptan `A-Z 0-9 . _ -` (3 a 64 caracteres); no se valida dígito verificador (hay códigos internos de la fuente).
 - Un producto `WEIGHT` ("Vacío") y uno `UNIT` ("Coca Cola 2.25 L", con barcode) conviven en el mismo catálogo; la forma de venta decide si el ticket pide peso o cantidad (ver "Unidades y precisión").
 
+## Surtido por sucursal
+
+Cada sucursal vende sólo los productos **habilitados** en ella (`branch_product_assortment`, D-049). Es independiente del stock y de la política de stock (mínimo/objetivo):
+
+- habilitado + stock > 0 → visible y vendible en el POS;
+- habilitado + stock <= 0 → visible como "Sin stock" (no se elimina del catálogo de la sucursal);
+- no habilitado → no aparece en el POS de esa sucursal, ni en su stock/reposición/alertas de Admin.
+
+Central = carnicería + almacén; Avenida y Janssen = sólo carnicerías: lo importado desde SimplyGest se habilita sólo en Central. Un producto se habilita/deshabilita desde Admin (Productos → Administrar → "Se vende en"); deshabilitar conserva el historial y el stock (ver D-049).
+
+## Lectura de código de barras en el POS
+
+Un escaneo resuelve **localmente** contra el catálogo de la sucursal (D-050): `UNIT` con stock suma 1 unidad; `WEIGHT` abre el flujo de peso existente; sin stock no se agrega; desconocido/no habilitado = "Producto no encontrado".
+
 ## Stock
 
 Stock operativo = resultado del ledger/movimientos de stock.
@@ -236,7 +250,8 @@ Un producto puede ser `RAW_MATERIAL` (sólo insumo de desposte), `SELLABLE` (só
 Una transferencia mueve stock ya existente de una sucursal origen a una sucursal destino, dentro de la misma organización. No es lo mismo que un desposte: un desposte transforma insumo en productos; una transferencia sólo mueve stock ya producido. No se combinan en una sola operación: primero todo el resultado de un desposte queda en la sucursal productiva, después se distribuye.
 
 - Reutiliza el ledger existente `stock_movements` con los tipos `TRANSFER_OUT` (negativo, origen) y `TRANSFER_IN` (positivo, destino), ya definidos en el enum desde el sprint de ventas pero sin usar hasta ahora. No se crea un segundo modelo de inventario.
-- Alcance de este sprint: sólo productos `WEIGHT`. No mezclar kg y unidades en una misma transferencia (ver "Unidades y precisión").
+- Productos `WEIGHT` (en gramos) y `UNIT` (en unidades enteras). kg y unidades se totalizan por separado, nunca juntos (ver "Unidades y precisión"; D-051).
+- El producto debe estar habilitado (surtido) en la sucursal destino.
 - Origen y destino deben ser sucursales distintas de la misma organización.
 - Un mismo producto no puede repetirse en los ítems de una misma transferencia.
 - Debe validarse que la sucursal de origen tenga stock suficiente para cada ítem antes de aplicar la transferencia; la validación crítica vive en el servidor (RPC), no sólo en la UI.

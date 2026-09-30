@@ -53,3 +53,12 @@ insert into public.product_prices (
   ('50000000-0000-4000-8000-000000000008', '20000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000008', null, 690000, '2026-01-01T00:00:00Z')
 on conflict (id) do nothing;
 
+-- Surtido: the demo butcher shops carry every demo product (a product is only visible in the POS of
+-- the branches where it is enabled, see branch_product_assortment).
+insert into public.branch_product_assortment (organization_id, branch_id, product_id)
+select p.organization_id, b.id, p.id
+from public.products p
+join public.branches b on b.organization_id = p.organization_id
+where p.organization_id = '20000000-0000-4000-8000-000000000001'
+on conflict (branch_id, product_id) do nothing;
+

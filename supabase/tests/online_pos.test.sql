@@ -83,6 +83,10 @@ insert into public.product_prices (organization_id, product_id, branch_id, price
   ('62000000-0000-4000-8000-000000000001', '65000000-0000-4000-8000-000000000001', null, 1200000, '2026-01-01T00:00:00Z'),
   ('62000000-0000-4000-8000-000000000001', '65000000-0000-4000-8000-000000000001', '63000000-0000-4000-8000-000000000001', 1300000, '2026-01-01T00:00:00Z');
 
+-- Legacy semantics for this fixture: every product is carried by every branch (surtido).
+insert into public.branch_product_assortment (organization_id, branch_id, product_id)
+select p.organization_id, b.id, p.id from public.products p join public.branches b on b.organization_id = p.organization_id;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '61000000-0000-4000-8000-000000000002', true);
 select set_config('request.jwt.claims', '{"sub":"61000000-0000-4000-8000-000000000002","role":"authenticated"}', true);

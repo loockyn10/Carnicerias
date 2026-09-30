@@ -8,7 +8,7 @@ import { BranchForm } from "./branch-form";
 import { BranchLifecyclePanel } from "./branch-lifecycle-panel";
 import { ForceHardNavigation } from "./force-hard-navigation";
 import { BranchSummary } from "./branch-summary";
-import { BranchStockPanel } from "./branch-stock-panel";
+import { BRANCH_STOCK_PAGE_SIZE, BranchStockPanel, type BranchStockFilter } from "./branch-stock-panel";
 import { BranchTabs } from "./branch-tabs";
 import { requireAdminContext } from "../lib/admin";
 import { localDayStart, stockPriority } from "../lib/multibranch";
@@ -27,7 +27,8 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult] = await Promise.all([
     supabase.from("branches").select("id, name, code, address, active").eq("organization_id", context.organizationId).eq("id", id).maybeSingle(),
     supabase.rpc("get_admin_dashboard", { p_branch_id: id }),
-    supabase.from("branch_stock_status").select("product_id, product_name, current_stock_grams, minimum_stock_grams, target_stock_grams, suggested_replenishment_grams, stock_status").eq("organization_id", context.organizationId).eq("branch_id", id),
+    // Alerts only (most urgent first): the whole branch catalog is never fetched for the summary.
+    supabase.rpc("get_branch_stock_status", { p_branch_id: id, p_status: "ALERTS", p_limit: 50 }),
     supabase.from("sales").select("id, completed_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 6)),
     supabase.from("sales").select("id, total_cents, total_weight_grams, completed_at, created_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").order("completed_at", { ascending: false }).limit(6),
     supabase.from("stock_movements").select("product_id, type, quantity_grams, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).in("type", ["PURCHASE", "RETURN", "ADJUSTMENT_POSITIVE", "TRANSFER_IN"]).order("occurred_at", { ascending: false }).limit(6),
@@ -48,8 +49,21 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   if (metricsSalesResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudieron cargar las métricas: {metricsSalesResult.error.message}</main>;
   const settingsResult = await supabase.from("branch_product_stock_settings").select("product_id").eq("organization_id", context.organizationId).eq("branch_id", id);
   if (settingsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la configuración de stock: {settingsResult.error.message}</main>;
+  const summaryResult = await supabase.rpc("get_branch_stock_summary");
+  if (summaryResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el resumen de stock: {summaryResult.error.message}</main>;
+  const stockSearch = typeof query.q === "string" ? query.q.trim() : "";
+  const stockFilter: BranchStockFilter = ["critical", "low", "available"].includes(typeof query.filter === "string" ? query.filter : "") ? query.filter as BranchStockFilter : "all";
+  const stockPage = Math.max(1, Number.parseInt(typeof query.page === "string" ? query.page : "1", 10) || 1);
+  const stockPageStatus = { all: null, critical: "OUT_OF_STOCK", low: "LOW_STOCK", available: "AVAILABLE" }[stockFilter];
+  const stockPageResult = tab === "stock"
+    ? await supabase.rpc("get_branch_stock_status", { p_branch_id: id, p_limit: BRANCH_STOCK_PAGE_SIZE, p_offset: (stockPage - 1) * BRANCH_STOCK_PAGE_SIZE, ...(stockSearch ? { p_search: stockSearch } : {}), ...(stockPageStatus ? { p_status: stockPageStatus } : {}) })
+    : { data: [], error: null };
+  if (stockPageResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el stock: {stockPageResult.error.message}</main>;
+  const restockProductIds = [...new Set((restocksResult.data ?? []).map((movement) => movement.product_id))];
+  const restockProductsResult = restockProductIds.length ? await supabase.from("products").select("id, name").in("id", restockProductIds) : { data: [], error: null };
+  const restockProductNames = new Map((restockProductsResult.data ?? []).map((row) => [row.id, row.name]));
   const saleIds = (weekSalesResult.data ?? []).map((sale) => sale.id);
-  const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, product_id, product_name_snapshot, weight_grams, subtotal_cents, discount_cents").in("sale_id", saleIds) : { data: [], error: null };
+  const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, product_id, product_name_snapshot, weight_grams, quantity_units, subtotal_cents, discount_cents").in("sale_id", saleIds) : { data: [], error: null };
   if (itemsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el detalle comercial: {itemsResult.error.message}</main>;
 
   const dashboard = dashboardResult.data as unknown as DashboardData;
@@ -58,34 +72,42 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const grossCents = todayRows.reduce((sum, sale) => sum + sale.total_cents, 0);
   const previousGrossCents = previousRows.reduce((sum, sale) => sum + sale.total_cents, 0);
   const today = { grossCents, previousGrossCents, salesCount: todayRows.length, averageTicketCents: todayRows.length ? Math.round(grossCents / todayRows.length) : 0, kilograms: todayRows.reduce((sum, sale) => sum + sale.total_weight_grams, 0) / 1000 };
-  const stock = (stockResult.data ?? []).map((row) => { const current = row.current_stock_grams ?? 0; const minimum = row.minimum_stock_grams ?? 0; return { ...row, current, minimum, target: row.target_stock_grams ?? 0, suggested: row.suggested_replenishment_grams ?? 0, priority: stockPriority(row.stock_status, current, minimum) }; }).sort((a, b) => a.priority.rank - b.priority.rank || a.current - b.current || (a.product_name ?? "").localeCompare(b.product_name ?? "", "es"));
+  const stock = (stockResult.data ?? []).map((row) => ({
+    ...row, current: row.current_stock_grams, minimum: row.minimum_stock_grams, target: row.target_stock_grams,
+    suggested: row.suggested_replenishment_grams, priority: stockPriority(row.stock_status, row.current_stock_grams, row.minimum_stock_grams)
+  }));
   const configuredProducts = new Set(settingsResult.data.map((setting) => setting.product_id));
-  const stockByProduct = new Map(stock.map((row) => [row.product_id, row]));
+  const branchSummary = summaryResult.data.find((row) => row.branch_id === id);
   const urgent = stock.filter((row) => row.priority.rank < 2);
-  const normalStock = stock.filter((row) => row.priority.rank === 2).length;
-  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number | null; subtotal_cents: number; discount_cents: number }[];
+  const stockCounts = {
+    out: branchSummary?.out_of_stock_count ?? 0, low: branchSummary?.low_stock_count ?? 0,
+    normal: Math.max(0, (branchSummary?.product_count ?? 0) - (branchSummary?.out_of_stock_count ?? 0) - (branchSummary?.low_stock_count ?? 0))
+  };
+  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number | null; quantity_units: number | null; subtotal_cents: number; discount_cents: number }[];
   const productTotals = new Map<string, { name: string; grams: number; cents: number }>();
+  // Units/grams sold per product in the week (a UNIT item counts its units, a WEIGHT item its grams): the daily rate of the stock tab.
+  const soldQuantityByProduct = new Map<string, number>();
   // weight_grams is null for a UNIT sale item — this widget only ranks by revenue (cents), so a
   // UNIT product's "grams" here stays 0 rather than crashing; it just isn't reflected in this
   // particular weight tally (kept out of scope: this is a small informational widget, not the
   // rentabilidad/analytics ranking, which already ranks purely by revenue/cost cents).
-  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams ?? 0; total.cents += item.subtotal_cents; productTotals.set(item.product_id, total); }
+  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams ?? 0; total.cents += item.subtotal_cents; productTotals.set(item.product_id, total); soldQuantityByProduct.set(item.product_id, (soldQuantityByProduct.get(item.product_id) ?? 0) + (item.weight_grams ?? item.quantity_units ?? 0)); }
   const topProducts = [...productTotals.values()].sort((a, b) => b.cents - a.cents).slice(0, 5);
   const todaySales = new Set((weekSalesResult.data ?? []).filter((sale) => (sale.completed_at ?? "") >= localDayStart(context.timezone)).map((sale) => sale.id));
   const todayDiscounts = items.filter((item) => todaySales.has(item.sale_id)).reduce((sum, item) => sum + item.discount_cents, 0);
-  const restocks = (restocksResult.data ?? []).map((movement) => ({ ...movement, productName: stockByProduct.get(movement.product_id)?.product_name ?? "Producto" }));
+  const restocks = (restocksResult.data ?? []).map((movement) => ({ ...movement, productName: restockProductNames.get(movement.product_id) ?? "Producto" }));
   const recentSales = recentSalesResult.data ?? [];
   const recentWaste = wasteResult.data ?? [];
   const change = today.previousGrossCents ? ((today.grossCents - today.previousGrossCents) / today.previousGrossCents) * 100 : null;
 
   return <BranchDetailFrame modal={modal} status={branchResult.data.active ? "ACTIVA" : "INACTIVA"} subtitle={`${branchResult.data.code}${branchResult.data.address ? ` · ${branchResult.data.address}` : ""}`} title={branchResult.data.name}><main className="mx-auto max-w-7xl p-5 sm:p-10">{!modal ? <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches">← Volver a sucursales</Link> : null}<div className={modal ? "hidden" : "mt-4 flex flex-wrap items-start justify-between gap-3"}><div><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Sucursal</p><h1 className="mt-1 text-3xl font-black">{branchResult.data.name}</h1><p className="mt-1 text-stone-600">{branchResult.data.code}{branchResult.data.address ? ` · ${branchResult.data.address}` : ""}</p></div><StatusBadge tone={branchResult.data.active ? "success" : "neutral"}>{branchResult.data.active ? "ACTIVA" : "INACTIVA"}</StatusBadge></div>
     <BranchTabs active={tab} branchId={id} />
-    {tab === "summary" ? <><BranchSummary alerts={urgent.map((row) => ({ productId: row.product_id ?? "", productName: row.product_name ?? "Producto", current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={today} products={topProducts} stockCounts={{ out: stock.filter((row) => row.priority.rank === 0).length, low: stock.filter((row) => row.priority.rank === 1).length, normal: normalStock }} />
+    {tab === "summary" ? <><BranchSummary alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={today} products={topProducts} stockCounts={stockCounts} />
       <section className="mt-7"><SectionHeader description="Nombre, código y dirección de esta sucursal." title="Editar datos" /><div className="mt-3 rounded-xl border bg-white p-4"><BranchForm branch={{ id, name: branchResult.data.name, code: branchResult.data.code, address: branchResult.data.address, active: branchResult.data.active }} /></div>
         <SectionHeader description="Desactivar conserva todo el historial; eliminar sólo es posible si la sucursal nunca operó." title="Estado de la sucursal" />
         <div className="mt-3"><BranchLifecyclePanel active={branchResult.data.active} branchId={id} /></div>
       </section></> : null}
-    {tab === "stock" ? <><BranchStockPanel rows={stock.map((row) => ({ productId: row.product_id ?? "", productName: row.product_name ?? "Producto", current: row.current, minimum: row.minimum, target: row.target, suggested: row.suggested, configured: configuredProducts.has(row.product_id ?? ""), rank: row.priority.rank, label: row.priority.label, daily: (productTotals.get(row.product_id ?? "")?.grams ?? 0) / 7 }))} />
+    {tab === "stock" ? <><BranchStockPanel branchId={id} filter={stockFilter} page={stockPage} rows={stockPageResult.data.map((row) => { const priority = stockPriority(row.stock_status, row.current_stock_grams, row.minimum_stock_grams); return { productId: row.product_id, productName: row.product_name, sku: row.sku, unitType: row.unit_type, current: row.current_stock_grams, minimum: row.minimum_stock_grams, target: row.target_stock_grams, suggested: row.suggested_replenishment_grams, configured: configuredProducts.has(row.product_id), rank: priority.rank, label: priority.label, daily: (soldQuantityByProduct.get(row.product_id) ?? 0) / 7 }; })} search={stockSearch} totalRows={stockPageResult.data[0]?.total_count ?? 0} />
       <div className="mt-7 grid gap-7 lg:grid-cols-2"><section><SectionHeader title="Mermas recientes" action={<Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/stock">Ver movimientos →</Link>} /><div className="mt-3 divide-y rounded-xl border bg-white">{recentWaste.map((waste) => <div className="flex justify-between gap-3 px-4 py-3 text-sm" key={waste.id}><span>{new Date(waste.occurred_at).toLocaleString("es-AR", { timeZone: context.timezone })}</span><strong>{waste.waste_reason ?? "Merma"}</strong></div>)}{!recentWaste.length ? <p className="px-4 py-5 text-stone-500">Sin mermas recientes.</p> : null}</div></section><section><SectionHeader title="Reingresos recientes" /><div className="mt-3 divide-y rounded-xl border bg-white">{restocks.map((movement) => <div className="flex justify-between gap-3 px-4 py-3 text-sm" key={`${movement.product_id}-${movement.occurred_at}`}><span>{movement.productName} · {movement.type}</span><strong>+{formatWeight(Math.abs(movement.quantity_grams))}</strong></div>)}{!restocks.length ? <p className="px-4 py-5 text-stone-500">Sin reingresos recientes.</p> : null}</div></section></div></> : null}
     {tab === "sales" ? <div className="mt-6 grid gap-7 lg:grid-cols-2"><section><SectionHeader title="Ventas recientes" action={<Link className="text-sm font-bold text-rose-800 hover:underline" href={`/admin/sales?preset=today&branch=${id}`}>Ver ventas →</Link>} /><div className="mt-3 divide-y rounded-xl border bg-white">{recentSales.map((sale) => <div className="flex justify-between gap-4 px-4 py-3 text-sm" key={sale.id}><span>{new Date(sale.completed_at ?? sale.created_at).toLocaleString("es-AR", { timeZone: context.timezone })}</span><strong>{formatCurrency(BigInt(sale.total_cents))} · {formatWeight(sale.total_weight_grams)}</strong></div>)}{!recentSales.length ? <p className="px-4 py-5 text-stone-500">Sin ventas recientes.</p> : null}</div><SectionHeader title="Productos vendidos" description="Últimos 7 días" /><div className="mt-3 divide-y rounded-xl border bg-white">{topProducts.map((product) => <div className="flex justify-between gap-3 px-4 py-3" key={product.name}><strong>{product.name}</strong><span>{formatWeight(product.grams)} · {formatCurrency(BigInt(product.cents))}</span></div>)}</div></section><section><SectionHeader title="Métricas comerciales" /><div className="mt-3 grid gap-3 sm:grid-cols-2"><MetricCard label="Descuentos hoy" value={formatCurrency(BigInt(todayDiscounts))} /><MetricCard label="Facturación hoy" value={formatCurrency(BigInt(today.grossCents))} /></div><SectionHeader title="Medios de pago" description="Mes actual" /><div className="mt-3 divide-y rounded-xl border bg-white">{dashboard.paymentsThisMonth.map((payment) => <div className="flex justify-between px-4 py-3" key={payment.method}><span>{paymentLabels[payment.method] ?? payment.method}</span><strong>{formatCurrency(BigInt(payment.amountCents))}</strong></div>)}</div></section></div> : null}
   </main></BranchDetailFrame>;

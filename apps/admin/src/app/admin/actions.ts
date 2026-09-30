@@ -6,7 +6,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "../../lib/supabase/server";
 import { requireAdminContext } from "../../lib/admin";
 import { parsePesosToCents } from "../../lib/settlements";
-import { decimal, ids, kilogramsToGrams, optionalId, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
+import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
+import { parseStockQuantityInput } from "@carnicerias/business-logic";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import type { Database } from "@carnicerias/database";
 
@@ -52,6 +53,9 @@ export async function saveBranchFormAction(_: BranchFormState, formData: FormDat
       p_address: text(formData, "address") || null,
       p_active: formData.get("active") === "on"
     });
+    // A NEW branch starts with an empty assortment; optionally copy another branch's (additive).
+    const copyFrom = !optionalId(formData, "branch_id") ? optionalId(formData, "copy_assortment_from") : null;
+    if (copyFrom) await rpcOrThrow("copy_branch_assortment", { p_source_branch_id: copyFrom, p_destination_branch_id: branchId });
     revalidatePath("/admin/branches");
     revalidatePath(`/admin/branches/${branchId}`);
     return { branchId };
@@ -108,7 +112,18 @@ export async function saveProductAction(formData: FormData) {
   revalidatePath("/admin/products");
 }
 
-export interface ProductManageState { error?: string; successToken?: string }
+export interface ProductManageState { error?: string; successToken?: string; warning?: string }
+
+/** Branches where the product is enabled (surtido) and its barcodes, from the product form. Returns
+ * a warning when a branch stopped carrying a product that still has stock there. */
+async function saveProductBranchesAndBarcodes(productId: string, formData: FormData): Promise<string | undefined> {
+  const result = await rpcOrThrow("set_product_branches", { p_product_id: productId, p_branch_ids: ids(formData, "branch_ids") });
+  await rpcOrThrow("set_product_barcodes", { p_product_id: productId, p_barcodes: parseBarcodes(text(formData, "barcodes")) });
+  const withStock = (result as { disabledWithStock?: unknown[] } | null)?.disabledWithStock;
+  return Array.isArray(withStock) && withStock.length > 0
+    ? `Este producto todavía tiene stock en ${String(withStock.length)} sucursal${withStock.length === 1 ? "" : "es"} donde ya no se vende. El stock se conserva, pero no aparece en el POS de esas sucursales.`
+    : undefined;
+}
 
 export async function manageProductAction(_: ProductManageState, formData: FormData): Promise<ProductManageState> {
   try {
@@ -149,10 +164,12 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       }
     }
 
+    const warning = await saveProductBranchesAndBarcodes(productId, formData);
+
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/products");
     revalidatePath("/admin/promotions");
-    return { successToken: crypto.randomUUID() };
+    return { successToken: crypto.randomUUID(), ...(warning ? { warning } : {}) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo guardar el producto" };
   }
@@ -184,6 +201,7 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     });
     if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
     if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
+    await saveProductBranchesAndBarcodes(productId, formData);
     revalidatePath("/admin/products");
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/promotions");
@@ -288,26 +306,77 @@ export async function saveAnnouncementAction(formData: FormData) {
   revalidatePath("/admin/announcements");
 }
 
-export async function setStockPolicyAction(formData: FormData) {
-  await rpcOrThrow("set_stock_policy", {
-    p_branch_id: text(formData, "branch_id"), p_product_id: text(formData, "product_id"),
-    p_minimum_stock_grams: kilogramsToGrams(text(formData, "minimum_kg")),
-    p_target_stock_grams: kilogramsToGrams(text(formData, "target_kg"))
+export interface ProductOption { id: string; name: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; barcodes: string[] }
+
+/** Typeahead for the product pickers: a Central with thousands of products is never loaded whole.
+ * Matches name/SKU (accent-insensitive) or an exact barcode, optionally only among the products
+ * enabled in `branchId`. */
+export async function searchProductsAction(query: string, branchId: string | null): Promise<ProductOption[]> {
+  await requireAdminContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("search_products", {
+    p_query: query.trim().slice(0, 80), p_limit: 15, ...(branchId ? { p_branch_id: branchId } : {})
   });
-  revalidatePath("/admin/stock");
+  if (error) throw new Error(error.message);
+  return data.map((row) => ({ id: row.product_id, name: row.product_name, sku: row.sku, unitType: row.unit_type, barcodes: row.barcodes }));
 }
 
-export async function recordPurchaseAction(formData: FormData) {
-  const productIds = formData.getAll("product_id").map(String);
-  const items = productIds.flatMap((productId) => {
-    const raw = text(formData, `quantity_${productId}`);
-    return raw && decimal(raw, "Peso") > 0 ? [{ product_id: productId, quantity_grams: kilogramsToGrams(raw) }] : [];
+/** Converts what the operator typed into the raw ledger quantity using each product REAL unit type
+ * (looked up here, never trusted from the client): kg -> grams for WEIGHT, whole units for UNIT. */
+async function ledgerQuantities(productIds: string[], raws: string[], allowZero = false): Promise<number[]> {
+  const context = await requireAdminContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("products").select("id, name, unit_type")
+    .eq("organization_id", context.organizationId).in("id", productIds);
+  if (error) throw new Error(error.message);
+  const byId = new Map(data.map((row) => [row.id, row]));
+  return productIds.map((productId, index) => {
+    const product = byId.get(productId);
+    if (!product) throw new Error("Producto inválido para esta organización");
+    try {
+      return parseStockQuantityInput(raws[index] ?? "", product.unit_type, { allowZero });
+    } catch (error) {
+      throw new Error(`${product.name}: ${error instanceof Error ? error.message : "cantidad inválida"}`);
+    }
   });
-  await rpcOrThrow("record_stock_operation", {
-    p_branch_id: text(formData, "branch_id"), p_operation_type: "PURCHASE", p_items: items,
-    p_supplier: text(formData, "supplier"), p_note: text(formData, "note") || null
-  });
-  revalidatePath("/admin/stock");
+}
+
+export interface StockOperationState { error?: string; successToken?: string }
+
+export async function setStockPolicyFormAction(_: StockOperationState, formData: FormData): Promise<StockOperationState> {
+  try {
+    const productId = text(formData, "product_id");
+    if (!productId) throw new Error("Elegí un producto");
+    const [minimum, target] = await ledgerQuantities([productId, productId], [text(formData, "minimum"), text(formData, "target")], true);
+    await rpcOrThrow("set_stock_policy", {
+      p_branch_id: text(formData, "branch_id"), p_product_id: productId,
+      p_minimum_stock_grams: minimum ?? 0, p_target_stock_grams: target ?? 0
+    });
+    revalidatePath("/admin/stock");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar el mínimo y objetivo" };
+  }
+}
+
+export async function recordPurchaseFormAction(_: StockOperationState, formData: FormData): Promise<StockOperationState> {
+  try {
+    const productIds = formData.getAll("product_id").map(String);
+    const quantities = formData.getAll("quantity").map(String);
+    const rows = productIds.map((productId, index) => ({ productId, raw: (quantities[index] ?? "").trim() })).filter((row) => row.productId || row.raw);
+    if (!rows.length) throw new Error("Agregá al menos un producto con su cantidad");
+    if (rows.some((row) => !row.productId)) throw new Error("Hay una cantidad sin producto");
+    const grams = await ledgerQuantities(rows.map((row) => row.productId), rows.map((row) => row.raw));
+    await rpcOrThrow("record_stock_operation", {
+      p_branch_id: text(formData, "branch_id"), p_operation_type: "PURCHASE",
+      p_items: rows.map((row, index) => ({ product_id: row.productId, quantity_grams: grams[index] ?? 0 })),
+      p_supplier: text(formData, "supplier"), p_note: text(formData, "note") || null
+    });
+    revalidatePath("/admin/stock");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo registrar la compra" };
+  }
 }
 
 export interface ReplenishmentFormState { error?: string; successToken?: string }
@@ -349,29 +418,36 @@ export async function setReplenishmentTargetDaysFormAction(_: ReplenishmentFormS
   }
 }
 
-export async function recordWasteAction(formData: FormData) {
-  await rpcOrThrow("record_stock_operation", {
-    p_branch_id: text(formData, "branch_id"), p_operation_type: "WASTE",
-    p_items: [{ product_id: text(formData, "product_id"), quantity_grams: kilogramsToGrams(text(formData, "quantity_kg")) }],
-    p_waste_reason: text(formData, "waste_reason"), p_note: text(formData, "note") || null
-  });
-  revalidatePath("/admin/stock");
-}
-
-export async function recordAdjustmentAction(formData: FormData) {
-  await rpcOrThrow("record_stock_operation", {
-    p_branch_id: text(formData, "branch_id"), p_operation_type: "ADJUSTMENT",
-    p_items: [{ product_id: text(formData, "product_id"), physical_quantity_grams: kilogramsToGrams(text(formData, "physical_kg"), true) }],
-    p_note: text(formData, "note") || null
-  });
-  revalidatePath("/admin/stock");
+export async function recordWasteFormAction(_: StockOperationState, formData: FormData): Promise<StockOperationState> {
+  try {
+    const productId = text(formData, "product_id");
+    if (!productId) throw new Error("Elegí un producto");
+    const [quantity] = await ledgerQuantities([productId], [text(formData, "quantity")]);
+    await rpcOrThrow("record_stock_operation", {
+      p_branch_id: text(formData, "branch_id"), p_operation_type: "WASTE",
+      p_items: [{ product_id: productId, quantity_grams: quantity ?? 0 }],
+      p_waste_reason: text(formData, "waste_reason"), p_note: text(formData, "note") || null
+    });
+    revalidatePath("/admin/stock");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo registrar la merma" };
+  }
 }
 
 export interface StockAdjustmentState { error?: string; successToken?: string }
 
 export async function recordAdjustmentFormAction(_: StockAdjustmentState, formData: FormData): Promise<StockAdjustmentState> {
   try {
-    await recordAdjustmentAction(formData);
+    const productId = text(formData, "product_id");
+    if (!productId) throw new Error("Elegí un producto");
+    const [physical] = await ledgerQuantities([productId], [text(formData, "physical")], true);
+    await rpcOrThrow("record_stock_operation", {
+      p_branch_id: text(formData, "branch_id"), p_operation_type: "ADJUSTMENT",
+      p_items: [{ product_id: productId, physical_quantity_grams: physical ?? 0 }],
+      p_note: text(formData, "note") || null
+    });
+    revalidatePath("/admin/stock");
     return { successToken: crypto.randomUUID() };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo registrar el ajuste" };
@@ -612,12 +688,16 @@ export interface StockTransferFormState { error?: string; transferId?: string }
 export async function createStockTransferFormAction(_: StockTransferFormState, formData: FormData): Promise<StockTransferFormState> {
   try {
     const productIds = formData.getAll("product_id").map(String);
-    const quantities = formData.getAll("quantity_kg").map(String);
-    const items = productIds
-      .map((productId, index) => ({ productId, quantityRaw: quantities[index] ?? "" }))
-      .filter((row) => row.productId)
-      .map((row) => ({ product_id: row.productId, quantity_grams: kilogramsToGrams(row.quantityRaw) }));
-    if (!items.length) throw new Error("Agregá al menos un producto para transferir");
+    const quantities = formData.getAll("quantity").map(String);
+    const rows = productIds
+      .map((productId, index) => ({ productId, raw: (quantities[index] ?? "").trim() }))
+      .filter((row) => row.productId || row.raw);
+    if (!rows.length) throw new Error("Agregá al menos un producto para transferir");
+    if (rows.some((row) => !row.productId)) throw new Error("Hay una cantidad sin producto");
+    // WEIGHT products move in kg (stored as grams), UNIT products in whole units — decided per
+    // product from the database, never by the form.
+    const quantitiesLedger = await ledgerQuantities(rows.map((row) => row.productId), rows.map((row) => row.raw));
+    const items = rows.map((row, index) => ({ product_id: row.productId, quantity_grams: quantitiesLedger[index] ?? 0 }));
     const notes = text(formData, "notes");
 
     const transferId = await rpcOrThrow("create_stock_transfer", {

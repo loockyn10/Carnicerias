@@ -63,3 +63,9 @@ export function percentageToBasisPointsAllowZero(value: string, label: string, m
   if (basisPoints < 0n || basisPoints > maximumBps) throw new Error(`${label} fuera del rango permitido`);
   return Number(basisPoints);
 }
+
+/** Barcodes typed/pasted in the product form: one per line, or separated by commas/semicolons/spaces.
+ * The database normalizes and validates each code; empty entries are dropped here. */
+export function parseBarcodes(value: string): string[] {
+  return value.split(/[\s,;]+/).map((code) => code.trim()).filter(Boolean);
+}

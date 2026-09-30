@@ -1,17 +1,17 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(29);
 
 -- Function shape and hardening.
-select has_function('public', 'get_branch_stock_status', array['uuid'], 'branch stock status RPC exists');
+select has_function('public', 'get_branch_stock_status', array['uuid','text','text','integer','integer'], 'branch stock status RPC exists');
 select has_view('public', 'branch_stock_status', 'legacy view still exists for its remaining consumers (attention, branches/compare, branch detail)');
-select ok((select prosecdef from pg_proc where oid = 'public.get_branch_stock_status(uuid)'::regprocedure), 'RPC is security definer');
-select is((select array_to_string(proconfig, ',') from pg_proc where oid = 'public.get_branch_stock_status(uuid)'::regprocedure), 'search_path=""', 'RPC has empty search path');
-select ok(not has_function_privilege('anon', 'public.get_branch_stock_status(uuid)', 'EXECUTE'), 'anonymous cannot execute the RPC');
-select ok(not has_function_privilege('public', 'public.get_branch_stock_status(uuid)', 'EXECUTE'), 'public role cannot execute the RPC');
-select ok(has_function_privilege('authenticated', 'public.get_branch_stock_status(uuid)', 'EXECUTE'), 'authenticated can execute the RPC');
-select is((select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner where p.oid = 'public.get_branch_stock_status(uuid)'::regprocedure), 'postgres', 'RPC is owned by postgres (bypassrls), matching get_replenishment_plan and other admin RPCs');
+select ok((select prosecdef from pg_proc where oid = 'public.get_branch_stock_status(uuid,text,text,integer,integer)'::regprocedure), 'RPC is security definer');
+select is((select array_to_string(proconfig, ',') from pg_proc where oid = 'public.get_branch_stock_status(uuid,text,text,integer,integer)'::regprocedure), 'search_path=""', 'RPC has empty search path');
+select ok(not has_function_privilege('anon', 'public.get_branch_stock_status(uuid,text,text,integer,integer)', 'EXECUTE'), 'anonymous cannot execute the RPC');
+select ok(not has_function_privilege('public', 'public.get_branch_stock_status(uuid,text,text,integer,integer)', 'EXECUTE'), 'public role cannot execute the RPC');
+select ok(has_function_privilege('authenticated', 'public.get_branch_stock_status(uuid,text,text,integer,integer)', 'EXECUTE'), 'authenticated can execute the RPC');
+select is((select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner where p.oid = 'public.get_branch_stock_status(uuid,text,text,integer,integer)'::regprocedure), 'postgres', 'RPC is owned by postgres (bypassrls), matching get_replenishment_plan and other admin RPCs');
 
 -- Fixture: two organizations, two branches in org A (employee assigned to only one), one in org B.
 insert into auth.users (
@@ -44,6 +44,10 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('a5000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'Product Without Movements', 'product-without-movements', 'STOCK-RPC-B', 'WEIGHT'),
   ('a5000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'Unit Product', 'unit-product', 'STOCK-RPC-C', 'UNIT');
 
+-- Legacy semantics for this fixture: every product is carried by every branch (surtido).
+insert into public.branch_product_assortment (organization_id, branch_id, product_id)
+select p.organization_id, b.id, p.id from public.products p join public.branches b on b.organization_id = p.organization_id;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a3000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claims', '{"sub":"a3000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
@@ -75,8 +79,9 @@ select is((select current_stock_grams from public.get_branch_stock_status() wher
 -- Product with zero movements ever.
 select is((select current_stock_grams from public.get_branch_stock_status() where branch_id = 'a2000000-0000-4000-8000-000000000001' and product_id = 'a5000000-0000-4000-8000-000000000002'), 0::bigint, 'a product with no stock_movements rows still appears, coalesced to zero');
 
--- UNIT products are excluded, exactly like the legacy view (unchanged behavior).
-select is((select count(*) from public.get_branch_stock_status() where product_id = 'a5000000-0000-4000-8000-000000000003'), 0::bigint, 'UNIT products are excluded, matching branch_stock_status semantics');
+-- UNIT products are included now (warehouse stock), reported in whole units with their unit_type.
+select is((select count(*) from public.get_branch_stock_status() where product_id = 'a5000000-0000-4000-8000-000000000003'), 2::bigint, 'UNIT products are included, one row per branch that carries them');
+select is((select unit_type::text from public.get_branch_stock_status() where product_id = 'a5000000-0000-4000-8000-000000000003' limit 1), 'UNIT', 'the row exposes unit_type so the UI can format units instead of kg');
 
 -- Multiple branches: admin sees both org A branches in one call.
 select is((select count(distinct branch_id) from public.get_branch_stock_status() where branch_id in ('a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000002')), 2::bigint, 'admin (branches.read_all) sees stock across every active branch in the organization');
@@ -107,7 +112,7 @@ select set_config('request.jwt.claim.sub', 'a3000000-0000-4000-8000-000000000002
 select set_config('request.jwt.claims', '{"sub":"a3000000-0000-4000-8000-000000000002","role":"authenticated"}', true);
 
 -- Employee has stock.read but is only a member of branch A1: branch A2 must not appear.
-select is((select count(*) from public.get_branch_stock_status() where branch_id = 'a2000000-0000-4000-8000-000000000001'), 2::bigint, 'employee sees stock for the branch they are assigned to (2 WEIGHT products; the UNIT product is excluded)');
+select is((select count(*) from public.get_branch_stock_status() where branch_id = 'a2000000-0000-4000-8000-000000000001'), 3::bigint, 'employee sees stock for the branch they are assigned to (2 WEIGHT products + the UNIT product)');
 select is((select count(*) from public.get_branch_stock_status() where branch_id = 'a2000000-0000-4000-8000-000000000002'), 0::bigint, 'employee cannot see stock for a branch they are not assigned to');
 select is((select count(*) from public.get_branch_stock_status('a2000000-0000-4000-8000-000000000002')), 0::bigint, 'requesting the unassigned branch explicitly by id still returns zero rows');
 

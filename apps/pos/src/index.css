@@ -54,6 +54,12 @@ button {
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
 }
 
+.pos-toast-warn {
+  border-color: rgb(180 83 9);
+  background: rgb(120 53 15);
+  color: rgb(254 243 199);
+}
+
 @media (min-width: 900px) and (max-height: 700px) {
   .pos-shell {
     display: flex;

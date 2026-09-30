@@ -195,6 +195,70 @@ export interface RpcNullOverrides {
       unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
     }[]
   }
+  // sku / category_id are nullable columns of products; the generator types a `returns table`
+  // column from its declared SQL type only.
+  list_products_page: {
+    Args: {
+      p_branch_id?: string | null
+      p_category_id?: string | null
+      p_limit?: number
+      p_offset?: number
+      p_search?: string | null
+      p_status?: string
+    }
+    Returns: {
+      active: boolean
+      barcodes: string[]
+      branch_ids: string[]
+      category_id: string | null
+      inventory_role: GeneratedDatabase["public"]["Enums"]["product_inventory_role"]
+      product_id: string
+      product_name: string
+      sku: string | null
+      slug: string
+      total_count: number
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
+  get_branch_stock_status: {
+    Args: {
+      p_branch_id?: string | null
+      p_limit?: number | null
+      p_offset?: number
+      p_search?: string | null
+      p_status?: string | null
+    }
+    Returns: {
+      branch_id: string
+      branch_name: string
+      current_stock_grams: number
+      minimum_stock_grams: number
+      product_id: string
+      product_name: string
+      sku: string | null
+      stock_status: string
+      suggested_replenishment_grams: number
+      target_stock_grams: number
+      total_count: number
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
+  search_products: {
+    Args: {
+      p_active_only?: boolean
+      p_branch_id?: string | null
+      p_limit?: number
+      p_query?: string | null
+    }
+    Returns: {
+      active: boolean
+      barcodes: string[]
+      product_id: string
+      product_name: string
+      sku: string | null
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
   set_product_price: {
     Args: {
       p_branch_id: string | null

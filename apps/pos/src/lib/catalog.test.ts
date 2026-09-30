@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCategoryTabs, hasStock, partitionByStock, productMatchesCategory, type CatalogProductLike, type CategoryDirectoryEntryLike } from "./catalog";
+import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, type CatalogProductLike, type CategoryDirectoryEntryLike } from "./catalog";
 
 const embutidos: CategoryDirectoryEntryLike = { id: "embutidos", name: "Embutidos", colorHex: "#ff0000", sortOrder: 1 };
 const cerdo: CategoryDirectoryEntryLike = { id: "cerdo", name: "Cerdo", colorHex: "#00ff00", sortOrder: 0 };
@@ -77,5 +77,54 @@ describe("hasStock / partitionByStock", () => {
     expect(hasStock(new Map([["peceto", 0]]), "peceto")).toBe(false);
     expect(hasStock(new Map([["peceto", 10_000]]), "peceto")).toBe(true); // Reposición +10 kg
     expect(hasStock(new Map([["peceto", 10_000 - 10_000]]), "peceto")).toBe(false); // sold the rest
+  });
+});
+
+describe("barcode scan resolution", () => {
+  const coca = { productId: "coca", unitType: "UNIT" as const, barcodes: ["7790895000010", "7790895000027"] };
+  const vacio = { productId: "vacio", unitType: "WEIGHT" as const, barcodes: ["2000000000011"] };
+  const agua = { productId: "agua", unitType: "UNIT" as const, barcodes: ["7791111111111"] };
+  const index = buildBarcodeIndex([coca, vacio, agua]);
+  const stock = new Map<string, number>([["coca", 24], ["vacio", 8000], ["agua", 0]]);
+
+  it("normalizes like the server (trim, no spaces, upper-case)", () => {
+    expect(normalizeBarcode(" 7790895000010\n")).toBe("7790895000010");
+    expect(normalizeBarcode("abc 123")).toBe("ABC123");
+    expect(normalizeBarcode("   ")).toBeNull();
+  });
+
+  it("a known UNIT barcode with stock adds exactly one unit", () => {
+    expect(resolveScan(index, stock, "7790895000010")).toEqual({ kind: "ADD_UNIT", product: coca });
+    expect(resolveScan(index, stock, "7790895000027")).toEqual({ kind: "ADD_UNIT", product: coca });
+  });
+
+  it("an unknown barcode is NOT_FOUND (never guessed, never added)", () => {
+    expect(resolveScan(index, stock, "0000000000000")).toEqual({ kind: "NOT_FOUND", code: "0000000000000" });
+  });
+
+  it("a product of the branch with zero stock is NO_STOCK, even though it exists in the catalog", () => {
+    expect(resolveScan(index, stock, "7791111111111")).toEqual({ kind: "NO_STOCK", product: agua });
+  });
+
+  it("a product absent from the synced stock snapshot reads as no stock once a snapshot exists", () => {
+    expect(resolveScan(index, new Map(), "7790895000010")).toEqual({ kind: "NO_STOCK", product: coca });
+  });
+
+  it("with no stock snapshot at all (never synced) nothing is blocked, like the rest of the catalog", () => {
+    expect(resolveScan(index, null, "7791111111111")).toEqual({ kind: "ADD_UNIT", product: agua });
+  });
+
+  it("a WEIGHT product keeps the weigh flow: the scan opens the weight dialog, it never becomes a unit sale", () => {
+    expect(resolveScan(index, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio });
+  });
+
+  it("a blank code resolves to nothing at all", () => {
+    expect(resolveScan(index, stock, "  ")).toBeNull();
+  });
+
+  it("a product that is not in this branch catalog (not enabled here) resolves exactly like an unknown code", () => {
+    const avenidaIndex = buildBarcodeIndex([vacio]); // the branch catalog has no Coca Cola
+    expect(resolveScan(avenidaIndex, stock, "7790895000010")).toEqual({ kind: "NOT_FOUND", code: "7790895000010" });
+    expect(resolveScan(avenidaIndex, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio });
   });
 });

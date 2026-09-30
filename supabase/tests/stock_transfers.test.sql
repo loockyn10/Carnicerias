@@ -50,6 +50,10 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('d5000000-0000-4000-8000-000000000003', 'd2000000-0000-4000-8000-000000000001', 'd4000000-0000-4000-8000-000000000001', 'Bebida', 'bebida-transfer', 'TUNIT-1', 'UNIT'),
   ('d5000000-0000-4000-8000-000000000004', 'd2000000-0000-4000-8000-000000000002', 'd4000000-0000-4000-8000-000000000002', 'Producto Org B', 'producto-org-b-transfer', 'TORGB-1', 'WEIGHT');
 
+-- Legacy semantics for this fixture: every product is carried by every branch (surtido).
+insert into public.branch_product_assortment (organization_id, branch_id, product_id)
+select p.organization_id, b.id, p.id from public.products p join public.branches b on b.organization_id = p.organization_id;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'd1000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claims', '{"sub":"d1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
@@ -85,7 +89,7 @@ select throws_ok($$select public.create_stock_transfer(
 select throws_ok($$select public.create_stock_transfer(
   'd3000000-0000-4000-8000-000000000001', 'd3000000-0000-4000-8000-000000000002',
   '[{"product_id":"d5000000-0000-4000-8000-000000000003","quantity_grams":1}]', null
-)$$, '42501', 'Product must be an active weight-based product in this organization', 'a UNIT product cannot be transferred (this sprint is WEIGHT-only)');
+)$$, '22023', null, 'a UNIT product is transferable now, but still needs stock at the origin (covered in branch_assortment.test.sql)');
 select throws_ok($$select public.create_stock_transfer(
   'd3000000-0000-4000-8000-000000000001', 'd3000000-0000-4000-8000-000000000002',
   '[{"product_id":"d5000000-0000-4000-8000-000000000001","quantity_grams":0}]', null

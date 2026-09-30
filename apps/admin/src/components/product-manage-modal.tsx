@@ -13,14 +13,16 @@ interface ProductManageModalProps {
     id: string; categoryId: string | null; categoryIds: string[]; name: string; slug: string;
     sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean;
     inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH"; hasUnitTypeHistory: boolean;
+    barcodes: string[]; branchIds: string[];
   };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
   categories: { id: string; name: string }[];
+  branches: { id: string; name: string }[];
   costCents: number | null;
 }
 
-export function ProductManageModal({ product, price, promotion, categories, costCents }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, branches, costCents }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -36,9 +38,10 @@ export function ProductManageModal({ product, price, promotion, categories, cost
   }, [open, pending]);
 
   useEffect(() => {
-    if (!state.successToken) return;
+    // With a warning (a branch stopped carrying a product that still has stock) the modal stays open so it gets read.
+    if (!state.successToken || state.warning) return;
     setOpen(false);
-  }, [state.successToken]);
+  }, [state.successToken, state.warning]);
 
   const promotionHref = promotion ? `/admin/promotions?edit=${promotion.id}` : `/admin/promotions?create=1&product=${product.id}`;
 
@@ -72,6 +75,18 @@ export function ProductManageModal({ product, price, promotion, categories, cost
               {categories.length <= 1 ? <p className="text-stone-500">No hay más categorías para asignar.</p> : null}
             </div>
           </div>
+          <div className="rounded-lg bg-stone-50 p-3">
+            <p className="text-sm font-bold">Se vende en</p>
+            <p className="mt-1 text-xs text-stone-500">Sólo las sucursales marcadas ven este producto en su POS. Un producto habilitado sin stock sigue apareciendo, como "Sin stock".</p>
+            <div className="mt-2 flex flex-wrap gap-4 text-sm">
+              {branches.map((branch) => (
+                <label className="flex items-center gap-2" key={branch.id}><input defaultChecked={product.branchIds.includes(branch.id)} name="branch_ids" type="checkbox" value={branch.id} /> {branch.name}</label>
+              ))}
+            </div>
+          </div>
+          <label className="grid gap-1 text-sm font-medium">Códigos de barras
+            <textarea className={input} defaultValue={product.barcodes.join("\n")} name="barcodes" placeholder="Uno por línea. Un producto puede tener varios." rows={2} />
+          </label>
           <label className="grid gap-1 text-sm font-medium">
             Forma de venta
             <select className={input} disabled={product.hasUnitTypeHistory} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}>
@@ -91,6 +106,7 @@ export function ProductManageModal({ product, price, promotion, categories, cost
           <div className="rounded-lg bg-stone-50 p-3"><p className="text-sm font-bold">Promoción</p><p className="mt-1 text-sm text-stone-600">{promotion?.label ?? "Sin promoción activa"}</p><Link className="mt-2 inline-block text-sm font-bold text-rose-800 hover:underline" href={promotionHref}>{promotion ? "Editar promoción" : "Crear promoción"}</Link></div>
           <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" ref={activeRef} type="checkbox" /> Producto activo</label>
           {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}
+          {state.warning ? <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{state.warning}</p> : null}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4"><div>{product.active ? <button className="text-sm font-bold text-red-700 disabled:opacity-50" disabled={pending} onClick={deactivate} type="button">Desactivar producto</button> : null}</div><div className="flex gap-2"><button className="rounded-lg px-4 py-2 text-sm font-bold text-stone-600" disabled={pending} onClick={() => setOpen(false)} type="button">Cancelar</button><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Guardando…" : "Guardar cambios"}</button></div></div>
         </form>
       </section>

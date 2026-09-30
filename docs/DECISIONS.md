@@ -349,7 +349,7 @@ Un producto tiene un `inventory_role`: `RAW_MATERIAL`, `SELLABLE` (default, pres
 
 **Status:** Active
 
-La distribución de stock entre sucursales (`stock_transfers`/`stock_transfer_items`, RPC `create_stock_transfer`) escribe en `stock_movements` usando `TRANSFER_OUT`/`TRANSFER_IN`, tipos que existían en el enum desde el sprint de ventas online pero nunca se habían usado. No se crea un segundo modelo de inventario. Alcance de este sprint: sólo productos `WEIGHT`, transferencia inmediata y atómica (sin confirmación de recepción en dos etapas).
+La distribución de stock entre sucursales (`stock_transfers`/`stock_transfer_items`, RPC `create_stock_transfer`) escribe en `stock_movements` usando `TRANSFER_OUT`/`TRANSFER_IN`, tipos que existían en el enum desde el sprint de ventas online pero nunca se habían usado. No se crea un segundo modelo de inventario. Alcance original: sólo productos `WEIGHT` (ampliado a `UNIT` en D-051), transferencia inmediata y atómica (sin confirmación de recepción en dos etapas).
 
 **Motivo:** D-010 prohíbe fuentes paralelas de stock. Reutilizar los tipos de movimiento ya reservados para esto es más simple que diseñar un modelo nuevo, y mantiene "stock por sucursal" y "stock" (que ya suman `stock_movements` sin filtrar por tipo) correctos automáticamente, sin cambios.
 
@@ -552,6 +552,7 @@ La migración desde SimplyGest (y cualquier fuente futura) pasa por una capa gen
 - **Sin fusiones silenciosas**: un SKU/barcode/nombre que choca con un registro no creado por la importación es `ERROR`; adoptar registros existentes requiere declarar `options.linkExistingBy`. Dos filas que apuntan al mismo registro → la segunda es `ERROR`.
 - Reutiliza las RPCs existentes (`save_product`, `set_product_price`, `set_product_cost`, `set_product_categories`, …): todas las guardas (D-040), historial append-only y triggers de sync del POS aplican igual que a una edición manual.
 - Permisos nuevos `imports.read`/`imports.write` (sólo `admin`); además se exige el permiso de la entidad (`products.write`/`stock.write`). Tope de 1000 filas por lote por el `statement_timeout` de la API.
+- **Sucursal destino (actualizado, D-049):** un lote de productos exige sucursal destino y los productos que **crea** quedan habilitados sólo ahí (los que sólo actualiza no cambian su surtido); el stock inicial va sólo al ledger de su sucursal y exige el producto habilitado en ella.
 
 **Motivo:** una migración masiva que duplica productos o pisa precios corregidos a mano es peor que no migrar; el dueño debe ver "650 nuevos / 120 actualizaciones / 15 errores" antes de confirmar y poder re-ejecutar sin miedo.
 
@@ -576,3 +577,47 @@ El stock actual de otro sistema se convierte en un movimiento `OPENING_BALANCE` 
 Alcance: el POS todavía **no** recibe ni usa barcodes (siguiente sprint: `barcodes` en `pull_pos_state`, tabla SQLite, resolución local offline y alta al ticket). Los productos por peso de carnicería no cambian (cero barcodes).
 
 **Motivo:** un escáner emite el código del empaque; modelarlo aparte del SKU evita ambigüedad y permite múltiples códigos sin tocar el catálogo de carnicería.
+
+---
+
+## D-049 — Surtido por sucursal: relación propia, distinta de stock y de política de stock
+
+**Status:** Active
+
+Qué productos vende cada sucursal es `branch_product_assortment(branch_id, product_id)` (presencia = habilitado). **No** se reutilizó `branch_product_stock_settings`: esa tabla es una política de reposición (mínimo/objetivo) cuyas filas sólo existen si alguien configuró un umbral y cuya ausencia significa "sin política", no "no se vende"; usarla (o usar "tiene stock") como surtido haría desaparecer un producto del POS al agotarse y habilitaría productos por configurar un mínimo. Reglas:
+
+- habilitado + stock > 0 → visible y vendible; habilitado + stock <= 0 → visible como "Sin stock" (la fila sigue existiendo); no habilitado → no llega al POS de esa sucursal (`pull_pos_state`/`get_pos_catalog` filtran; lo que deja de estar habilitado viaja en `removedProductIds`; las tabs de categoría sólo listan categorías con algún producto habilitado).
+- Migración de datos: todo producto existente queda habilitado en toda sucursal existente (las carnicerías conservan exactamente su catálogo).
+- Un producto **nuevo** no se habilita solo: Admin lo pide al crearlo (por defecto todas las sucursales marcadas) y el importador lo habilita sólo en la sucursal destino (D-046). Una sucursal **nueva** empieza sin surtido; al crearla se puede copiar el de otra (`copy_branch_assortment`).
+- Deshabilitar borra la fila (configuración, no historia: ventas, stock y precios conservan sus snapshots) y queda auditado; si el producto aún tiene stock ahí, la RPC lo informa y el stock se conserva en el ledger.
+- Las ventas ya hechas offline no se validan contra el surtido al sincronizar (una venta real no se rechaza por un cambio de catálogo posterior). Sí se exige surtido en el **destino** de una transferencia y para cargar stock inicial (`NOT_IN_ASSORTMENT`), para que el stock nunca aterrice donde el producto no se vende.
+- Stock, reposición y alertas de Admin sólo consideran los productos habilitados en cada sucursal.
+
+**Motivo:** Central es carnicería + almacén; Avenida y Janssen sólo carnicerías. Un catálogo cuyo alta masiva no inunde las otras sucursales exige un concepto explícito de "qué vende cada una".
+
+---
+
+## D-050 — Escáner de código de barras en el POS: resolución local, sin llamadas por escaneo
+
+**Status:** Active
+
+Los barcodes viajan en el catálogo (`pull_pos_state` → `barcodes` por ítem → SQLite `catalog_product_barcodes`, migración `013`) junto con el surtido y el snapshot de stock ya existentes; un escaneo nunca llama a Supabase y funciona offline con el último estado sincronizado. Flujo (scanner USB/HID tipo teclado, código + Enter): se detecta por cadencia de teclas (ráfaga ≤ 80 ms entre caracteres; el tipeo humano no cuenta) y sólo con la pantalla de venta activa, sin modal y sin foco en un campo de texto; si el escáner escribe dentro del buscador, Enter resuelve igual.
+
+- código de un producto del catálogo de la sucursal, `UNIT`, con stock → suma **1 unidad** (un segundo escaneo del mismo producto incrementa su misma línea, con el mismo pricing/pack/recargo que la carga manual);
+- `WEIGHT` → abre el flujo de peso/balanza existente; nunca se vende por unidad por accidente;
+- habilitado pero sin stock → "<producto>: Sin stock", no se agrega;
+- código desconocido **o** de un producto no habilitado en la sucursal → "Producto no encontrado", no se agrega (el POS de una sucursal sólo conoce su propio catálogo, así que ambos casos son indistinguibles por diseño y no se filtran códigos de otras sucursales).
+
+**Motivo:** el mostrador no puede esperar red por cada botella, y el surtido por sucursal ya define qué existe en cada POS.
+
+---
+
+## D-051 — Stock `UNIT` en Admin sobre el mismo ledger; el catálogo grande se pagina en SQL
+
+**Status:** Active
+
+El ledger ya guardaba unidades enteras en `quantity_grams` para `UNIT` (D-038/D-042); Admin deja de asumir kilos: estado de stock, compras, mermas, ajustes y transferencias operan en **kg para `WEIGHT` y unidades enteras para `UNIT`**, decidido siempre por el `unit_type` real del producto en el servidor (no por el formulario). kg y unidades nunca se suman (transferencias: `total_weight_grams` sólo `WEIGHT`, `total_units` sólo `UNIT`). Esto amplía D-034 (antes sólo `WEIGHT`). `get_branch_stock_status` ganó `unit_type`, filtros y paginación; `get_branch_stock_summary` da los conteos para el dashboard.
+
+Un catálogo de miles de productos (Central) no se carga entero: listados y selectores filtran/paginan en SQL (`list_products_page`, `search_products`, `get_branch_stock_status` con límite) o pasan por `fetchAllRows` (PostgREST trunca **en silencio** a `max_rows` = 1000). Las semánticas de estado de stock (crítico = sin stock, etc.) no cambiaron.
+
+**Motivo:** el almacén sólo es operable si su stock se ve y se mueve en unidades, y las pantallas no pueden romperse ni perder filas al crecer el catálogo.

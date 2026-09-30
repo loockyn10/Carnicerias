@@ -121,7 +121,7 @@ select set_config('request.jwt.claims', '{"sub":"e1000000-0000-4000-8000-0000000
 select throws_ok($$select public.create_import_batch('SimplyGest', 'product')$$, '22023', null, 'source_system must be a lowercase slug');
 select throws_ok($$select public.create_import_batch('simplygest', 'customer')$$, '22023', null, 'unsupported entity types are rejected');
 select throws_ok($$select public.create_import_batch('simplygest', 'stock_opening_balance')$$, '42501', null, 'stock opening requires a branch');
-select throws_ok($$select public.create_import_batch('simplygest', 'product', null, null, null, '{"nope":true}'::jsonb)$$, '22023', null, 'unknown options are rejected');
+select throws_ok($$select public.create_import_batch('simplygest', 'product', null, null, 'e3000000-0000-4000-8000-000000000001', '{"nope":true}'::jsonb)$$, '22023', null, 'unknown options are rejected');
 select throws_ok($$select public.create_import_batch('simplygest', 'category', null, null, null, '{"linkExistingBy":["sku"]}'::jsonb)$$, '22023', null, 'categories can only be linked by name');
 
 -- ---------------------------------------------------------------------------------------------
@@ -181,7 +181,7 @@ select is((select sort_order from public.categories where id = 'e4000000-0000-40
 -- ---------------------------------------------------------------------------------------------
 -- Products: classification, errors, creation, idempotency, update
 -- ---------------------------------------------------------------------------------------------
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-1', repeat('a', 64))$$, 'product batch is created');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-1', repeat('a', 64), 'e3000000-0000-4000-8000-000000000001')$$, 'product batch is created');
 select lives_ok($t$select public.stage_import_rows(
   (select id from public.import_batches where file_name = 'prod-1'),
   $j$[
@@ -255,7 +255,7 @@ select is(
 select is((select count(*) from public.products where organization_id = 'e2000000-0000-4000-8000-000000000001'), 6::bigint, 'retrying apply created nothing');
 
 -- The SAME file imported a second time: nothing is created.
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-2', repeat('a', 64))$$, 'same file, new batch');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-2', repeat('a', 64), 'e3000000-0000-4000-8000-000000000001')$$, 'same file, new batch');
 select is(
   (select public.get_import_batch((select id from public.import_batches where file_name = 'prod-2')) ->> 'sameFileAlreadyApplied'),
   'true', 'the batch reports that the same file was already applied'
@@ -280,7 +280,7 @@ select is(
 select is((select count(*) from public.products where organization_id = 'e2000000-0000-4000-8000-000000000001'), 6::bigint, 'product count is unchanged after the repeated import');
 
 -- A changed row updates the same product (no second product, no duplicate barcode/price rows).
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-3')$$, 'update batch');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-3', null, 'e3000000-0000-4000-8000-000000000001')$$, 'update batch');
 select lives_ok($t$select public.stage_import_rows(
   (select id from public.import_batches where file_name = 'prod-3'),
   $j$[
@@ -307,7 +307,7 @@ select is(
 );
 
 -- Linking a pre-existing manual product explicitly (by SKU), with a price change + history.
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-link', null, null, '{"linkExistingBy":["sku"]}'::jsonb)$$, 'link batch');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-link', null, 'e3000000-0000-4000-8000-000000000001', '{"linkExistingBy":["sku"]}'::jsonb)$$, 'link batch');
 select lives_ok($t$select public.stage_import_rows(
   (select id from public.import_batches where file_name = 'prod-link'),
   $j$[
@@ -332,7 +332,7 @@ select is(
 select is((select internal_id from public.external_entity_links where external_id = 'M1' and entity_type = 'product'), 'e5000000-0000-4000-8000-000000000001'::uuid, 'the link points at the pre-existing product');
 
 -- Two rows that resolve to the same existing product never overwrite each other.
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-dup-target', null, null, '{"linkExistingBy":["name"]}'::jsonb)$$, 'duplicate-target batch');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-dup-target', null, 'e3000000-0000-4000-8000-000000000001', '{"linkExistingBy":["name"]}'::jsonb)$$, 'duplicate-target batch');
 select lives_ok($t$select public.stage_import_rows(
   (select id from public.import_batches where file_name = 'prod-dup-target'),
   $j$[
@@ -347,7 +347,7 @@ select is(
 );
 
 -- Staging again invalidates the preview; a stale preview is refused.
-select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-stale')$$, 'stale batch');
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-stale', null, 'e3000000-0000-4000-8000-000000000001')$$, 'stale batch');
 select lives_ok($t$select public.stage_import_rows(
   (select id from public.import_batches where file_name = 'prod-stale'),
   $j$[{"rowNumber":1,"externalId":"S1","payload":{"name":"Stale","unitType":"WEIGHT","sku":"STALE-1","categoryName":"Existente"}}]$j$::jsonb)$t$, 'stale row staged');
