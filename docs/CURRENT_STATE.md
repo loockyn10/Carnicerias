@@ -14,6 +14,8 @@ Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisio
 - Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
 - Admin `/admin/branch-stock` ("Stock por sucursal"): matriz de consulta producto × sucursal, búsqueda por nombre/SKU tolerante a acentos, filtro por categoría, sin escribir stock (sólo lectura). Reutiliza `get_replenishment_plan` (no crea RPC ni fuente de stock nueva); no incluye la Central (ver D-011).
 
+- **Bug corregido 2026-09-30**: en `/admin/replenishment` el botón "Registrar ingreso" sólo se renderizaba si `row.needsReplenishment` (sugerido > 0 o prioridad ≠ NORMAL), por lo que un producto con stock suficiente no se podía reponer. Ahora toda tarjeta tiene el botón (frontend únicamente; `record_stock_operation` nunca exigió stock 0). La búsqueda ignora el filtro "Necesitan reposición" y el diálogo muestra `Ingreso: +Y · Stock resultante`. Sin migración.
+
 ## Contradicciones vigentes
 
 ### Soporte `UNIT` incompleto en POS
