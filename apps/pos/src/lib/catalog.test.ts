@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCategoryTabs, productMatchesCategory, type CatalogProductLike, type CategoryDirectoryEntryLike } from "./catalog";
+import { buildCategoryTabs, hasStock, partitionByStock, productMatchesCategory, type CatalogProductLike, type CategoryDirectoryEntryLike } from "./catalog";
 
 const embutidos: CategoryDirectoryEntryLike = { id: "embutidos", name: "Embutidos", colorHex: "#ff0000", sortOrder: 1 };
 const cerdo: CategoryDirectoryEntryLike = { id: "cerdo", name: "Cerdo", colorHex: "#00ff00", sortOrder: 0 };
@@ -40,5 +40,42 @@ describe("productMatchesCategory", () => {
   it("\"ALL\" matches any product", () => {
     expect(productMatchesCategory(chorizo, "ALL")).toBe(true);
     expect(productMatchesCategory(vacio, "ALL")).toBe(true);
+  });
+});
+
+describe("hasStock / partitionByStock", () => {
+  // Grams. Real values, not rounded: 0 / -200 g / -1 kg are sin stock, 10 g (0.01 kg) and 1350 g are available.
+  const stock = new Map<string, number>([["vacio", 8000], ["peceto", 0], ["bondiola", -1000], ["costilla", 10], ["asado", 1350], ["merma", -200]]);
+
+  it("treats strictly positive stock as available, including fractions of a kilo", () => {
+    expect(hasStock(stock, "vacio")).toBe(true);
+    expect(hasStock(stock, "costilla")).toBe(true); // 0.01 kg
+    expect(hasStock(stock, "asado")).toBe(true); // 1.35 kg
+  });
+
+  it("treats zero, negative and never-moved products as sin stock", () => {
+    expect(hasStock(stock, "peceto")).toBe(false); // 0 kg
+    expect(hasStock(stock, "merma")).toBe(false); // -0.2 kg
+    expect(hasStock(stock, "bondiola")).toBe(false); // -1 kg
+    expect(hasStock(stock, "sin-movimientos")).toBe(false);
+  });
+
+  it("does not disable anything while stock has never been synced (unknown, not zero)", () => {
+    expect(hasStock(null, "peceto")).toBe(true);
+    expect(partitionByStock([{ productId: "peceto" }], null)).toEqual({ available: [{ productId: "peceto" }], outOfStock: [] });
+  });
+
+  it("puts available products first and keeps the original order inside each group", () => {
+    const products = [{ productId: "peceto" }, { productId: "vacio" }, { productId: "bondiola" }, { productId: "asado" }];
+    expect(partitionByStock(products, stock)).toEqual({
+      available: [{ productId: "vacio" }, { productId: "asado" }],
+      outOfStock: [{ productId: "peceto" }, { productId: "bondiola" }]
+    });
+  });
+
+  it("flips a product to available once a restock snapshot replaces zero, and back to sin stock when sold out", () => {
+    expect(hasStock(new Map([["peceto", 0]]), "peceto")).toBe(false);
+    expect(hasStock(new Map([["peceto", 10_000]]), "peceto")).toBe(true); // Reposición +10 kg
+    expect(hasStock(new Map([["peceto", 10_000 - 10_000]]), "peceto")).toBe(false); // sold the rest
   });
 });

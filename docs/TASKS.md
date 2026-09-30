@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Desplegar "productos con stock primero" en el POS
+
+Implementado 2026-09-30 (ver `docs/ARCHITECTURE.md`, "Stock en la pantalla de venta"). Pendiente (usuario):
+
+- `git push` y `supabase db push` (aplica `202609300040_pos_branch_stock.sql`; sin ella el POS sigue igual que antes: stock "desconocido", nada se deshabilita).
+- Nuevo instalador del POS (`pnpm build:pos:desktop`): hay Rust nuevo (SQLite `012`, comandos `apply_branch_stock`/`get_local_branch_stock`) y UI nueva.
+- `pnpm db:reset && pnpm db:test` donde haya Docker para correr `supabase/tests/pos_branch_stock.test.sql` por primera vez (no corrió contra Postgres real).
+- `pnpm db:types` cuando haya Docker: `database.types.ts` recibió a mano sólo la línea de `get_pos_branch_stock`.
+- Smoke físico: Avenida con stock y Janssen en 0 del mismo producto; reposición 0 → +10 kg aparece disponible tras el próximo sync; vender el remanente lo pasa a "Sin stock"; repetir offline.
+
 ## P0 — Aplicar migración 038 (fix de ambigüedad de `apply_employee_time_event`) y re-smoke
 
 **Causa raíz confirmada 2026-09-28** con el diagnóstico agregado en la vuelta anterior: el banner

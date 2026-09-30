@@ -1,6 +1,7 @@
 import type { Json } from "@carnicerias/database";
 import {
   nextAttemptAt,
+  type BranchStockSnapshot,
   type CatalogPullPayload,
   type OfflineSalePayload,
   type SyncStatusSnapshot
@@ -56,6 +57,25 @@ async function applyPull(runtime: LocalRuntime, user: SyncUser): Promise<Catalog
   const rosterPayload = roster.data as unknown as { operators: { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }[]; maxShiftHours: number };
   await localDatabase.applyOperatorRoster(rosterPayload.operators, rosterPayload.maxShiftHours);
   return pull;
+}
+
+/**
+ * Refreshes the branch stock projection the POS catalog uses to tell "disponible" from "sin stock".
+ * Runs AFTER the outbox push on purpose: a sale pushed this cycle is then already part of the
+ * server sum, so the snapshot and this device's pending-sale adjustment never disagree. Best-effort
+ * and isolated from the rest of the sync: a failure (offline, RPC not deployed yet) just leaves the
+ * last snapshot (or "unknown") in place and must never fail catalog/sales/timekeeping sync.
+ */
+async function refreshBranchStock(runtime: LocalRuntime): Promise<void> {
+  if (!runtime.branchId) return;
+  try {
+    const { data, error } = await supabase.rpc("get_pos_branch_stock", { p_branch_id: runtime.branchId });
+    if (error) throw error;
+    if (!data || Array.isArray(data) || typeof data !== "object") throw new Error("Invalid stock payload");
+    await localDatabase.applyBranchStock(data as unknown as BranchStockSnapshot);
+  } catch (stockError) {
+    console.warn("Branch stock refresh skipped:", stockError);
+  }
 }
 
 export async function registerDesktopDevice(
@@ -158,6 +178,7 @@ export async function synchronizeDesktop(
       pushSucceeded += 1;
     }
 
+    await refreshBranchStock(runtime);
     runtime = await localDatabase.runtime();
     listener({
       state: "online",
@@ -170,6 +191,9 @@ export async function synchronizeDesktop(
     });
     return runtime;
   } catch (error) {
+    // A stuck outbox event (or a failed pull) must not freeze stock visibility: whatever was
+    // pushed before the failure is already in the server sum, and what wasn't stays subtracted locally.
+    await refreshBranchStock(runtime);
     runtime = await localDatabase.runtime();
     listener({
       state: "error",

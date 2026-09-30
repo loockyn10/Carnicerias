@@ -15,9 +15,9 @@ import {
   type WeightStabilityState
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
-import { createOfflineSale, type SyncStatusSnapshot } from "@carnicerias/sync";
+import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { buildCategoryTabs, productMatchesCategory, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { buildCategoryTabs, hasStock, partitionByStock, productMatchesCategory, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
@@ -323,6 +323,10 @@ export default function App() {
   const [branchId, setBranchId] = useState("");
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [categoryDirectory, setCategoryDirectory] = useState<CategoryDirectoryEntryLike[]>([]);
+  // Stock real de la sucursal del dispositivo (no global de la organización); null = todavía nunca
+  // sincronizado, en cuyo caso no se deshabilita nada (ver lib/catalog.ts).
+  const [branchStock, setBranchStock] = useState<BranchStock>(null);
+  const [outOfStockOpen, setOutOfStockOpen] = useState(false);
   const [discounts, setDiscounts] = useState<DiscountRule[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [cashDiscountBps, setCashDiscountBps] = useState(0);
@@ -620,6 +624,29 @@ export default function App() {
       controller.abort();
     };
   }, [branchId, desktop, localRuntime?.catalogCursor]);
+
+  const loadBranchStock = useCallback(async () => {
+    if (!branchId) return;
+    try {
+      if (desktop) {
+        if (localRuntime?.branchId !== branchId) { setBranchStock(null); return; }
+        const local = await localDatabase.branchStock(branchId);
+        setBranchStock(local.snapshotApplied ? new Map(local.items.map((item) => [item.productId, item.quantityGrams])) : null);
+        return;
+      }
+      const { data, error: stockError } = await supabase.rpc("get_pos_branch_stock", { p_branch_id: branchId });
+      if (stockError) throw stockError;
+      const snapshot = data as unknown as BranchStockSnapshot;
+      setBranchStock(new Map(snapshot.items.map((item) => [item.productId, Number(item.quantityGrams)])));
+    } catch {
+      // Sin stock conocido el catálogo sigue vendible como antes; nunca bloquear la venta por esto.
+    }
+  }, [branchId, desktop, localRuntime?.branchId]);
+
+  useEffect(() => { setBranchStock(null); }, [branchId]);
+  // Se recalcula con cada sync (lastSuccessfulSyncAt cambia en cada pull; el snapshot de stock ya
+  // quedó aplicado antes de que runSync publique el runtime) y tras cada venta (explícito abajo).
+  useEffect(() => { void loadBranchStock(); }, [loadBranchStock, localRuntime?.lastSuccessfulSyncAt, localRuntime?.catalogCursor]);
 
   useEffect(() => {
     void loadRecentSales().catch(() => setRecentSales([]));
@@ -920,6 +947,15 @@ export default function App() {
     );
   }, [catalog, categoryId, search]);
 
+  // Con stock primero; sin stock después (visibles, nunca eliminados del catálogo). La búsqueda
+  // siempre incluye los sin stock, así se distingue "no existe" de "existe pero sin stock".
+  const { available: availableProducts, outOfStock: outOfStockProducts } = useMemo(
+    () => partitionByStock(filteredProducts, branchStock),
+    [filteredProducts, branchStock]
+  );
+  const searching = search.trim() !== "";
+  const showOutOfStock = searching || outOfStockOpen;
+
   const ticketTotal = useMemo(
     () => sumMoney(ticket.map((line) => line.subtotalCents)),
     [ticket]
@@ -982,12 +1018,43 @@ export default function App() {
   }, [cashDiscountBps, paymentMethod]);
 
   function openWeight(product: CatalogProduct, line?: TicketLine) {
+    // No confiar sólo en el estilo/disabled de la card: toda vía que agrega una línea nueva pasa por acá.
+    if (!line && !hasStock(branchStock, product.productId)) {
+      setError(`${product.productName} no tiene stock en esta sucursal.`);
+      return;
+    }
     setSelectedProduct(product);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
     setQuantityInput(line?.quantityUnits ?? 1);
     setSellAsPack(line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
+  }
+
+  // Mismo markup de card de siempre (el CSS compacto depende del orden name / category / price);
+  // una card sin stock es un <button disabled> — no dispara onClick aunque se fuerce el evento.
+  function renderProductCard(product: CatalogProduct, outOfStock: boolean) {
+    return (
+      <button
+        key={product.productId}
+        type="button"
+        disabled={outOfStock}
+        aria-disabled={outOfStock}
+        className={`pos-product-card min-h-32 rounded-2xl border border-l-4 border-stone-700 p-4 text-left shadow-lg transition ${outOfStock ? "cursor-not-allowed bg-stone-900/40 opacity-50 grayscale" : "bg-stone-900 hover:-translate-y-0.5 hover:bg-stone-800"}`}
+        onClick={() => openWeight(product)}
+        style={{ borderLeftColor: outOfStock ? undefined : categoryAccent(product.categoryColorHex) }}
+      >
+        <span className="block text-lg font-black">{product.productName}</span>
+        <span className="pos-product-category mt-2 block text-sm text-stone-400">{product.categoryName}</span>
+        <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>
+        {outOfStock
+          ? <span className="mt-1 block text-xs font-black uppercase tracking-wide text-stone-400">Sin stock</span>
+          : discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
+              const label = discountBadgeLabel(rule);
+              return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
+            })}
+      </button>
+    );
   }
 
   // Único pack activo del producto seleccionado (la promoción garantiza como máximo uno vigente
@@ -1007,6 +1074,11 @@ export default function App() {
    */
   function commitSelectedProductLine(explicitWeightGrams?: number) {
     if (!selectedProduct) return;
+    if (!editingLineId && !hasStock(branchStock, selectedProduct.productId)) {
+      setError(`${selectedProduct.productName} ya no tiene stock en esta sucursal.`);
+      setSelectedProduct(null);
+      return;
+    }
 
     try {
       // Todavía puede no haber método de pago elegido en este punto: se usa un
@@ -1096,6 +1168,7 @@ export default function App() {
         setPaymentMethod(null);
         const runtime = await localDatabase.runtime();
         setLocalRuntime(runtime);
+        void loadBranchStock();
         setSyncStatus((current) => ({
           ...current,
           state: navigator.onLine ? "online" : "offline",
@@ -1149,6 +1222,7 @@ export default function App() {
     setNotice(`Venta ${completedSale.sale_id.slice(0, 8)} confirmada por ${formatCurrency(BigInt(completedSale.total_cents))}`);
     setTicket([]);
     setPaymentMethod(null);
+    void loadBranchStock();
     void loadRecentSales().catch(() => undefined);
   }
 
@@ -1437,22 +1511,23 @@ export default function App() {
             onChange={(event) => setSearch(event.target.value)}
           />
           <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
-            {filteredProducts.map((product) => (
-              <button
-                key={product.productId}
-                className="pos-product-card min-h-32 rounded-2xl border border-l-4 border-stone-700 bg-stone-900 p-4 text-left shadow-lg transition hover:-translate-y-0.5 hover:bg-stone-800"
-                onClick={() => openWeight(product)}
-                style={{ borderLeftColor: categoryAccent(product.categoryColorHex) }}
-              >
-                <span className="block text-lg font-black">{product.productName}</span>
-                <span className="pos-product-category mt-2 block text-sm text-stone-400">{product.categoryName}</span>
-                <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>
-                {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
-                  const label = discountBadgeLabel(rule);
-                  return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
-                })}
-              </button>
-            ))}
+            {branchStock !== null && availableProducts.length > 0 ? <h3 className="col-span-full text-xs font-black uppercase tracking-widest text-stone-400">Disponibles</h3> : null}
+            {availableProducts.map((product) => renderProductCard(product, false))}
+            {outOfStockProducts.length > 0 ? (
+              searching ? (
+                <h3 className="col-span-full mt-2 text-xs font-black uppercase tracking-widest text-stone-500">Sin stock ({outOfStockProducts.length})</h3>
+              ) : (
+                <button
+                  type="button"
+                  className="col-span-full mt-2 flex items-center gap-2 text-left text-xs font-black uppercase tracking-widest text-stone-500 hover:text-stone-300"
+                  aria-expanded={outOfStockOpen}
+                  onClick={() => setOutOfStockOpen((open) => !open)}
+                >
+                  <span aria-hidden="true">{outOfStockOpen ? "▾" : "▸"}</span>Sin stock ({outOfStockProducts.length})
+                </button>
+              )
+            ) : null}
+            {showOutOfStock ? outOfStockProducts.map((product) => renderProductCard(product, true)) : null}
           </div>
           {!loading && filteredProducts.length === 0 ? <p className="mt-10 text-center text-stone-500">No hay productos disponibles.</p> : null}
         </section>

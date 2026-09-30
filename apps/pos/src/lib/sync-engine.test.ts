@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   applyPull: vi.fn(),
   applyCommercialConfig: vi.fn(),
   applyOperatorRoster: vi.fn(),
+  applyBranchStock: vi.fn(),
   dueOutbox: vi.fn(),
   markSyncing: vi.fn(),
   markSynced: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("./local-database", () => ({
     applyPull: mocks.applyPull,
     applyCommercialConfig: mocks.applyCommercialConfig,
     applyOperatorRoster: mocks.applyOperatorRoster,
+    applyBranchStock: mocks.applyBranchStock,
     dueOutbox: mocks.dueOutbox,
     markSyncing: mocks.markSyncing,
     markSynced: mocks.markSynced,
@@ -63,6 +65,8 @@ const pull = {
   removedProductIds: []
 };
 
+const stockSnapshot = { serverTime: "2026-09-14T10:00:11Z", branchId: "branch", items: [{ productId: "vacio", quantityGrams: "8000" }] };
+
 describe("desktop synchronization status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -70,6 +74,7 @@ describe("desktop synchronization status", () => {
     mocks.applyPull.mockResolvedValue(undefined);
     mocks.applyCommercialConfig.mockResolvedValue(undefined);
     mocks.applyOperatorRoster.mockResolvedValue(undefined);
+    mocks.applyBranchStock.mockResolvedValue(undefined);
     mocks.markSyncing.mockResolvedValue(undefined);
     mocks.markSynced.mockResolvedValue(undefined);
     mocks.markFailed.mockResolvedValue(undefined);
@@ -77,6 +82,7 @@ describe("desktop synchronization status", () => {
       if (name === "pull_pos_state") return Promise.resolve({ data: pull, error: null });
       if (name === "get_pos_commercial_config") return Promise.resolve({ data: {}, error: null });
       if (name === "get_pos_operator_roster") return Promise.resolve({ data: { operators: [], maxShiftHours: 12 }, error: null });
+      if (name === "get_pos_branch_stock") return Promise.resolve({ data: stockSnapshot, error: null });
       return Promise.resolve({ data: {}, error: null });
     });
   });
@@ -98,7 +104,42 @@ describe("desktop synchronization status", () => {
 
     expect(statuses.map((status) => status.state)).toEqual(["online"]);
     expect(statuses.some((status) => status.syncingTotal === 0 && status.state === "syncing")).toBe(false);
-    expect(mocks.rpc).toHaveBeenCalledTimes(3);
+    expect(mocks.rpc).toHaveBeenCalledTimes(4);
+  });
+
+  it("stores the branch stock snapshot after the outbox push, never before it", async () => {
+    const order: string[] = [];
+    mocks.runtime.mockResolvedValue({ ...runtime, pendingCount: 1 });
+    mocks.dueOutbox.mockResolvedValue([{
+      id: "event", aggregateType: "SALE", aggregateId: "sale", operation: "UPSERT", payload: {}, status: "PENDING",
+      attempts: 0, createdAt: "2026-09-14T10:00:00Z", lastAttemptAt: null, nextAttemptAt: "2026-09-14T10:00:00Z", lastError: null
+    }]);
+    mocks.markSynced.mockImplementation(() => { order.push("push"); return Promise.resolve(); });
+    mocks.applyBranchStock.mockImplementation(() => { order.push("stock"); return Promise.resolve(); });
+
+    await synchronizeDesktop({ id: "profile", email: "pos@example.test" }, () => undefined);
+
+    expect(mocks.rpc).toHaveBeenCalledWith("get_pos_branch_stock", { p_branch_id: "branch" });
+    expect(mocks.applyBranchStock).toHaveBeenCalledWith(stockSnapshot);
+    expect(order).toEqual(["push", "stock"]);
+  });
+
+  it("does not fail the sync when the stock RPC is unavailable (older server / offline blip)", async () => {
+    mocks.runtime.mockResolvedValue(runtime);
+    mocks.dueOutbox.mockResolvedValue([]);
+    mocks.rpc.mockImplementation((name: string) => {
+      if (name === "pull_pos_state") return Promise.resolve({ data: pull, error: null });
+      if (name === "get_pos_operator_roster") return Promise.resolve({ data: { operators: [], maxShiftHours: 12 }, error: null });
+      if (name === "get_pos_branch_stock") return Promise.resolve({ data: null, error: { message: "function does not exist", code: "42883" } });
+      return Promise.resolve({ data: {}, error: null });
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const statuses: SyncStatusSnapshot[] = [];
+
+    await synchronizeDesktop({ id: "profile", email: "pos@example.test" }, (status) => statuses.push(status));
+
+    expect(statuses.map((status) => status.state)).toEqual(["online"]);
+    expect(mocks.applyBranchStock).not.toHaveBeenCalled();
   });
 
   it("publishes real progress and pushes a due local operation", async () => {
@@ -156,7 +197,7 @@ describe("desktop synchronization status", () => {
     );
 
     expect(onlineStatuses.map((status) => status.state)).toEqual(["online"]);
-    expect(mocks.rpc).toHaveBeenCalledTimes(3);
+    expect(mocks.rpc).toHaveBeenCalledTimes(4);
   });
 
   it("runs once at startup and only once more after one idle minute", async () => {

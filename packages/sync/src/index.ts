@@ -162,6 +162,15 @@ export interface CatalogPullPayload {
   removedProductIds: string[];
 }
 
+/** Server stock snapshot for the device branch (get_pos_branch_stock). Always a full snapshot,
+ * never a delta. `quantityGrams` is the signed ledger sum as a decimal string (grams for WEIGHT,
+ * units for UNIT); a product with no movements in the branch is absent, i.e. zero. */
+export interface BranchStockSnapshot {
+  serverTime: string;
+  branchId: string;
+  items: { productId: string; quantityGrams: string }[];
+}
+
 export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePayload {
   if (input.ticket.length < 1 || input.ticket.length > 100) {
     throw new Error("A sale must contain between 1 and 100 items");

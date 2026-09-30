@@ -20,6 +20,7 @@ const PRODUCT_CATEGORY_ASSIGNMENTS_SCHEMA: &str = include_str!("../migrations/00
 const UNIT_SALE_SUPPORT_SCHEMA: &str = include_str!("../migrations/009_unit_sale_support.sql");
 const CARD_SURCHARGE_PRICING_SCHEMA: &str = include_str!("../migrations/010_card_surcharge_pricing.sql");
 const SHIFT_HEARTBEAT_SCHEMA: &str = include_str!("../migrations/011_shift_heartbeat.sql");
+const BRANCH_STOCK_PROJECTION_SCHEMA: &str = include_str!("../migrations/012_branch_stock_projection.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -69,6 +70,38 @@ struct LocalCategoryRow {
     name: String,
     color_hex: Option<String>,
     sort_order: i64,
+}
+
+/// Effective stock of the device branch as the POS screen needs it: the last server snapshot
+/// (catalog_branch_stock) adjusted by this device's own sale movements that the snapshot cannot
+/// include yet. `snapshot_applied = false` means stock was never synced (upgrade/offline first
+/// start) — the UI must treat that as "unknown" and keep every product sellable, NOT as zero.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBranchStock {
+    snapshot_applied: bool,
+    items: Vec<LocalBranchStockItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBranchStockItem {
+    product_id: String,
+    quantity_grams: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchStockSnapshotItem {
+    product_id: String,
+    quantity_grams: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchStockSnapshot {
+    branch_id: String,
+    items: Vec<BranchStockSnapshotItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -412,6 +445,13 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.execute("insert into schema_migrations(version, applied_at) values (11, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    let branch_stock_projection_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 12)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !branch_stock_projection_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(BRANCH_STOCK_PROJECTION_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (12, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
 
     let timestamp = now();
     connection
@@ -727,6 +767,96 @@ fn apply_catalog_pull(
     set_metadata(&transaction, "last_successful_sync_at", &pull.server_time, &timestamp)?;
     set_metadata(&transaction, "last_sync_error", "", &timestamp)?;
     transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Replaces the stored stock snapshot for the device branch with the server's current one.
+/// Full replace (not a delta): a product that dropped out of the payload has no movements
+/// anymore and must read as zero, never keep a stale positive value.
+fn apply_branch_stock_inner(connection: &mut Connection, snapshot: &BranchStockSnapshot) -> Result<(), String> {
+    let device_branch: Option<String> = connection
+        .query_row("select branch_id from local_device where singleton = 1", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if device_branch.as_deref() != Some(snapshot.branch_id.as_str()) {
+        return Err("Stock snapshot is for a different branch than this device".to_string());
+    }
+    let mut parsed: Vec<(&str, i64)> = Vec::with_capacity(snapshot.items.len());
+    for item in &snapshot.items {
+        parsed.push((item.product_id.as_str(), parse_i64(&item.quantity_grams, "quantityGrams")?));
+    }
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let timestamp = now();
+    transaction
+        .execute("delete from catalog_branch_stock where branch_id = ?1", params![snapshot.branch_id])
+        .map_err(|error| error.to_string())?;
+    for (product_id, quantity_grams) in parsed {
+        transaction
+            .execute(
+                "insert into catalog_branch_stock(branch_id, product_id, quantity_grams) values (?1, ?2, ?3)",
+                params![snapshot.branch_id, product_id, quantity_grams],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    set_metadata(&transaction, "branch_stock_branch_id", &snapshot.branch_id, &timestamp)?;
+    set_metadata(&transaction, "branch_stock_applied_at", &timestamp, &timestamp)?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn local_branch_stock_inner(connection: &Connection, branch_id: &str) -> Result<LocalBranchStock, String> {
+    let snapshot_branch = metadata(connection, "branch_stock_branch_id")?;
+    let applied_at = metadata(connection, "branch_stock_applied_at")?;
+    let Some(applied_at) = applied_at.filter(|_| snapshot_branch.as_deref() == Some(branch_id)) else {
+        return Ok(LocalBranchStock { snapshot_applied: false, items: Vec::new() });
+    };
+
+    let mut quantities: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut snapshot = connection
+        .prepare("select product_id, quantity_grams from catalog_branch_stock where branch_id = ?1")
+        .map_err(|error| error.to_string())?;
+    let snapshot_rows = snapshot
+        .query_map([branch_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for pair in snapshot_rows {
+        let (product_id, quantity) = pair.map_err(|error| error.to_string())?;
+        quantities.insert(product_id, quantity);
+    }
+
+    // Sales this device made that the snapshot cannot contain: still unsynced, or synced after the
+    // snapshot was applied (the server figure predates them). Sales synced before the snapshot are
+    // already in the server sum, so counting them again would double-subtract. julianday() (not a
+    // string comparison) because the two timestamps come from different formatters (Rust RFC 3339
+    // vs JS toISOString) with different fractional-second widths.
+    let mut pending = connection
+        .prepare(
+            "select product_id, sum(quantity_grams) from local_stock_movements
+             where branch_id = ?1 and (synced_at is null or julianday(synced_at) > julianday(?2))
+             group by product_id",
+        )
+        .map_err(|error| error.to_string())?;
+    let pending_rows = pending
+        .query_map(params![branch_id, applied_at], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for pair in pending_rows {
+        let (product_id, quantity) = pair.map_err(|error| error.to_string())?;
+        *quantities.entry(product_id).or_insert(0) += quantity;
+    }
+
+    let items = quantities
+        .into_iter()
+        .map(|(product_id, quantity_grams)| LocalBranchStockItem { product_id, quantity_grams })
+        .collect();
+    Ok(LocalBranchStock { snapshot_applied: true, items })
+}
+
+#[tauri::command]
+fn apply_branch_stock(state: State<'_, DatabaseState>, snapshot: BranchStockSnapshot) -> Result<(), String> {
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    apply_branch_stock_inner(&mut connection, &snapshot)
+}
+
+#[tauri::command]
+fn get_local_branch_stock(state: State<'_, DatabaseState>, branch_id: String) -> Result<LocalBranchStock, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    local_branch_stock_inner(&connection, &branch_id)
 }
 
 #[tauri::command]
@@ -1466,6 +1596,8 @@ pub fn run() {
             get_local_catalog,
             get_local_categories,
             apply_catalog_pull,
+            apply_branch_stock,
+            get_local_branch_stock,
             apply_commercial_config,
             get_local_commercial_config,
             apply_operator_roster,
@@ -1517,7 +1649,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 12);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -1569,7 +1701,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 12);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -2116,5 +2248,102 @@ mod tests {
         assert_eq!(connection.query_row("select count(*) from local_employee_shifts where clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from sync_outbox where aggregate_type='SHIFT'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(connection.query_row("select count(*) from local_active_operator", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    fn branch_stock_fixture() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',device_status='ACTIVE'", []).unwrap();
+        // Stock movements reference a sale row by FK; these tests only care about the movement rows.
+        connection.execute_batch("pragma foreign_keys = off;").unwrap();
+        connection
+    }
+
+    fn snapshot(items: &[(&str, &str)]) -> BranchStockSnapshot {
+        BranchStockSnapshot {
+            branch_id: "branch".into(),
+            items: items.iter().map(|(product_id, grams)| BranchStockSnapshotItem { product_id: (*product_id).into(), quantity_grams: (*grams).into() }).collect(),
+        }
+    }
+
+    fn stock_of(stock: &LocalBranchStock, product_id: &str) -> Option<i64> {
+        stock.items.iter().find(|item| item.product_id == product_id).map(|item| item.quantity_grams)
+    }
+
+    fn insert_movement(connection: &Connection, id: &str, product_id: &str, grams: i64, synced_at: Option<&str>) {
+        connection
+            .execute(
+                "insert into local_stock_movements(id,sale_id,organization_id,branch_id,product_id,movement_type,quantity_grams,profile_id,occurred_at,created_at,synced_at)
+                 values(?1,'sale','org','branch',?2,'SALE',?3,'profile','2026-09-30T00:00:00Z','2026-09-30T00:00:00Z',?4)",
+                params![id, product_id, grams, synced_at],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn branch_stock_is_unknown_until_the_first_snapshot_is_applied() {
+        let connection = branch_stock_fixture();
+        let stock = local_branch_stock_inner(&connection, "branch").unwrap();
+        assert!(!stock.snapshot_applied);
+        assert!(stock.items.is_empty());
+    }
+
+    #[test]
+    fn branch_stock_snapshot_keeps_the_exact_signed_fractional_values() {
+        let mut connection = branch_stock_fixture();
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("vacio", "8000"), ("peceto", "0"), ("bondiola", "-1000"), ("costilla", "10"), ("asado", "1350")])).unwrap();
+        let stock = local_branch_stock_inner(&connection, "branch").unwrap();
+        assert!(stock.snapshot_applied);
+        assert_eq!(stock_of(&stock, "vacio"), Some(8000));
+        assert_eq!(stock_of(&stock, "peceto"), Some(0));
+        assert_eq!(stock_of(&stock, "bondiola"), Some(-1000));
+        assert_eq!(stock_of(&stock, "costilla"), Some(10));
+        assert_eq!(stock_of(&stock, "asado"), Some(1350));
+        // A product with no row is simply absent; the UI reads absence as zero once a snapshot exists.
+        assert_eq!(stock_of(&stock, "sin-movimientos"), None);
+    }
+
+    #[test]
+    fn a_new_snapshot_replaces_the_previous_one_so_restocked_products_become_available() {
+        let mut connection = branch_stock_fixture();
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("vacio", "0"), ("asado", "5000")])).unwrap();
+        // Reposición +10 kg for vacio; asado vanished from the ledger sum payload entirely.
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("vacio", "10000")])).unwrap();
+        let stock = local_branch_stock_inner(&connection, "branch").unwrap();
+        assert_eq!(stock_of(&stock, "vacio"), Some(10000));
+        assert_eq!(stock_of(&stock, "asado"), None);
+    }
+
+    #[test]
+    fn a_pending_local_sale_reduces_stock_until_the_server_snapshot_includes_it() {
+        let mut connection = branch_stock_fixture();
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("vacio", "1000")])).unwrap();
+        // Sold 1 kg offline, not synced yet: stock must already read 0 (positive -> 0 transition).
+        insert_movement(&connection, "m1", "vacio", -1000, None);
+        assert_eq!(stock_of(&local_branch_stock_inner(&connection, "branch").unwrap(), "vacio"), Some(0));
+        // A product only ever sold locally (no snapshot row) also goes through the adjustment.
+        insert_movement(&connection, "m2", "nuevo", -250, None);
+        assert_eq!(stock_of(&local_branch_stock_inner(&connection, "branch").unwrap(), "nuevo"), Some(-250));
+    }
+
+    #[test]
+    fn sales_synced_before_the_snapshot_are_not_subtracted_twice_but_later_ones_are() {
+        let mut connection = branch_stock_fixture();
+        // Synced well before the snapshot is applied: the server sum already includes it.
+        insert_movement(&connection, "old", "vacio", -500, Some("2000-01-01T00:00:00.000Z"));
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("vacio", "4500")])).unwrap();
+        assert_eq!(stock_of(&local_branch_stock_inner(&connection, "branch").unwrap(), "vacio"), Some(4500));
+        // Synced after the snapshot was applied (mixed fractional widths on purpose): the snapshot predates it.
+        insert_movement(&connection, "late", "vacio", -500, Some("2999-01-01T00:00:00.5Z"));
+        assert_eq!(stock_of(&local_branch_stock_inner(&connection, "branch").unwrap(), "vacio"), Some(4000));
+    }
+
+    #[test]
+    fn a_snapshot_for_another_branch_is_rejected() {
+        let mut connection = branch_stock_fixture();
+        let mut foreign = snapshot(&[("vacio", "1000")]);
+        foreign.branch_id = "other-branch".into();
+        assert!(apply_branch_stock_inner(&mut connection, &foreign).is_err());
+        assert!(!local_branch_stock_inner(&connection, "branch").unwrap().snapshot_applied);
     }
 }

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  BranchStockSnapshot,
   CatalogPullPayload,
   OfflineSalePayload,
   OutboxRecord
@@ -63,6 +64,13 @@ export interface LocalCategoryRow {
   sortOrder: number;
 }
 
+/** Device-branch stock as the Tauri backend computes it: last server snapshot minus this device's
+ * own sales the snapshot can't include yet. `snapshotApplied: false` = never synced (unknown). */
+export interface LocalBranchStock {
+  snapshotApplied: boolean;
+  items: { productId: string; quantityGrams: number }[];
+}
+
 export interface LocalSaleReceipt {
   saleId: string;
   totalCents: string;
@@ -102,6 +110,8 @@ export const localDatabase = {
   categories: () => desktopOnly<LocalCategoryRow[]>("get_local_categories"),
   applyPull: (pull: CatalogPullPayload, profileId: string, userEmail: string) =>
     desktopVoid("apply_catalog_pull", { pull, profileId, userEmail }),
+  branchStock: (branchId: string) => desktopOnly<LocalBranchStock>("get_local_branch_stock", { branchId }),
+  applyBranchStock: (snapshot: BranchStockSnapshot) => desktopVoid("apply_branch_stock", { snapshot }),
   applyCommercialConfig: (config: unknown) => desktopVoid("apply_commercial_config", { config }),
   applyOperatorRoster: (operators: OperatorRosterRow[], maxShiftHours: number) => desktopVoid("apply_operator_roster", { operators, maxShiftHours }),
   operators: () => desktopOnly<LocalOperator[]>("get_local_operators"),
