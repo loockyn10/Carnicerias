@@ -142,6 +142,10 @@ export interface ImportBatchOptions {
   linkExistingBy?: ImportLinkKey[];
   /** Category for NEW products whose row names none (products only). */
   defaultCategoryId?: EntityId;
+  /** A product row whose categoryName matches nothing creates that category on apply (products only). */
+  createMissingCategories?: boolean;
+  /** Shared by the batches of ONE logical import (a big file is split in several batches). */
+  runId?: string;
 }
 
 /** One staged row as sent to stage_import_rows. `externalId` is the source system's own code. */
@@ -175,6 +179,11 @@ export interface ImportProductPayload {
   costCents?: number;
   active?: boolean;
   inventoryRole?: ProductInventoryRole;
+  /**
+   * Set by the uploader for a row it already knows is unusable (missing price, repeated across
+   * batches, ...). The engine reports it as ERROR/INVALID_ROW with this text and never applies it.
+   */
+  invalidReason?: string;
 }
 
 /**

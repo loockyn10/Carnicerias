@@ -33,12 +33,22 @@ Implementado 2026-09-30 (ver `docs/IMPORTS.md`, `CURRENT_STATE.md` "Foundation d
 - No hace falta instalador nuevo del POS (Rust/SQLite/React sin cambios).
 - Antes de cualquier importación real: ensayar el flujo completo en un proyecto Supabase descartable y conseguir exportaciones reales de SimplyGest (productos, rubros, códigos de barras, stock por sucursal) para escribir el mapper.
 
+## P0 — Desplegar y ensayar la pantalla de importación de productos (acción del usuario)
+
+Implementada 2026-10-01 (ver `docs/IMPORTS.md` "Pantalla de importación", D-053). **No se importó ningún dato real.** Pendiente (usuario):
+
+- `supabase db push` primero (aplica `202609300049`) y `git push` después (Vercel despliega el Admin): la pantalla pasa `createMissingCategories`/`runId`, que una base sin `049` rechaza como "Opción desconocida". Si todavía no estaban, `041`–`048` van antes, en orden.
+- Confirmar que `organizations.production_branch_id` apunta a Central (Admin → Desposte) y que existe la categoría "Almacen" (la crea `048` en organizaciones existentes); sin eso la pantalla se bloquea con un mensaje claro.
+- `pnpm db:reset && pnpm db:test` donde haya Docker (corre `import_ui_support.test.sql`, 64 aserciones, por primera vez contra Supabase real) y `pnpm db:types` (esta migración no cambia firmas: no debería haber diferencias).
+- **Ensayo en un proyecto Supabase descartable** (o branch) con la exportación real de SimplyGest: analizar → revisar errores/adopciones → confirmar → reimportar el mismo archivo (debe dar 0 nuevos). Medir el tiempo de apply de un lote de 1000 contra Supabase real (el límite de 60 s por acción en Vercel no se probó fuera del Postgres emulado).
+- Exportación de SimplyGest a pedir: **productos** con código interno, descripción, código(s) de barras, rubro/familia, precio de venta (el de contado, sin recargo), costo y —en una segunda tanda— stock **sólo de Central**, en CSV/XLSX con encabezado.
+
 ## P1 — Plan de sprints para reemplazar SimplyGest (orden recomendado)
 
 Cada sprint requiere decisión explícita antes de tocar pricing, orden de descuentos, ledger, sync offline o RLS (ver `CLAUDE.md`).
 
 1. ~~**Almacén operable en Admin (`UNIT`)**~~ — hecho (ronda 2): stock/ajustes/mermas/transferencias `UNIT`, barcodes en el modal de producto, surtido por sucursal, catálogo paginado. Queda: selector con búsqueda en Desposte y Promociones (hoy `<select>` completo) y regla de alertas de almacén sin stock.
-2. **Importador real**: mapper SimplyGest en `packages/business-logic` (puro, con tests: kg→g, decimal→centavos, rubro→categoría, separar barcodes) + pantalla `/admin/imports` (subir CSV/Excel, mapeo de columnas, **sucursal destino = Central**, partir en lotes ≤1000, resumen "N nuevos / N actualizaciones / N ignorados / N errores", descarga de errores, confirmar). Orden de carga: categorías → productos (precio/costo/barcodes; se habilitan sólo en Central) → stock inicial de Central. Ensayo en proyecto descartable; luego producción.
+2. ~~**Importador real**~~ — pantalla hecha (2026-10-01, ver el P0 de arriba). Queda: ensayo con la exportación real en un proyecto descartable y luego producción; descarga de la lista de errores (hoy se ven en la tabla de la vista previa); varios códigos de barras por fila.
 3. ~~**POS: escaneo de código de barras**~~ — hecho (ronda 2, D-050); falta el smoke físico con escáner real (P0 de arriba).
 4. **Proveedores y compras**: `suppliers` (con importación vía `external_entity_links`, ampliando su `check`), compra/recepción → movimientos `PURCHASE` + costo vigente (`product_costs`), reemplaza `stock_operations.supplier` (texto libre) sin perder el historial, cuentas a pagar si se confirma el requisito.
 5. **Clientes mayoristas y precios especiales**: `customers`, lista de precios y/o precio por cliente con vigencia append-only (mismo patrón que `product_prices`, precedencia definida), selección de cliente en el POS (con impacto offline: sincronizar clientes/listas a SQLite), cuenta corriente/cobranzas. **Requiere decisión explícita de dónde entra el precio de cliente en el orden de ajustes** (hoy: precio de lista → recargo tarjeta → promoción, D-044) y cómo interactúa con promociones.

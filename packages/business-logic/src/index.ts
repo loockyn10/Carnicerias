@@ -56,3 +56,31 @@ export type {
   ProductionOutputPricing,
   ProductionOutputWeight
 } from "./production";
+export {
+  CATALOG_FIELD_LABELS,
+  CATALOG_IMPORT_FIELDS,
+  chunkItems,
+  decodeCsvBytes,
+  detectCsvDelimiter,
+  detectNumberFormat,
+  detectTableNumberFormat,
+  mapCatalogRows,
+  normalizeImportText,
+  parseCsvRecords,
+  parseCsvText,
+  suggestColumnMapping,
+  tableFromRecords,
+  validateColumnMapping
+} from "./catalog-import";
+export type {
+  CatalogColumnMapping,
+  CatalogImportField,
+  CatalogMappingOptions,
+  CatalogMappingResult,
+  CatalogRowDisplay,
+  CellValue,
+  ImportTable,
+  ImportTableRow,
+  MappedCatalogRow,
+  NumberFormat
+} from "./catalog-import";

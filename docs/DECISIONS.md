@@ -637,3 +637,21 @@ En el POS de Central (almacén), un barcode desconocido abre un modal con nombre
 - **Scan vs click:** un escaneo de producto habilitado con stock <= 0 se agrega en Central con aviso "Stock no registrado" (ver DOMAIN_RULES); el click/búsqueda manual no cambia. Es una excepción de UX de escaneo, no un cambio del ledger ni de las reglas de stock.
 
 **Motivo:** Fran no debe ir al Admin por cada producto nuevo del almacén ni escanear dos veces, pero la caja no puede obtener permisos de catálogo ni un alta puede dejar productos a medias o duplicados.
+
+
+---
+
+## D-053 — Importación de productos desde Admin: archivo completo registrado, validación previa sobre todo el archivo, nada se escribe antes de confirmar
+
+**Status:** Active
+
+La pantalla `/admin/imports` (CSV/Excel → motor de D-046) agrega, sin cambiar sus reglas:
+
+- **Todas las filas del archivo se stagean**, también las que el cliente ya sabe inválidas (`payload.invalidReason` → `ERROR INVALID_ROW`, id sintético `INVALID:<fila>`): la base conserva el archivo completo y la vista previa sale de una única fuente. El cliente valida sobre **todo** el archivo (repetidos de código/barcode/nombre, números, longitudes) porque el motor sólo ve ≤1000 filas por lote.
+- **Categorías nuevas dentro del preview:** `createMissingCategories`; el preview las clasifica `CREATE` y se crean al aplicar (una sola vez por nombre normalizado). Antes habría que crearlas antes de previsualizar, o sea, escribir antes de confirmar.
+- **Una importación lógica = varios lotes** con el mismo `runId`, aplicados en orden; cada lote es atómico, la corrida no (no hay transacción de varios lotes con el tope por `statement_timeout`). Reintentar el mismo archivo continúa sin duplicar.
+- **Destino siempre Central, decidido en el servidor** (sucursal productiva, D-033/D-052); stock sólo `OPENING_BALANCE` en Central después de los productos, nunca una columna de stock (D-047).
+- **Adopción de productos existentes** (`linkExistingBy` = barcode y SKU por defecto, nunca nombre) sólo si es inequívoca, requiere revisión explícita en la pantalla y no cambia la forma de venta (`UNIT_TYPE_MISMATCH`): la carnicería por kg no se convierte en `UNIT` por un SKU coincidente.
+- Un **nombre repetido** en el archivo con otro código es error (gana la primera fila): el motor no lo impide dentro de un lote pero sí entre lotes, y el resultado no debe depender de dónde cae cada fila. **Stock negativo/fraccionado** invalida la fila entera mientras "Importar stock actual" esté marcado.
+
+**Motivo:** que el dueño vea exactamente qué pasará con cada fila de un catálogo de miles de productos, sin duplicados, sin tocar las carnicerías y pudiendo reintentar sin miedo.

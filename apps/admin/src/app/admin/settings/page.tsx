@@ -6,7 +6,8 @@ interface SettingsLink { label: string; description: string; href: string }
 
 const SYSTEM_LINKS: SettingsLink[] = [
   { label: "Dispositivos POS", description: "Terminales autorizadas para operar.", href: "/admin/devices" },
-  { label: "Avisos", description: "Comunicaciones visibles en las sucursales.", href: "/admin/announcements" }
+  { label: "Avisos", description: "Comunicaciones visibles en las sucursales.", href: "/admin/announcements" },
+  { label: "Importación de productos", description: "Importá productos, precios, costos y stock desde SimplyGest u otros archivos.", href: "/admin/imports" }
 ];
 
 const ADVANCED_LINKS: SettingsLink[] = [
