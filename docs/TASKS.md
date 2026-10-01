@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Desplegar el alta rápida de producto desde el scanner (acción del usuario)
+
+Implementado 2026-09-30 (ver `CURRENT_STATE.md` "Alta rápida de producto…", D-052). Pendiente (usuario):
+
+- `git push` y `supabase db push` (aplica `202609300048`; **antes** de instalar el POS nuevo). Un POS viejo contra el servidor nuevo no cambia; un POS nuevo contra un servidor sin `048` no abre el alta (no sabe que es Central).
+- **Confirmar que `organizations.production_branch_id` apunta a Central** (Admin → sucursal productiva); sin eso el alta y la excepción de stock quedan deshabilitadas (fail-closed).
+- `pnpm db:reset && pnpm db:test` donde haya Docker (corre `pos_quick_product.test.sql`, 83 aserciones, por primera vez contra Supabase real) y `pnpm db:types` (comparar con la edición manual).
+- **Instalador nuevo del POS** (`pnpm build:pos:desktop`; Linux i386 `pnpm build:pos:linux:i386`): hay React nuevo; Rust/SQLite sin cambios.
+- Smoke físico en Central con escáner USB: código desconocido → modal → crear con y sin costo → queda +1 en el ticket → cobrar (online y offline); volver a escanear el mismo código (sin modal, suma); producto existente activo que Central no tenía → se habilita y se suma sin modal (y no aparece en Avenida/Janssen); producto inactivo → aviso, no se reactiva; producto habilitado con stock 0 → se agrega con aviso "Stock no registrado" mientras su tarjeta sigue gris; sin Internet + código desconocido → el modal avisa "Sin conexión"; Avenida/Janssen: código desconocido sigue "Producto no encontrado" y nunca ven el producto nuevo.
+
 ## P0 — Validar y desplegar Central como almacén: surtido, scanner POS y stock `UNIT` (acción del usuario)
 
 Implementado 2026-09-30, ronda 2 (ver `CURRENT_STATE.md` "Central como almacén…", D-049/050/051). **No se importó ningún dato real.** Pendiente (usuario):

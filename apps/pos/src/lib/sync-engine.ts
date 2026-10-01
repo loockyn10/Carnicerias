@@ -8,6 +8,7 @@ import {
 } from "@carnicerias/sync";
 
 import { localDatabase, type LocalRuntime } from "./local-database";
+import { shouldRefreshQuickProductCreate, writeQuickProductCreate } from "./quick-product";
 import { supabase } from "./supabase";
 
 interface SyncUser {
@@ -75,6 +76,25 @@ async function refreshBranchStock(runtime: LocalRuntime): Promise<void> {
     await localDatabase.applyBranchStock(data as unknown as BranchStockSnapshot);
   } catch (stockError) {
     console.warn("Branch stock refresh skipped:", stockError);
+  }
+}
+
+/**
+ * Learns (rarely, see CAPABILITY_MAX_AGE_MS) whether this device is the POS of Central, which is the
+ * only one allowed to create products from a scan. Best-effort like the stock refresh: offline or
+ * an older server without the RPC just keeps the last remembered answer; it never fails the sync.
+ */
+async function refreshDeviceCapabilities(runtime: LocalRuntime): Promise<void> {
+  const branchId = runtime.branchId;
+  if (!branchId || !shouldRefreshQuickProductCreate(branchId)) return;
+  try {
+    const { data, error } = await supabase.rpc("get_pos_device_capabilities", { p_device_id: runtime.deviceId });
+    if (error) throw error;
+    const capabilities = data as { branchId?: unknown; quickProductCreate?: unknown } | null;
+    if (capabilities?.branchId !== branchId || typeof capabilities.quickProductCreate !== "boolean") throw new Error("Invalid capabilities payload");
+    writeQuickProductCreate(branchId, capabilities.quickProductCreate);
+  } catch (capabilityError) {
+    console.warn("Device capabilities refresh skipped:", capabilityError);
   }
 }
 
@@ -179,6 +199,7 @@ export async function synchronizeDesktop(
     }
 
     await refreshBranchStock(runtime);
+    await refreshDeviceCapabilities(runtime);
     runtime = await localDatabase.runtime();
     listener({
       state: "online",

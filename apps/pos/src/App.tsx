@@ -24,7 +24,9 @@ import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, 
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
+import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
+import { QuickProductModal } from "./QuickProductModal";
 
 interface AuthUser {
   id: string;
@@ -358,6 +360,12 @@ export default function App() {
   // sincronizado, en cuyo caso no se deshabilita nada (ver lib/catalog.ts).
   const [branchStock, setBranchStock] = useState<BranchStock>(null);
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
+  // POS de Central (el servidor lo decide, ver lib/quick-product.ts): habilita el alta rápida desde un
+  // scan desconocido y deja escanear productos habilitados aunque su stock registrado sea <= 0.
+  const [centralPos, setCentralPos] = useState(false);
+  const [quickCreateCode, setQuickCreateCode] = useState<string | null>(null);
+  // La excepción de stock es de escaneo físico: sólo vale para la línea abierta desde un scan (peso).
+  const [selectedViaScan, setSelectedViaScan] = useState(false);
   // A Central with thousands of products must not render thousands of cards on a low-end POS: the grid
   // shows the first GRID_PAGE and grows on demand. Search and barcode scan always work on the WHOLE catalog.
   const [gridLimit, setGridLimit] = useState(GRID_PAGE);
@@ -685,6 +693,10 @@ export default function App() {
   }, [branchId, desktop, localRuntime?.branchId]);
 
   useEffect(() => { setBranchStock(null); }, [branchId]);
+  // La capacidad la refresca el sync (rara vez); acá sólo se lee lo recordado, también sin conexión.
+  useEffect(() => {
+    setCentralPos(desktop && readQuickProductCreate(localRuntime?.branchId ?? null));
+  }, [desktop, localRuntime?.branchId, localRuntime?.lastSuccessfulSyncAt]);
   // Se recalcula con cada sync (lastSuccessfulSyncAt cambia en cada pull; el snapshot de stock ya
   // quedó aplicado antes de que runSync publique el runtime) y tras cada venta (explícito abajo).
   useEffect(() => { void loadBranchStock(); }, [loadBranchStock, localRuntime?.lastSuccessfulSyncAt, localRuntime?.catalogCursor]);
@@ -1062,13 +1074,15 @@ export default function App() {
     }));
   }, [cashDiscountBps, paymentMethod]);
 
-  function openWeight(product: CatalogProduct, line?: TicketLine) {
+  function openWeight(product: CatalogProduct, line?: TicketLine, viaScan = false) {
     // No confiar sólo en el estilo/disabled de la card: toda vía que agrega una línea nueva pasa por acá.
-    if (!line && !hasStock(branchStock, product.productId)) {
+    // Un escaneo físico en Central es la única excepción (el producto está delante del cajero).
+    if (!line && !viaScan && !hasStock(branchStock, product.productId)) {
       setError(`${product.productName} no tiene stock en esta sucursal.`);
       return;
     }
     setSelectedProduct(product);
+    setSelectedViaScan(viaScan);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
     setQuantityInput(line?.quantityUnits ?? 1);
@@ -1118,7 +1132,7 @@ export default function App() {
    */
   function commitSelectedProductLine(explicitWeightGrams?: number) {
     if (!selectedProduct) return;
-    if (!editingLineId && !hasStock(branchStock, selectedProduct.productId)) {
+    if (!editingLineId && !selectedViaScan && !hasStock(branchStock, selectedProduct.productId)) {
       setError(`${selectedProduct.productName} ya no tiene stock en esta sucursal.`);
       setSelectedProduct(null);
       return;
@@ -1177,7 +1191,7 @@ export default function App() {
   ticketRef.current = ticket;
   const barcodeIndex = useMemo(() => buildBarcodeIndex(catalog), [catalog]);
 
-  function addScannedUnit(product: CatalogProduct) {
+  function addScannedUnit(product: CatalogProduct, note?: { stockUnregistered?: boolean; created?: boolean }) {
     // Read/write through a ref so two scans landing before React re-renders both count.
     const current = ticketRef.current;
     const existing = current.find((line) => line.productId === product.productId && line.quantityUnits != null);
@@ -1187,22 +1201,126 @@ export default function App() {
     ticketRef.current = next;
     setTicket(next);
     setError(null);
-    setScanFeedback({ tone: "ok", text: `${product.productName} ×${String(quantity)}` });
+    // Aviso no bloqueante: el producto se agrega igual (el ledger puede quedar negativo hasta registrar la reposición).
+    if (note?.stockUnregistered) setScanFeedback({ tone: "warn", text: `Stock no registrado: ${product.productName} figura sin stock (×${String(quantity)})` });
+    else setScanFeedback({ tone: "ok", text: `${note?.created ? "Producto creado: " : ""}${product.productName} ×${String(quantity)}` });
   }
 
   function handleScan(rawCode: string) {
-    const outcome = resolveScan(barcodeIndex, branchStock, rawCode);
+    const outcome = resolveScan(barcodeIndex, branchStock, rawCode, { allowWithoutStock: centralPos });
     if (!outcome) return;
-    if (outcome.kind === "NOT_FOUND") { setScanFeedback({ tone: "warn", text: "Producto no encontrado" }); return; }
+    if (outcome.kind === "NOT_FOUND") {
+      // Sólo el POS de Central ofrece el alta; en el resto un código desconocido sigue siendo "no encontrado".
+      if (centralPos) { void resolveUnknownScan(outcome.code); return; }
+      setScanFeedback({ tone: "warn", text: "Producto no encontrado" });
+      return;
+    }
     if (outcome.kind === "NO_STOCK") { setScanFeedback({ tone: "warn", text: `${outcome.product.productName}: Sin stock` }); return; }
-    if (outcome.kind === "OPEN_WEIGHT") { setScanFeedback(null); openWeight(outcome.product); return; }
-    addScannedUnit(outcome.product);
+    if (outcome.kind === "OPEN_WEIGHT") {
+      setScanFeedback(outcome.stockUnregistered ? { tone: "warn", text: `Stock no registrado: ${outcome.product.productName} figura sin stock` } : null);
+      openWeight(outcome.product, undefined, true);
+      return;
+    }
+    addScannedUnit(outcome.product, { stockUnregistered: outcome.stockUnregistered });
+  }
+
+  function toCatalogProduct(row: QuickCatalogRow): CatalogProduct {
+    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents) };
+  }
+
+  // El POS sólo puede vender (confirm_local_sale) productos que ya están en su SQLite: tras el alta se
+  // hace un sync (pull incremental) y se verifica que el producto haya quedado en el catálogo local.
+  async function ensureProductInLocalCatalog(productId: string): Promise<boolean> {
+    if (!localRuntime?.branchId) return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await syncRunnerRef.current(); // si había un sync en curso (anterior al alta) espera y reintenta
+      const rows = await localDatabase.catalog(localRuntime.branchId);
+      if (rows.some((row) => row.productId === productId)) return true;
+    }
+    return false;
+  }
+
+  /** Resolves to an error message for the modal, or null when the product was created/resolved and added. */
+  async function createQuickProduct(code: string, input: { name: string; priceCents: bigint; costCents: bigint | null }): Promise<string | null> {
+    if (!desktop || !user || user.offline || !navigator.onLine) return "El alta requiere conexión a Internet.";
+    if (!localRuntime?.deviceId || !operator?.operatorToken) return "Seleccioná un empleado autorizado antes de crear productos.";
+    const { data, error: createError } = await supabase.rpc("create_pos_quick_product", {
+      p_device_id: localRuntime.deviceId,
+      p_operator_profile_id: operator.profileId,
+      p_operator_token: operator.operatorToken,
+      p_barcode: code,
+      p_name: input.name,
+      p_price_cents: Number(input.priceCents),
+      ...(input.costCents === null ? {} : { p_cost_cents: Number(input.costCents) })
+    });
+    if (createError) return resolveErrorMessage(createError, "No se pudo crear el producto");
+    const result = parseQuickCreateResult(data);
+    if (result.status === "EXISTS_UNSELLABLE") {
+      return `Ese código ya existe como "${result.productName}", pero hoy no se puede vender (inactivo o sin precio). Avisale al administrador.`;
+    }
+    if (!(await addServerProduct(result.product, result.status === "CREATED"))) {
+      return result.status === "CREATED"
+        ? "El producto se creó, pero esta caja todavía no pudo sincronizarlo. Revisá la conexión y tocá «Crear y agregar» otra vez (no se duplica)."
+        : "El producto ya existe, pero esta caja todavía no pudo sincronizarlo. Revisá la conexión y probá de nuevo.";
+    }
+    setQuickCreateCode(null);
+    return null;
+  }
+
+  /** Product the server created or habilitated for this branch: sync it into SQLite, then add it to the ticket
+   * (UNIT +1, WEIGHT opens the weigh dialog). Returns false if this device could not sync it yet. */
+  async function addServerProduct(row: QuickCatalogRow, created: boolean): Promise<boolean> {
+    const product = toCatalogProduct(row);
+    if (!(await ensureProductInLocalCatalog(product.productId))) return false;
+    setCatalog((current) => (current.some((candidate) => candidate.productId === product.productId) ? current : [...current, product]));
+    if (product.unitType === "UNIT") addScannedUnit(product, { created });
+    else openWeight(product, undefined, true);
+    return true;
+  }
+
+  // Central, código desconocido localmente: ANTES de ofrecer el alta se pregunta al servidor si ya existe
+  // en la organización (sólo para códigos desconocidos; los scans normales nunca salen a la red). Si existía
+  // sin estar en el surtido de Central el servidor lo habilita y se agrega al ticket sin abrir el modal.
+  const scanLookupInFlight = useRef(false);
+  async function resolveUnknownScan(code: string) {
+    if (scanLookupInFlight.current) return;
+    if (!desktop || !user || user.offline || !navigator.onLine || !localRuntime?.deviceId || !operator?.operatorToken) {
+      setScanFeedback(null);
+      setQuickCreateCode(code); // sin conexión el modal abre igual y avisa que el alta la necesita
+      return;
+    }
+    scanLookupInFlight.current = true;
+    setScanFeedback({ tone: "ok", text: "Buscando código…" });
+    try {
+      const { data, error: resolveError } = await supabase.rpc("resolve_pos_scan_barcode", {
+        p_device_id: localRuntime.deviceId,
+        p_operator_profile_id: operator.profileId,
+        p_operator_token: operator.operatorToken,
+        p_barcode: code
+      });
+      if (resolveError) throw resolveError;
+      const result = parseScanResolveResult(data);
+      if (result.status === "NOT_FOUND") { setScanFeedback(null); setQuickCreateCode(code); return; }
+      if (result.status === "EXISTS_UNSELLABLE") {
+        setScanFeedback({ tone: "warn", text: `"${result.productName}" existe pero hoy no se puede vender (inactivo o sin precio). Avisale al administrador.` });
+        return;
+      }
+      if (!(await addServerProduct(result.product, false))) {
+        setScanFeedback({ tone: "warn", text: `"${result.product.productName}" ya existe, pero esta caja todavía no pudo sincronizarlo. Escanealo de nuevo.` });
+      }
+    } catch {
+      // Red caída a mitad de camino u otro fallo: se ofrece el alta (el servidor es idempotente por código).
+      setScanFeedback(null);
+      setQuickCreateCode(code);
+    } finally {
+      scanLookupInFlight.current = false;
+    }
   }
 
   const scanHandlerRef = useRef(handleScan);
   scanHandlerRef.current = handleScan;
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
-    && !selectedProduct && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !loading;
+    && !selectedProduct && quickCreateCode === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !loading;
 
   useEffect(() => {
     if (!scannerEnabled) return;
@@ -1607,8 +1725,9 @@ export default function App() {
               // A scanner that typed into the focused search box: resolve it as a scan and clear the box.
               const code = normalizeBarcode(search);
               if (!code) return;
-              if (barcodeIndex.has(code)) { event.preventDefault(); setSearch(""); handleScan(code); }
-              else if (/^\d{6,}$/.test(code) && filteredProducts.length === 0) { event.preventDefault(); setSearch(""); setScanFeedback({ tone: "warn", text: "Producto no encontrado" }); }
+              // Known barcode, or a long numeric code that matches nothing in the catalog: resolve it as a
+              // scan (unknown opens the quick create in Central, "no encontrado" everywhere else).
+              if (barcodeIndex.has(code) || (/^\d{6,}$/.test(code) && filteredProducts.length === 0)) { event.preventDefault(); setSearch(""); handleScan(code); }
             }}
           />
           <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
@@ -1877,6 +1996,15 @@ export default function App() {
             <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
+      ) : null}
+
+      {quickCreateCode !== null ? (
+        <QuickProductModal
+          code={quickCreateCode}
+          sessionOffline={user.offline}
+          onCancel={() => setQuickCreateCode(null)}
+          onSubmit={(input) => createQuickProduct(quickCreateCode, input)}
+        />
       ) : null}
 
       {selectedProduct ? (

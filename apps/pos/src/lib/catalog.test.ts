@@ -94,8 +94,8 @@ describe("barcode scan resolution", () => {
   });
 
   it("a known UNIT barcode with stock adds exactly one unit", () => {
-    expect(resolveScan(index, stock, "7790895000010")).toEqual({ kind: "ADD_UNIT", product: coca });
-    expect(resolveScan(index, stock, "7790895000027")).toEqual({ kind: "ADD_UNIT", product: coca });
+    expect(resolveScan(index, stock, "7790895000010")).toEqual({ kind: "ADD_UNIT", product: coca, stockUnregistered: false });
+    expect(resolveScan(index, stock, "7790895000027")).toEqual({ kind: "ADD_UNIT", product: coca, stockUnregistered: false });
   });
 
   it("an unknown barcode is NOT_FOUND (never guessed, never added)", () => {
@@ -111,11 +111,11 @@ describe("barcode scan resolution", () => {
   });
 
   it("with no stock snapshot at all (never synced) nothing is blocked, like the rest of the catalog", () => {
-    expect(resolveScan(index, null, "7791111111111")).toEqual({ kind: "ADD_UNIT", product: agua });
+    expect(resolveScan(index, null, "7791111111111")).toEqual({ kind: "ADD_UNIT", product: agua, stockUnregistered: false });
   });
 
   it("a WEIGHT product keeps the weigh flow: the scan opens the weight dialog, it never becomes a unit sale", () => {
-    expect(resolveScan(index, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio });
+    expect(resolveScan(index, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio, stockUnregistered: false });
   });
 
   it("a blank code resolves to nothing at all", () => {
@@ -125,6 +125,45 @@ describe("barcode scan resolution", () => {
   it("a product that is not in this branch catalog (not enabled here) resolves exactly like an unknown code", () => {
     const avenidaIndex = buildBarcodeIndex([vacio]); // the branch catalog has no Coca Cola
     expect(resolveScan(avenidaIndex, stock, "7790895000010")).toEqual({ kind: "NOT_FOUND", code: "7790895000010" });
-    expect(resolveScan(avenidaIndex, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio });
+    expect(resolveScan(avenidaIndex, stock, "2000000000011")).toEqual({ kind: "OPEN_WEIGHT", product: vacio, stockUnregistered: false });
+  });
+
+  describe("central scan exception (allowWithoutStock)", () => {
+    const central = { allowWithoutStock: true };
+    const negative = new Map<string, number>([["coca", -3], ["agua", 0]]);
+
+    it("a known product with stock is added without any warning", () => {
+      expect(resolveScan(index, stock, "7790895000010", central)).toEqual({ kind: "ADD_UNIT", product: coca, stockUnregistered: false });
+    });
+
+    it("a known product with stock 0 is added and flagged as stock not registered", () => {
+      expect(resolveScan(index, stock, "7791111111111", central)).toEqual({ kind: "ADD_UNIT", product: agua, stockUnregistered: true });
+    });
+
+    it("a known product with negative stock is added and flagged as well", () => {
+      expect(resolveScan(index, negative, "7790895000010", central)).toEqual({ kind: "ADD_UNIT", product: coca, stockUnregistered: true });
+    });
+
+    it("a product with no movements at all (absent from the snapshot) is added and flagged", () => {
+      expect(resolveScan(index, new Map(), "7790895000010", central)).toEqual({ kind: "ADD_UNIT", product: coca, stockUnregistered: true });
+    });
+
+    it("a WEIGHT product with stock 0 still opens the weigh flow instead of being blocked", () => {
+      expect(resolveScan(index, new Map(), "2000000000011", central)).toEqual({ kind: "OPEN_WEIGHT", product: vacio, stockUnregistered: true });
+    });
+
+    it("an unknown code stays NOT_FOUND (the caller decides about the quick create)", () => {
+      expect(resolveScan(index, stock, "7799999999999", central)).toEqual({ kind: "NOT_FOUND", code: "7799999999999" });
+    });
+
+    it("without the option (any other branch) stock <= 0 is still blocked", () => {
+      expect(resolveScan(index, stock, "7791111111111", { allowWithoutStock: false })).toEqual({ kind: "NO_STOCK", product: agua });
+      expect(resolveScan(index, negative, "7790895000010")).toEqual({ kind: "NO_STOCK", product: coca });
+    });
+
+    it("the manual selection rule is untouched: hasStock still reports 0 and negative as sin stock", () => {
+      expect(hasStock(stock, "agua")).toBe(false);
+      expect(hasStock(negative, "coca")).toBe(false);
+    });
   });
 });

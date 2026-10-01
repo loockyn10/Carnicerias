@@ -129,7 +129,11 @@ Central = carnicería + almacén; Avenida y Janssen = sólo carnicerías: lo imp
 
 ## Lectura de código de barras en el POS
 
-Un escaneo resuelve **localmente** contra el catálogo de la sucursal (D-050): `UNIT` con stock suma 1 unidad; `WEIGHT` abre el flujo de peso existente; sin stock no se agrega; desconocido/no habilitado = "Producto no encontrado".
+Un escaneo resuelve **localmente** contra el catálogo de la sucursal (D-050): `UNIT` suma 1 unidad; `WEIGHT` abre el flujo de peso existente; desconocido/no habilitado = "Producto no encontrado".
+
+**Stock <= 0 y scanner (D-052):** en el POS de **Central**, un escaneo de un producto habilitado con stock registrado <= 0 **sí se agrega** (aviso no bloqueante "Stock no registrado"): el producto está físicamente delante del cajero, así que lo probable es una reposición no registrada. No se inventa stock ni se genera reposición; el ledger puede quedar en negativo hasta que se registre. La excepción es **sólo del escaneo**: la selección manual (tarjetas/búsqueda) sigue gris/"Sin stock"/deshabilitada, y en el resto de las sucursales un escaneo sin stock sigue sin agregarse.
+
+**Alta rápida desde el scanner (D-052):** en Central, un barcode desconocido abre un modal mínimo (nombre, costo opcional, precio) y crea el producto en una sola operación atómica: categoría `Almacen`, `UNIT`, `SELLABLE`, activo, habilitado **sólo en Central**, precio global vigente, costo si se informó, stock 0; después lo agrega al ticket. Requiere conexión (no hay cola offline de altas).
 
 ## Stock
 

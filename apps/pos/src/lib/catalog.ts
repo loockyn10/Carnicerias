@@ -99,24 +99,40 @@ export function buildBarcodeIndex<T extends BarcodeProductLike>(products: readon
 export type ScanOutcome<T> =
   /** No product of this branch has that code. */
   | { kind: "NOT_FOUND"; code: string }
-  /** Enabled here but the branch stock is <= 0: shown as "Sin stock", never added. */
+  /** Enabled here but the branch stock is <= 0: shown as "Sin stock", never added. Only returned
+   * when scans without stock are NOT allowed (every branch but Central, see `ScanOptions`). */
   | { kind: "NO_STOCK"; product: T }
-  /** UNIT product with stock: each scan adds exactly one unit. */
-  | { kind: "ADD_UNIT"; product: T }
+  /** UNIT product: each scan adds exactly one unit. `stockUnregistered` = the ledger says <= 0, so
+   * the caller warns (non-blocking) that the restock was probably never registered. */
+  | { kind: "ADD_UNIT"; product: T; stockUnregistered: boolean }
   /** WEIGHT product: keep the existing weigh flow (open the weight dialog); a scan never turns a
    * weighed product into a per-unit sale. */
-  | { kind: "OPEN_WEIGHT"; product: T };
+  | { kind: "OPEN_WEIGHT"; product: T; stockUnregistered: boolean };
+
+export interface ScanOptions {
+  /**
+   * A product physically in front of the cashier was obviously received, so for the central
+   * (almacén) POS a scan of an enabled product with stock <= 0 is still added: nothing is invented
+   * in the ledger (the sale may leave it at -1 until the restock is registered). This applies to a
+   * SCAN only; clicking the product card keeps the "Sin stock" lock.
+   */
+  allowWithoutStock?: boolean;
+}
 
 /** `null` for an empty/blank code (nothing to resolve, not even an error). */
 export function resolveScan<T extends BarcodeProductLike>(
   index: ReadonlyMap<string, T>,
   stock: BranchStock,
-  rawCode: string
+  rawCode: string,
+  options: ScanOptions = {}
 ): ScanOutcome<T> | null {
   const code = normalizeBarcode(rawCode);
   if (code === null) return null;
   const product = index.get(code);
   if (!product) return { kind: "NOT_FOUND", code };
-  if (!hasStock(stock, product.productId)) return { kind: "NO_STOCK", product };
-  return product.unitType === "UNIT" ? { kind: "ADD_UNIT", product } : { kind: "OPEN_WEIGHT", product };
+  const stockUnregistered = !hasStock(stock, product.productId);
+  if (stockUnregistered && options.allowWithoutStock !== true) return { kind: "NO_STOCK", product };
+  return product.unitType === "UNIT"
+    ? { kind: "ADD_UNIT", product, stockUnregistered }
+    : { kind: "OPEN_WEIGHT", product, stockUnregistered };
 }

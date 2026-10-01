@@ -605,7 +605,7 @@ Los barcodes viajan en el catálogo (`pull_pos_state` → `barcodes` por ítem �
 
 - código de un producto del catálogo de la sucursal, `UNIT`, con stock → suma **1 unidad** (un segundo escaneo del mismo producto incrementa su misma línea, con el mismo pricing/pack/recargo que la carga manual);
 - `WEIGHT` → abre el flujo de peso/balanza existente; nunca se vende por unidad por accidente;
-- habilitado pero sin stock → "<producto>: Sin stock", no se agrega;
+- habilitado pero sin stock → "<producto>: Sin stock", no se agrega (**excepción en Central, D-052:** se agrega con aviso "Stock no registrado");
 - código desconocido **o** de un producto no habilitado en la sucursal → "Producto no encontrado", no se agrega (el POS de una sucursal sólo conoce su propio catálogo, así que ambos casos son indistinguibles por diseño y no se filtran códigos de otras sucursales).
 
 **Motivo:** el mostrador no puede esperar red por cada botella, y el surtido por sucursal ya define qué existe en cada POS.
@@ -621,3 +621,19 @@ El ledger ya guardaba unidades enteras en `quantity_grams` para `UNIT` (D-038/D-
 Un catálogo de miles de productos (Central) no se carga entero: listados y selectores filtran/paginan en SQL (`list_products_page`, `search_products`, `get_branch_stock_status` con límite) o pasan por `fetchAllRows` (PostgREST trunca **en silencio** a `max_rows` = 1000). Las semánticas de estado de stock (crítico = sin stock, etc.) no cambiaron.
 
 **Motivo:** el almacén sólo es operable si su stock se ve y se mueve en unidades, y las pantallas no pueden romperse ni perder filas al crecer el catálogo.
+
+---
+
+## D-052 — Alta rápida de producto desde el scanner en Central; excepción de stock sólo para el escaneo
+
+**Status:** Active
+
+En el POS de Central (almacén), un barcode desconocido abre un modal con nombre, costo (opcional) y precio; `create_pos_quick_product` crea todo en una única transacción de base de datos (producto `UNIT`/`SELLABLE`/activo sin SKU, categoría real `Almacen` resuelta por id en el servidor, barcode, surtido **sólo de la sucursal del dispositivo**, precio global, costo si vino, auditoría) y el POS lo suma al ticket. Reglas:
+
+- **Autorización estrecha, sin elevar al dispositivo:** la cuenta Supabase del POS es técnica (rol empleado: sin `products.write`/`prices.write`). La RPC exige dispositivo activo + token de operador vigente (PIN) + permiso `products.quick_create` **del operador** (admin y employee) + dispositivo en la sucursal **productiva configurada** de la organización (`organizations.production_branch_id`, D-033; sin configurar = fail-closed). No reutiliza `save_product`/`set_product_price` (exigen permisos de Admin sobre `auth.uid()`); sí reutiliza los helpers privados compartidos con Admin y el importador (slug único, barcode normalizado/único, surtido).
+- **Duplicados:** el POS sólo llama al servidor con un barcode desconocido localmente. Antes de abrir el modal, en línea, el POS pregunta al servidor (`resolve_pos_scan_barcode`) si el código ya existe en la organización; el servidor serializa por organización y busca el barcode antes de crear: si ya existe no crea nada. Si era un producto **activo, con precio y categoría activa que todavía no estaba en el surtido de Central, se habilita sólo en Central** (`branch_product_assortment`, auditado con el operador) y se devuelve para sumarlo al ticket sin modal (`EXISTS_ENABLED`; `EXISTS_SELLABLE` si ya se vendía ahí); un producto inactivo o sin precio **no se reactiva ni se habilita** (`EXISTS_UNSELLABLE`, sólo se informa). Esto es una excepción acotada a D-049, válida únicamente para el flujo de scanner de Central. La restricción única `(organization_id, barcode)` sigue siendo la última garantía. Repetir la llamada es idempotente.
+- **Sin cola offline:** sin conexión el modal abre pero no permite crear. "Es Central" se recuerda localmente (`localStorage`, por sucursal, refresco cada ≤ 6 h vía `get_pos_device_capabilities`) para que el modal y la excepción funcionen offline y tras reiniciar.
+- **Tras crear**, el POS hace un pull incremental y verifica que el producto esté en su SQLite antes de agregarlo (`confirm_local_sale` sólo vende productos del catálogo local).
+- **Scan vs click:** un escaneo de producto habilitado con stock <= 0 se agrega en Central con aviso "Stock no registrado" (ver DOMAIN_RULES); el click/búsqueda manual no cambia. Es una excepción de UX de escaneo, no un cambio del ledger ni de las reglas de stock.
+
+**Motivo:** Fran no debe ir al Admin por cada producto nuevo del almacén ni escanear dos veces, pero la caja no puede obtener permisos de catálogo ni un alta puede dejar productos a medias o duplicados.
