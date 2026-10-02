@@ -18,6 +18,7 @@ import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } from "@carnicerias/sync";
 
 import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, stockForAvailability, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { CategoryPicker } from "./CategoryPicker";
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
@@ -1021,14 +1022,16 @@ export default function App() {
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase("es-AR");
+    // Central: la búsqueda de texto es global (la categoría es un filtro secundario y no la limita).
+    const effectiveCategoryId = centralPos && normalizedSearch ? "ALL" : categoryId;
     return catalog.filter(
       (product) =>
-        productMatchesCategory(product, categoryId) &&
+        productMatchesCategory(product, effectiveCategoryId) &&
         (!normalizedSearch ||
           product.productName.toLocaleLowerCase("es-AR").includes(normalizedSearch) ||
           product.productSku?.toLocaleLowerCase("es-AR").includes(normalizedSearch))
     );
-  }, [catalog, categoryId, search]);
+  }, [catalog, categoryId, search, centralPos]);
 
   // Sobre qué stock se decide la disponibilidad: en Central NINGUNO (almacén sin stock confiable: todo
   // producto habilitado se ve y se vende, aunque figure en 0 o negativo); en el resto de las sucursales,
@@ -1981,12 +1984,16 @@ export default function App() {
 
       <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
         <section className="pos-catalog min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
-          <div className="pos-categories flex flex-wrap gap-2">
-            <button className={`rounded-xl px-4 py-3 font-bold ${categoryId === "ALL" ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId("ALL")}>Todos</button>
-            {categories.map((category) => (
-              <button key={category.id} className={`flex items-center gap-2 rounded-xl px-4 py-3 font-bold ${categoryId === category.id ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId(category.id)}><span className="h-2.5 w-2.5 rounded-full bg-stone-500" style={{ backgroundColor: categoryAccent(category.color) }} />{category.name}</button>
-            ))}
-          </div>
+          {centralPos ? (
+            <CategoryPicker categories={categories} value={categoryId} onChange={setCategoryId} />
+          ) : (
+            <div className="pos-categories flex flex-wrap gap-2">
+              <button className={`rounded-xl px-4 py-3 font-bold ${categoryId === "ALL" ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId("ALL")}>Todos</button>
+              {categories.map((category) => (
+                <button key={category.id} className={`flex items-center gap-2 rounded-xl px-4 py-3 font-bold ${categoryId === category.id ? "bg-rose-600" : "bg-stone-800 hover:bg-stone-700"}`} onClick={() => setCategoryId(category.id)}><span className="h-2.5 w-2.5 rounded-full bg-stone-500" style={{ backgroundColor: categoryAccent(category.color) }} />{category.name}</button>
+              ))}
+            </div>
+          )}
           <input
             className="pos-search mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-4 py-3 text-lg outline-none focus:border-rose-500"
             placeholder="Buscar producto o SKU…"
