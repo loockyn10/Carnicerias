@@ -39,3 +39,22 @@ enable_signup = true
 double_confirm_changes = true
 enable_confirmations = false
 
+
+# Mercado Pago (D-054). verify_jwt = false en todas: el gateway sólo valida JWT legacy (HS256) y
+# rompe con las claves de firma nuevas. La autenticación la hace cada función: mp-webhook por firma
+# HMAC (x-signature); el resto reenvía el JWT del POS a las RPC, que exigen auth.uid() + dispositivo
+# + operador (o permiso de admin) y validan RLS/sucursal en Postgres.
+[functions.mp-create-order]
+verify_jwt = false
+
+[functions.mp-order-status]
+verify_jwt = false
+
+[functions.mp-cancel-order]
+verify_jwt = false
+
+[functions.mp-webhook]
+verify_jwt = false
+
+[functions.mp-admin-setup]
+verify_jwt = false

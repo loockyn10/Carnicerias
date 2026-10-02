@@ -45,10 +45,16 @@ export interface OfflineSaleItemPayload {
   subtotalCents: string;
 }
 
+/** Proveedor que debe verificar el cobro. Hoy sólo Mercado Pago, siempre sobre method TRANSFER
+ * (mismo precio, sin recargo): el servidor deja el pago PENDING hasta que el backend lo confirme. */
+export type PaymentProvider = "MERCADOPAGO";
+
 export interface OfflinePaymentPayload {
   id: string;
   method: PaymentMethod;
   amountCents: string;
+  /** Ausente para efectivo/transferencia manual/tarjeta: el payload de esas ventas no cambia. */
+  provider?: PaymentProvider;
 }
 
 export interface OfflineStockMovementPayload {
@@ -85,6 +91,8 @@ export interface CreateOfflineSaleInput {
   deviceId: string;
   ticket: TicketLine[];
   paymentMethod: PaymentMethod;
+  /** Sólo "MERCADOPAGO" y sólo con paymentMethod "TRANSFER" (si no, createOfflineSale lanza). */
+  paymentProvider?: PaymentProvider;
   now?: Date;
   createId?: () => string;
 }
@@ -178,6 +186,9 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
   if (input.ticket.length < 1 || input.ticket.length > 100) {
     throw new Error("A sale must contain between 1 and 100 items");
   }
+  if (input.paymentProvider && input.paymentMethod !== "TRANSFER") {
+    throw new Error("A payment provider is only valid on a TRANSFER payment");
+  }
 
   const createId = input.createId ?? crypto.randomUUID.bind(crypto);
   const timestamp = (input.now ?? new Date()).toISOString();
@@ -227,7 +238,8 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     payment: {
       id: createId(),
       method: input.paymentMethod,
-      amountCents: totalCents.toString()
+      amountCents: totalCents.toString(),
+      ...(input.paymentProvider ? { provider: input.paymentProvider } : {})
     },
     stockMovements: items.map((item) => ({
       id: createId(),

@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Activar Mercado Pago en Avenida (acción del usuario)
+
+Implementado 2026-10-01 (ver `docs/MERCADOPAGO.md`, D-054). Nada aplicado a ningún entorno. Pendiente (usuario), en este orden:
+
+- Cargar los secrets `MERCADOPAGO_ACCESS_TOKEN` y `MERCADOPAGO_WEBHOOK_SECRET` en Supabase (nunca en el repo) y `supabase db push` (aplica `202610010050`; `--dry-run` antes). Luego desplegar las 5 Edge Functions con `--no-verify-jwt` (comandos en `docs/MERCADOPAGO.md`).
+- En el panel de Mercado Pago: webhook productivo (evento "Order") → `…/functions/v1/mp-webhook`; Store y Caja de Avenida (panel o `mp-admin-setup` en dry-run primero); imprimir el QR estático.
+- Habilitar Avenida (`mercadopago_branch_pos.enabled = true`, SQL en `docs/MERCADOPAGO.md`), instalar el POS nuevo (`pnpm build:pos:desktop`) y hacer la prueba real con un monto chico (checklist en el mismo doc).
+- **Confirmar la decisión de precio:** pago con tarjeta vía QR de Mercado Pago = precio de contado, sin recargo (D-054).
+- `pnpm exec supabase gen types typescript --linked` para reemplazar la edición manual de `database.types.ts`.
+- Mejoras identificadas (no urgentes): cambiar el medio de pago de una venta pendiente sin anularla, pantalla Admin de conciliación/configuración, reembolso al anular una venta cobrada, QR dinámico en pantalla, una caja por dispositivo, pago combinado.
+
 ## P0 — Desplegar el alta rápida de producto desde el scanner (acción del usuario)
 
 Implementado 2026-09-30 (ver `CURRENT_STATE.md` "Alta rápida de producto…", D-052). Pendiente (usuario):

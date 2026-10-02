@@ -84,3 +84,7 @@ export type {
   MappedCatalogRow,
   NumberFormat
 } from "./catalog-import";
+export { describePaymentState, MERCADOPAGO_PROVIDER } from "./mercadopago";
+export type {
+  MercadoPagoOrderStatus, MercadoPagoPanelTone, MercadoPagoPanelView, PaymentVerificationStatus
+} from "./mercadopago";

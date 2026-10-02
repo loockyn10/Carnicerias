@@ -87,6 +87,13 @@ export interface RecentLocalSale {
   completedAt: string;
   syncedAt: string | null;
 }
+/** Venta local declarada Mercado Pago cuyo pago el servidor todavía no confirmó (caché local). */
+export interface PendingProviderPayment {
+  saleId: string;
+  totalCents: string;
+  completedAt: string;
+  verificationStatus: string;
+}
 export interface OutboxSummary { pending: number; syncing: number; failed: number; synced: number; lastError: string | null; }
 export interface OperatorRosterRow { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }
 export interface VerifiedOperatorInput { profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string }
@@ -130,6 +137,8 @@ export const localDatabase = {
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),
   recentSales: (limit = 10) => desktopOnly<RecentLocalSale[]>("get_recent_local_sales", { limit }),
+  pendingProviderPayments: (limit = 10) => desktopOnly<PendingProviderPayment[]>("get_pending_provider_payments", { limit }),
+  setPaymentVerification: (saleId: string, status: string) => desktopOnly<boolean>("set_local_payment_verification", { saleId, status }),
   dueOutbox: (currentTime: string) =>
     desktopOnly<OutboxRecord[]>("get_due_outbox", { currentTime }),
   outboxSummary: () => desktopOnly<OutboxSummary>("get_outbox_summary"),

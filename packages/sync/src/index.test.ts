@@ -5,6 +5,27 @@ import { createOfflineSale, nextAttemptAt, retryDelayMs, shouldAttempt } from ".
 const ids = Array.from({ length: 10 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
 
 describe("offline sale envelope", () => {
+  it("declares Mercado Pago through payment.provider and leaves every other payload untouched", () => {
+    const base = {
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device",
+      createId: () => crypto.randomUUID(),
+      ticket: [{ id: "line", productId: "product", productName: "Asado", weightGrams: 1000, pricePerKgCents: 10000n, subtotalCents: 10000n }]
+    };
+    const manual = createOfflineSale({ ...base, paymentMethod: "TRANSFER" });
+    expect(manual.payment).not.toHaveProperty("provider");
+    const cash = createOfflineSale({ ...base, paymentMethod: "CASH" });
+    expect(JSON.stringify(cash.payment)).not.toContain("provider");
+    const mercadopago = createOfflineSale({ ...base, paymentMethod: "TRANSFER", paymentProvider: "MERCADOPAGO" });
+    expect(mercadopago.payment).toMatchObject({ method: "TRANSFER", provider: "MERCADOPAGO", amountCents: "10000" });
+  });
+
+  it("refuses a payment provider on any method other than TRANSFER", () => {
+    expect(() => createOfflineSale({
+      organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device", paymentMethod: "DEBIT", paymentProvider: "MERCADOPAGO",
+      ticket: [{ id: "line", productId: "product", productName: "Asado", weightGrams: 1000, pricePerKgCents: 10000n, subtotalCents: 10000n }]
+    })).toThrow("only valid on a TRANSFER");
+  });
+
   it("keeps the verified operator grant with its immutable sale identity", () => {
     const payload = createOfflineSale({
       organizationId: "organization", branchId: "branch", profileId: "employee-laura", deviceId: "device",

@@ -46,6 +46,14 @@ El nombre técnico histórico sigue conteniendo `cash_discount` (`organization_c
 
 **PACK_FIXED_TOTAL SÍ lleva recargo por tarjeta** (corregido 2026-09-24, sin excepción): el total de un pack (ver "Promociones" abajo) sigue siendo invariante al peso/cantidad real, pero no al medio de pago — pagar con tarjeta recarga el total completo del pack. Ejemplo: "Vacío 2kg por $18.000" con tarjeta = $19.800. Para un pack `UNIT` con remanente, el recargo se aplica al total comercial completo (packs enteros + remanente juntos), nunca sólo al remanente: 45 hamburguesas (1 pack de 40 a $28.000 + 5 sueltas a $800 = $32.000 en efectivo) con tarjeta = $35.200, no $28.000 + 5×$880.
 
+## Pagos verificados (Mercado Pago, D-054)
+
+- Una venta Mercado Pago se registra como `TRANSFER` + `provider = MERCADOPAGO`: **mismo precio que efectivo/transferencia** (sin recargo de tarjeta; ver D-054 sobre la confirmación pendiente).
+- Estado de verificación (`PENDING` → `CONFIRMED` | `EXPIRED` | `CANCELLED` | `ERROR` | `MISMATCH` | `REFUNDED`) lo decide **sólo el backend** tras consultar a Mercado Pago. Ninguna acción de empleado, POS o Admin lo marca como verificado.
+- "Confirmado" exige acreditación real y que lo acreditado = lo esperado = total validado de la venta.
+- El POS nunca muestra "Pago confirmado" antes de esa confirmación. Una venta Mercado Pago no acreditada no se oculta: queda como `NO_ACCREDITATION` (con hora y monto) para el cierre y la revisión de cámaras.
+- Una transferencia manual (sin proveedor) sigue siendo un medio no verificable (`NOT_REQUIRED`); no se migra el historial.
+
 ## Orden de ajustes
 
 Orden vigente:

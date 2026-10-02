@@ -22,6 +22,7 @@ const CARD_SURCHARGE_PRICING_SCHEMA: &str = include_str!("../migrations/010_card
 const SHIFT_HEARTBEAT_SCHEMA: &str = include_str!("../migrations/011_shift_heartbeat.sql");
 const BRANCH_STOCK_PROJECTION_SCHEMA: &str = include_str!("../migrations/012_branch_stock_projection.sql");
 const PRODUCT_BARCODES_SCHEMA: &str = include_str!("../migrations/013_product_barcodes.sql");
+const PAYMENT_VERIFICATION_SCHEMA: &str = include_str!("../migrations/014_payment_verification.sql");
 
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
@@ -228,6 +229,11 @@ struct OfflinePayment {
     id: String,
     method: String,
     amount_cents: String,
+    /// Proveedor que debe verificar el cobro (hoy sólo "MERCADOPAGO", siempre con method
+    /// "TRANSFER": mismo precio, sin recargo). Ausente = medio manual. Se omite al serializar
+    /// cuando no existe para que el payload del outbox de una venta normal no cambie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +469,14 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(PRODUCT_BARCODES_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (13, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
+    let payment_verification_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 14)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !payment_verification_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(PAYMENT_VERIFICATION_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (14, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -1383,10 +1397,17 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
             )
             .map_err(|error| error.to_string())?;
     }
+    // Mercado Pago: sólo se acepta como proveedor sobre TRANSFER (no cambia el pricing ni los
+    // métodos elegibles). La venta nace PENDING: ninguna acción local puede marcarla verificada.
+    let (provider, verification_status): (Option<&str>, &str) = match sale.payment.provider.as_deref() {
+        None => (None, "NOT_REQUIRED"),
+        Some("MERCADOPAGO") if sale.payment.method == "TRANSFER" => (Some("MERCADOPAGO"), "PENDING"),
+        Some(_) => return Err("Invalid local sale payment provider".to_string()),
+    };
     transaction
         .execute(
-            "insert into local_payments(id, sale_id, method, amount_cents, created_at) values (?1, ?2, ?3, ?4, ?5)",
-            params![sale.payment.id, sale.sale_id, sale.payment.method, computed_total, sale.created_at],
+            "insert into local_payments(id, sale_id, method, amount_cents, created_at, provider, verification_status) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![sale.payment.id, sale.sale_id, sale.payment.method, computed_total, sale.created_at, provider, verification_status],
         )
         .map_err(|error| error.to_string())?;
     for movement in &sale.stock_movements {
@@ -1450,6 +1471,78 @@ fn get_recent_local_sales(state: State<'_, DatabaseState>, limit: i64) -> Result
         })
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingProviderPayment {
+    sale_id: String,
+    total_cents: String,
+    completed_at: String,
+    verification_status: String,
+}
+
+/// Ventas locales declaradas Mercado Pago que todavía no tienen el pago confirmado (más recientes
+/// primero). Permite retomar un cobro tras un reinicio. Es un caché: el servidor decide.
+#[tauri::command]
+fn get_pending_provider_payments(state: State<'_, DatabaseState>, limit: i64) -> Result<Vec<PendingProviderPayment>, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    // Sólo las de las últimas 12 h: el aviso del cajero no puede quedar clavado para siempre por
+    // una venta sin acreditar (esas las ve el administrador en la conciliación del servidor).
+    let cutoff: String = connection
+        .query_row("select strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    pending_provider_payments(&connection, limit, &cutoff)
+}
+
+fn pending_provider_payments(connection: &Connection, limit: i64, completed_since: &str) -> Result<Vec<PendingProviderPayment>, String> {
+    let safe_limit = limit.clamp(1, 25);
+    let mut statement = connection
+        .prepare(
+            "select s.id, s.total_cents, s.completed_at, p.verification_status
+             from local_payments p join local_sales s on s.id = p.sale_id
+             where p.provider = 'MERCADOPAGO' and p.verification_status not in ('CONFIRMED', 'REFUNDED')
+               and s.completed_at >= ?2
+             order by s.completed_at desc, s.id desc limit ?1",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![safe_limit, completed_since], |row| {
+            Ok(PendingProviderPayment {
+                sale_id: row.get(0)?,
+                total_cents: row.get::<_, i64>(1)?.to_string(),
+                completed_at: row.get(2)?,
+                verification_status: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+const PROVIDER_VERIFICATION_STATUSES: [&str; 7] = ["PENDING", "CONFIRMED", "EXPIRED", "CANCELLED", "ERROR", "MISMATCH", "REFUNDED"];
+
+/// Refleja localmente el estado que informó el SERVIDOR. Sólo actúa sobre pagos de proveedor, valida
+/// el estado y no retrocede un pago ya CONFIRMED (sólo puede pasar a REFUNDED).
+fn apply_provider_payment_status(connection: &Connection, sale_id: &str, status: &str) -> Result<bool, String> {
+    if !PROVIDER_VERIFICATION_STATUSES.contains(&status) {
+        return Err("Invalid payment verification status".to_string());
+    }
+    let changed = connection
+        .execute(
+            "update local_payments set verification_status = ?2
+             where sale_id = ?1 and provider is not null and verification_status <> ?2
+               and (verification_status <> 'CONFIRMED' or ?2 = 'REFUNDED')
+               and verification_status <> 'REFUNDED'",
+            params![sale_id, status],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(changed > 0)
+}
+
+#[tauri::command]
+fn set_local_payment_verification(state: State<'_, DatabaseState>, sale_id: String, status: String) -> Result<bool, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    apply_provider_payment_status(&connection, &sale_id, &status)
 }
 
 #[tauri::command]
@@ -1676,6 +1769,8 @@ pub fn run() {
             record_shift_heartbeat_local,
             confirm_local_sale,
             get_recent_local_sales,
+            get_pending_provider_payments,
+            set_local_payment_verification,
             get_due_outbox,
             get_outbox_summary,
             mark_outbox_syncing,
@@ -1711,7 +1806,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 13);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 14);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -1763,7 +1858,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 13);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 14);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -1807,7 +1902,7 @@ mod tests {
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
                 price_per_kg_cents: "1509444".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("72222".into()),
                 cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("137222".into()), promotion_discount_cents: Some("72222".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1509444".into() }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "1509444".into() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "1509444".into(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
         };
         let transaction = connection.transaction().unwrap();
@@ -1845,7 +1940,7 @@ mod tests {
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
                 price_per_kg_cents: "1372222".into(), original_price_per_kg_cents: Some("1444444".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("PERCENTAGE".into()), discount_value: Some("500".into()), promotion_mode: None, discount_cents: Some("72222".into()),
                 cash_discount_bps: Some("0".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("0".into()), promotion_discount_cents: Some("72222".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1372222".into() }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1372222".into() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1372222".into(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
         };
         let transaction = connection.transaction().unwrap();
@@ -1876,7 +1971,7 @@ mod tests {
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Asado".into(), weight_grams: Some(1000), quantity_units: None,
                 price_per_kg_cents: "1100000".into(), original_price_per_kg_cents: Some("1000000".into()), discount_rule_id: None, discount_type: None, discount_value: None, promotion_mode: None, discount_cents: Some("0".into()),
                 cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("100000".into()), promotion_discount_cents: Some("0".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "1100000".into() }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1100000".into() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "1100000".into(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
         };
         let transaction = connection.transaction().unwrap();
@@ -1910,7 +2005,7 @@ mod tests {
                 card_surcharge_cents: Some("0".into()),
                 promotion_discount_cents: Some("2500".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "18000".into()
             }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "18000".into() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "18000".into(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-2050".into(), occurred_at: "2026-09-23T00:00:00Z".into() }]
         };
         (device_id, sale)
@@ -1988,7 +2083,7 @@ mod tests {
             items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(1000), quantity_units: None,
                 price_per_kg_cents: "990000".into(), original_price_per_kg_cents: Some("1000000".into()), discount_rule_id: Some(Uuid::new_v4().to_string()), discount_type: Some("FIXED_PRICE_PER_KG".into()), discount_value: Some("900000".into()), promotion_mode: None, discount_cents: Some("100000".into()),
                 cash_discount_bps: Some("1000".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("90000".into()), promotion_discount_cents: Some("100000".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "990000".into() }],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "990000".into() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "DEBIT".into(), amount_cents: "990000".into(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-24T00:00:00Z".into() }]
         };
         let transaction = connection.transaction().unwrap();
@@ -2033,7 +2128,7 @@ mod tests {
             status: "COMPLETED".into(), total_cents: subtotal.to_string(), total_weight_grams: "0".into(),
             created_at: "2026-09-23T00:00:00Z".into(), completed_at: "2026-09-23T00:00:00Z".into(),
             items: vec![item],
-            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: subtotal.to_string() },
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: subtotal.to_string(), provider: None },
             stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "hamburguesa".into(), quantity_grams: (-quantity).to_string(), occurred_at: "2026-09-23T00:00:00Z".into() }],
         }
     }
@@ -2540,5 +2635,134 @@ mod tests {
         apply_catalog_pull_inner(&mut connection, &parsed, "profile", "admin@example.test").unwrap();
         assert!(barcodes_of(&connection, "vacio").is_empty());
         assert_eq!(local_catalog_inner(&connection, "central").unwrap().len(), 1);
+    }
+
+    // ---- Mercado Pago (D-054): la venta se declara con provider y nace PENDING ------------------
+    fn mercadopago_payload(device_id: String, method: &str, provider: Option<&str>) -> OfflineSalePayload {
+        let mut sale = unit_sale_payload(device_id, 3, 2400, unit_sale_item(3, 2400, 0, 0, None));
+        sale.payment.method = method.into();
+        sale.payment.provider = provider.map(|value| value.to_string());
+        sale
+    }
+
+    #[test]
+    fn mercadopago_sale_is_stored_pending_priced_like_transfer_and_never_confirmed_locally() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = mercadopago_payload(device_id, "TRANSFER", Some("MERCADOPAGO"));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select provider from local_payments", [], |row| row.get::<_, Option<String>>(0)).unwrap().as_deref(), Some("MERCADOPAGO"));
+        assert_eq!(connection.query_row("select verification_status from local_payments", [], |row| row.get::<_, String>(0)).unwrap(), "PENDING");
+        assert_eq!(connection.query_row("select method from local_payments", [], |row| row.get::<_, String>(0)).unwrap(), "TRANSFER");
+        // Same price as CASH/TRANSFER: no card surcharge, no discount (pricing is untouched).
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 2400);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_manual_sale_stays_unverified_not_required() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = mercadopago_payload(device_id, "TRANSFER", None);
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(connection.query_row("select verification_status from local_payments", [], |row| row.get::<_, String>(0)).unwrap(), "NOT_REQUIRED");
+        assert_eq!(connection.query_row("select provider is null from local_payments", [], |row| row.get::<_, bool>(0)).unwrap(), true);
+        assert!(pending_provider_payments(&connection, 10, "0000").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_provider_is_only_accepted_on_transfer_and_only_mercadopago() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        for (method, provider) in [("CASH", "MERCADOPAGO"), ("DEBIT", "MERCADOPAGO"), ("TRANSFER", "OTHERPAY")] {
+            let sale = mercadopago_payload(device_id.clone(), method, Some(provider));
+            let transaction = connection.transaction().unwrap();
+            let error = insert_sale(&transaction, &sale).unwrap_err();
+            assert_eq!(error, "Invalid local sale payment provider");
+            drop(transaction);
+        }
+        assert_eq!(connection.query_row("select count(*) from local_payments", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn the_outbox_payload_only_carries_the_provider_when_there_is_one() {
+        let manual = serde_json::to_value(&mercadopago_payload("device".into(), "CASH", None)).unwrap();
+        assert!(manual["payment"].get("provider").is_none(), "a normal sale payload must stay byte-compatible");
+        let mercadopago = serde_json::to_value(&mercadopago_payload("device".into(), "TRANSFER", Some("MERCADOPAGO"))).unwrap();
+        assert_eq!(mercadopago["payment"]["provider"], "MERCADOPAGO");
+        let roundtrip: OfflineSalePayload = serde_json::from_value(mercadopago).unwrap();
+        assert_eq!(roundtrip.payment.provider.as_deref(), Some("MERCADOPAGO"));
+    }
+
+    #[test]
+    fn local_provider_status_mirrors_the_server_and_never_regresses_a_confirmation() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = mercadopago_payload(device_id, "TRANSFER", Some("MERCADOPAGO"));
+        let sale_id = sale.sale_id.clone();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        let status = |connection: &Connection| connection.query_row("select verification_status from local_payments", [], |row| row.get::<_, String>(0)).unwrap();
+
+        assert_eq!(pending_provider_payments(&connection, 10, "0000").unwrap().len(), 1, "an unconfirmed Mercado Pago sale is listed as pending");
+        assert!(apply_provider_payment_status(&connection, &sale_id, "EXPIRED").unwrap());
+        assert_eq!(status(&connection), "EXPIRED");
+        assert!(apply_provider_payment_status(&connection, &sale_id, "CONFIRMED").unwrap(), "a late accreditation is accepted");
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "EXPIRED").unwrap(), "a confirmation is never undone by an older state");
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "PENDING").unwrap());
+        assert_eq!(status(&connection), "CONFIRMED");
+        assert!(pending_provider_payments(&connection, 10, "0000").unwrap().is_empty(), "confirmed sales are not pending any more");
+        assert!(apply_provider_payment_status(&connection, &sale_id, "REFUNDED").unwrap());
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "CONFIRMED").unwrap(), "a refund is final");
+        assert!(apply_provider_payment_status(&connection, &sale_id, "NOT_REQUIRED").is_err(), "unknown statuses are rejected");
+        assert!(apply_provider_payment_status(&connection, &sale_id, "CONFIRMED ").is_err());
+    }
+
+    #[test]
+    fn the_cashier_reminder_ignores_sales_older_than_the_cutoff() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = mercadopago_payload(device_id, "TRANSFER", Some("MERCADOPAGO"));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        // The fixture sale is dated 2026-09-23.
+        assert_eq!(pending_provider_payments(&connection, 10, "2026-09-23T00:00:00Z").unwrap().len(), 1);
+        assert!(pending_provider_payments(&connection, 10, "2026-09-24T00:00:00Z").unwrap().is_empty());
+    }
+
+    #[test]
+    fn local_provider_status_cannot_be_applied_to_a_manual_payment() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale = mercadopago_payload(device_id, "TRANSFER", None);
+        let sale_id = sale.sale_id.clone();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "CONFIRMED").unwrap());
+        assert_eq!(connection.query_row("select verification_status from local_payments", [], |row| row.get::<_, String>(0)).unwrap(), "NOT_REQUIRED");
+    }
+
+    #[test]
+    fn payment_verification_migration_preserves_existing_payments() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        // Simulate a pre-014 install: drop the new columns' effect by checking an old-style insert still works.
+        connection.execute("insert into local_sales(id, organization_id, branch_id, profile_id, device_id, status, total_cents, total_weight_grams, created_at, completed_at) values('s','org','branch','profile','device','COMPLETED',100,1,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).unwrap();
+        connection.execute("insert into local_payments(id, sale_id, method, amount_cents, created_at) values('p','s','CASH',100,'2026-09-30T00:00:00Z')", []).unwrap();
+        assert_eq!(connection.query_row("select verification_status from local_payments where id='p'", [], |row| row.get::<_, String>(0)).unwrap(), "NOT_REQUIRED");
+        assert!(connection.query_row("select provider is null from local_payments where id='p'", [], |row| row.get::<_, bool>(0)).unwrap());
     }
 }

@@ -157,7 +157,11 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 
 PostgreSQL y SQLite se migran incrementalmente. Nunca se edita una migración ya aplicada ni se borra SQLite para actualizar una instalación.
 
-El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–049 y SQLite 001–013. El estado remoto sigue pendiente de verificación autenticada.
+El inventario local confirmado está en `CURRENT_STATE.md`: PostgreSQL 001–050 y SQLite 001–014. El estado remoto sigue pendiente de verificación autenticada.
+
+## Mercado Pago (cobros QR verificados, D-054)
+
+Primeras **Supabase Edge Functions** del repo (`supabase/functions/`, Deno): `mp-create-order`, `mp-order-status`, `mp-cancel-order` (las llama el POS con el JWT del dispositivo), `mp-webhook` (firma HMAC, sin JWT) y `mp-admin-setup` (admin, dry-run). Los handlers (`_shared/handlers.ts`) reciben `env`/`fetch`/reloj por parámetro y la lógica pura (montos, firma, mapeo de estados, payloads) vive en `_shared/mercadopago.ts`; ambos se prueban en `packages/business-logic` (re-export) con mocks, sin credenciales. El Access Token y el secreto del webhook sólo existen como secrets de la Edge Function. Las funciones no escriben tablas: reservan y consultan por RPC con el JWT del POS (`mp_prepare_order`, `mp_get_order_status`: dispositivo + operador + sucursal) y sólo informan resultados con `service_role` (`mp_record_order_result`, `mp_apply_order_state`, `mp_record_webhook_event`, no ejecutables por `authenticated`). `app_private.mp_reconcile_sale` es el único traductor de intentos de cobro a `payments.verification_status` y converge igual si llega primero la orden o la venta (`mercadopago_orders.sale_id` sin FK a `sales`). `sync_offline_sale` es ahora un wrapper delgado sobre `app_private.sync_offline_sale_core` (misma firma pública, cuerpo de pricing intacto). En el POS: `MercadoPagoPanel.tsx`, `lib/mercadopago*.ts`, columnas `local_payments.provider/verification_status` (SQLite `014`) y un caché de estado por venta. Detalle operativo en `docs/MERCADOPAGO.md`.
 
 ## PWA y balanza
 

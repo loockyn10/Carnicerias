@@ -21,12 +21,17 @@ import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, parti
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
-import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type RecentLocalSale } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 import { QuickProductModal } from "./QuickProductModal";
+import { MercadoPagoPanel } from "./MercadoPagoPanel";
+import { resolveStartupUser } from "./lib/startup-session";
+import { fetchMercadoPagoConfig } from "./lib/mercadopago";
+import { isSessionDegraded, resolveMercadoPagoAvailability } from "./lib/mercadopago-availability";
+import { readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./lib/mercadopago-capability";
 
 interface AuthUser {
   id: string;
@@ -274,7 +279,7 @@ function DeviceSetupRequired({ onConfigure }: { onConfigure: () => void }) {
   );
 }
 
-function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => Promise<void> }) {
+function OperatorLogin({ operators, online, deviceId, onAuthenticated, onReconnect }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => Promise<void>; onReconnect?: (() => void) | undefined }) {
   const [selected, setSelected] = useState(operators[0]?.profileId ?? "");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -332,6 +337,12 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated }: { opera
             ) : null}
           </div>
         ) : null}
+        {onReconnect ? (
+          <div className="mt-4 rounded-xl border border-amber-700 bg-amber-950 p-3 text-sm text-amber-100">
+            <p>Hay Internet pero esta caja no tiene sesión técnica en línea: vende con la autorización guardada, <strong>no sincroniza</strong> y no puede cobrar con Mercado Pago.</p>
+            <button className="mt-2 rounded-lg border border-amber-500 px-3 py-2 font-black hover:bg-amber-900" onClick={onReconnect} type="button">Reconectar caja</button>
+          </div>
+        ) : null}
       </section>
     </main>
   );
@@ -381,6 +392,15 @@ export default function App() {
   const [quantityInput, setQuantityInput] = useState(1);
   const [sellAsPack, setSellAsPack] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
+  // Mercado Pago (D-054): se declara como proveedor sobre TRANSFER (mismo precio, sin recargo). El
+  // botón sólo existe si el backend dice que esta sucursal lo tiene habilitado.
+  const [paymentProvider, setPaymentProvider] = useState<"MERCADOPAGO" | null>(null);
+  // Lo último que se supo de la sucursal: true/false (servidor o memoria local) o null = nunca consultado.
+  const [mpKnownEnabled, setMpKnownEnabled] = useState<boolean | null>(null);
+  const [mpLookupError, setMpLookupError] = useState<string | null>(null);
+  const [reconnectOpen, setReconnectOpen] = useState(false);
+  const [mpPanelSale, setMpPanelSale] = useState<{ saleId: string; totalCents: bigint } | null>(null);
+  const [pendingMp, setPendingMp] = useState<PendingProviderPayment[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDiagnostics, setErrorDiagnostics] = useState<string | null>(null);
@@ -483,14 +503,12 @@ export default function App() {
         }));
       }
       const sessionUser = data.session?.user;
-      const cachedUser = runtime?.profileId && runtime.userEmail &&
-        runtime.deviceStatus === "ACTIVE" && runtime.authorizationExpiresAt &&
-        new Date(runtime.authorizationExpiresAt).getTime() > Date.now()
-        ? { id: runtime.profileId, email: runtime.userEmail, offline: true }
-        : null;
-      setUser(navigator.onLine && sessionUser
-        ? { id: sessionUser.id, email: sessionUser.email ?? sessionUser.id, offline: false }
-        : cachedUser);
+      setUser(resolveStartupUser({
+        browserOnline: navigator.onLine,
+        session: sessionUser ? { id: sessionUser.id, email: sessionUser.email } : null,
+        runtime,
+        nowMs: Date.now()
+      }));
       setAuthReady(true);
     })().catch((startupError: unknown) => {
       if (!controller.signal.aborted) {
@@ -1320,7 +1338,7 @@ export default function App() {
   const scanHandlerRef = useRef(handleScan);
   scanHandlerRef.current = handleScan;
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
-    && !selectedProduct && quickCreateCode === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !loading;
+    && !selectedProduct && quickCreateCode === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && !loading;
 
   useEffect(() => {
     if (!scannerEnabled) return;
@@ -1347,6 +1365,69 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [scanFeedback]);
 
+  // ---- Mercado Pago (D-054) ---------------------------------------------------------------------
+  const online = syncStatus.state !== "offline" && navigator.onLine;
+  const mpDeviceId = localRuntime?.deviceId ?? null;
+  const mpBranchId = localRuntime?.branchId ?? null;
+  const hasOnlineSession = user !== null && !user.offline;
+  // Hay Internet pero la sesión técnica no se pudo restaurar: la caja vende con la autorización en
+  // caché, pero NO sincroniza ni puede consultar a Mercado Pago (ver lib/mercadopago-availability.ts).
+  const sessionDegraded = isSessionDegraded({ desktop, sessionOffline: user?.offline ?? false, browserOnline: online });
+  const mpAvailability = resolveMercadoPagoAvailability({
+    desktop, hasDevice: mpDeviceId !== null, hasUser: user !== null, sessionOffline: user?.offline ?? false,
+    browserOnline: online, knownEnabled: mpKnownEnabled, lookupFailed: mpLookupError !== null
+  });
+
+  // Cualquier reseteo del medio de pago (venta confirmada, ticket cancelado, cambio de operador...)
+  // también limpia el proveedor: un ticket nuevo nunca arranca "Mercado Pago".
+  useEffect(() => {
+    if (paymentMethod === null) setPaymentProvider(null);
+  }, [paymentMethod]);
+
+  // ¿Esta caja cobra con Mercado Pago? Primero lo recordado (sirve sin Internet y tras reiniciar:
+  // el botón queda visible pero deshabilitado) y después lo que diga el servidor.
+  useEffect(() => {
+    if (!desktop) return;
+    setMpKnownEnabled(readMercadoPagoEnabled(mpDeviceId, mpBranchId));
+    setMpLookupError(null);
+  }, [desktop, mpDeviceId, mpBranchId]);
+
+  // Se consulta al servidor en cuanto hay dispositivo + sesión técnica EN LÍNEA + Internet, y de
+  // nuevo si cualquiera de esas condiciones cambia (p. ej. al reconectar la caja). Un error ya no se
+  // traga: queda en el diagnóstico (y en la consola en desarrollo, sin datos sensibles).
+  useEffect(() => {
+    if (!desktop || !mpDeviceId || !hasOnlineSession || !online) return;
+    let cancelled = false;
+    void fetchMercadoPagoConfig(mpDeviceId, mpBranchId).then((result) => {
+      if (cancelled) return;
+      if (result.status === "ok") {
+        setMpKnownEnabled(result.enabled);
+        setMpLookupError(null);
+        if (mpBranchId) writeMercadoPagoEnabled(mpDeviceId, mpBranchId, result.enabled);
+      } else {
+        setMpLookupError(`[${result.code}] ${result.message}`);
+        if (import.meta.env.DEV) console.warn("[pos] mp_get_branch_config_failed", { code: result.code, message: result.message });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [desktop, mpDeviceId, mpBranchId, hasOnlineSession, online]);
+
+  const refreshPendingMp = useCallback(async () => {
+    if (!desktop) return;
+    try {
+      setPendingMp(await localDatabase.pendingProviderPayments(10));
+    } catch {
+      setPendingMp([]);
+    }
+  }, [desktop]);
+  useEffect(() => { void refreshPendingMp(); }, [refreshPendingMp, operator, mpPanelSale]);
+
+  // El servidor informó un estado: se refleja en el caché local (sin retroceder una confirmación).
+  const mirrorMercadoPagoVerification = useCallback((saleId: string, status: string) => {
+    void localDatabase.setPaymentVerification(saleId, status).then(() => refreshPendingMp()).catch(() => undefined);
+  }, [refreshPendingMp]);
+  const closeMercadoPagoPanel = useCallback(() => { setMpPanelSale(null); }, []);
+
   async function completeSale() {
     // Guard defensivo: no confiar sólo en el disabled del botón. Sin método de
     // pago elegido, no se completa la venta bajo ninguna circunstancia.
@@ -1354,6 +1435,15 @@ export default function App() {
     if (!paymentMethod) { setError(validatePaymentMethodForSale(paymentMethod) ?? "Seleccioná un método de pago."); return; }
     if (!branchId || ticket.length === 0 || saleInFlight.current) return;
     const method = paymentMethod;
+    const provider = paymentProvider;
+    // Mercado Pago necesita Internet y sesión real para generar el cobro: se rechaza ANTES de
+    // registrar la venta, nunca se deja una venta "declarada MP" sin forma de cobrarse.
+    if (provider === "MERCADOPAGO" && !mpAvailability.usable) {
+      setError(mpAvailability.reason === "SESSION_NOT_ONLINE"
+        ? "La caja no tiene sesión técnica en línea. Reconectala (Diagnóstico → Reconectar caja) para cobrar con Mercado Pago."
+        : "Mercado Pago requiere conexión a Internet. Elegí otro medio de pago o esperá a reconectar.");
+      return;
+    }
     saleInFlight.current = true;
     setLoading(true);
     setError(null);
@@ -1371,11 +1461,13 @@ export default function App() {
           operatorToken: operator.operatorToken,
           deviceId: localRuntime.deviceId,
           ticket,
-          paymentMethod: method
+          paymentMethod: method,
+          ...(provider ? { paymentProvider: provider } : {})
         });
         const receipt = await localDatabase.confirmSale(sale);
         setTicket([]);
         setPaymentMethod(null);
+        if (provider === "MERCADOPAGO") setMpPanelSale({ saleId: receipt.saleId, totalCents: BigInt(receipt.totalCents) });
         const runtime = await localDatabase.runtime();
         setLocalRuntime(runtime);
         void loadBranchStock();
@@ -1384,7 +1476,9 @@ export default function App() {
           state: navigator.onLine ? "online" : "offline",
           pendingCount: runtime.pendingCount
         }));
-        setNotice(`Venta ${receipt.saleId.slice(0, 8)} confirmada localmente por ${formatCurrency(BigInt(receipt.totalCents))}`);
+        setNotice(provider === "MERCADOPAGO"
+          ? `Venta ${receipt.saleId.slice(0, 8)} registrada: falta confirmar el pago de Mercado Pago`
+          : `Venta ${receipt.saleId.slice(0, 8)} confirmada localmente por ${formatCurrency(BigInt(receipt.totalCents))}`);
         void loadRecentSales().catch(() => undefined);
         void runSync();
       } catch (saleError) {
@@ -1568,12 +1662,29 @@ export default function App() {
     return <DeviceSetupRequired onConfigure={() => setProvisioningOpen(true)} />;
   }
 
+  // Reconectar la caja: misma pantalla de la cuenta técnica del dispositivo que ya existe para
+  // aprovisionar. Al autenticar, la sesión pasa a "en línea": arrancan la sync y la consulta de
+  // Mercado Pago, sin reiniciar el POS.
+  if (user.offline && reconnectOpen) {
+    return (
+      <DeviceProvisioningLogin
+        onAuthenticated={(authenticatedUser) => {
+          setReconnectOpen(false);
+          setUser(authenticatedUser);
+        }}
+        onCancel={() => setReconnectOpen(false)}
+      />
+    );
+  }
+
   const activeBranch = branches.find((branch) => branch.id === branchId);
   const deviceNeedsBinding = desktop && localRuntime?.deviceStatus === "UNREGISTERED";
   if (desktop && localRuntime?.deviceStatus === "ACTIVE" && localRuntime.branchId && !operator) {
-    return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={selectOperator} operators={operators} />;
+    return <OperatorLogin deviceId={localRuntime.deviceId} online={navigator.onLine && !user.offline} onAuthenticated={selectOperator} onReconnect={sessionDegraded ? () => setReconnectOpen(true) : undefined} operators={operators} />;
   }
-  const syncLabel = syncStatus.state === "syncing" && syncStatus.syncingTotal > 0
+  const syncLabel = sessionDegraded
+    ? "SIN SESIÓN EN LÍNEA · no sincroniza"
+    : syncStatus.state === "syncing" && syncStatus.syncingTotal > 0
     ? `SINCRONIZANDO · ${String(syncStatus.syncingCurrent)} de ${String(syncStatus.syncingTotal)}`
     : syncStatus.state === "offline"
       ? `OFFLINE · ${String(syncStatus.pendingCount)} evento${syncStatus.pendingCount === 1 ? "" : "s"} pendiente${syncStatus.pendingCount === 1 ? "" : "s"}`
@@ -1582,7 +1693,9 @@ export default function App() {
         : syncStatus.pendingCount > 0
           ? `ONLINE · ${String(syncStatus.pendingCount)} pendientes`
           : "SINCRONIZADO";
-  const syncCompactLabel = syncStatus.state === "syncing"
+  const syncCompactLabel = sessionDegraded
+    ? "! sesión"
+    : syncStatus.state === "syncing"
     ? `↻ ${String(syncStatus.syncingCurrent)}/${String(syncStatus.syncingTotal)}`
     : syncStatus.state === "offline"
       ? `○ ${String(syncStatus.pendingCount)}`
@@ -1629,10 +1742,20 @@ export default function App() {
               </div>
             ) : null}
           </div>
+          {pendingMp.length > 0 && !mpPanelSale ? (
+            <button
+              className="shrink-0 whitespace-nowrap rounded-xl border border-sky-700 bg-sky-950 px-3 py-2 text-xs font-black text-sky-200 hover:bg-sky-900"
+              onClick={() => { const [first] = pendingMp; if (first) setMpPanelSale({ saleId: first.saleId, totalCents: BigInt(first.totalCents) }); }}
+              title="Ventas con Mercado Pago que todavía no tienen el pago confirmado"
+              type="button"
+            >
+              MP pendientes ({pendingMp.length})
+            </button>
+          ) : null}
           <button className="pos-recent-sales rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}><span className="pos-label-full">Ventas recientes</span><span className="pos-label-compact">Ventas</span></button>
           {desktop ? (
             <button
-              className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
+              className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" || sessionDegraded ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
               onClick={() => setDiagnosticsOpen(true)}
               title={syncLabel}
             >
@@ -1803,21 +1926,33 @@ export default function App() {
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
             <div className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
               <span id="payment-method-label">Método de pago</span>
-              <div className="pos-payment-buttons grid grid-cols-3 gap-2" role="group" aria-labelledby="payment-method-label">
+              <div className={`pos-payment-buttons grid ${mpAvailability.visible ? "grid-cols-2" : "grid-cols-3"} gap-2`} role="group" aria-labelledby="payment-method-label">
                 {PAYMENT_METHOD_BUTTONS.map((option) => {
-                  const active = paymentMethod === option.value;
+                  const active = paymentMethod === option.value && !(option.value === "TRANSFER" && paymentProvider);
                   return (
                     <button
                       key={option.value}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => setPaymentMethod(option.value)}
+                      onClick={() => { setPaymentProvider(null); setPaymentMethod(option.value); }}
                       className={`rounded-xl border-2 px-3 py-3 text-sm font-black transition ${active ? option.activeClass : "border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800"}`}
                     >
                       {active ? "✓ " : ""}{option.label}
                     </button>
                   );
                 })}
+                {mpAvailability.visible ? (
+                  <button
+                    type="button"
+                    aria-pressed={paymentProvider === "MERCADOPAGO"}
+                    disabled={!mpAvailability.usable}
+                    title={mpAvailability.usable ? undefined : mpAvailability.explanation}
+                    onClick={() => { setPaymentProvider("MERCADOPAGO"); setPaymentMethod("TRANSFER"); }}
+                    className={`rounded-xl border-2 px-3 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${paymentProvider === "MERCADOPAGO" ? "border-sky-400 bg-sky-950 text-sky-100 ring-2 ring-sky-400/60" : "border-stone-700 bg-stone-950 text-stone-300 hover:bg-stone-800"}`}
+                  >
+                    {paymentProvider === "MERCADOPAGO" ? "✓ " : ""}Mercado Pago{mpAvailability.usable ? "" : mpAvailability.reason === "SESSION_NOT_ONLINE" ? " (sin sesión)" : " (sin conexión)"}
+                  </button>
+                ) : null}
               </div>
             </div>
             {shouldDisplayTicketAmounts(paymentMethod) ? (
@@ -1831,10 +1966,10 @@ export default function App() {
             ) : null}
             <button
               className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!isSaleConfirmable({ paymentMethod, ticketLength: ticket.length, loading, deviceNeedsBinding })}
+              disabled={!isSaleConfirmable({ paymentMethod, ticketLength: ticket.length, loading, deviceNeedsBinding }) || (paymentProvider === "MERCADOPAGO" && !mpAvailability.usable)}
               onClick={() => void completeSale()}
             >
-              {loading ? "Procesando…" : "Confirmar venta"}
+              {loading ? "Procesando…" : paymentProvider === "MERCADOPAGO" ? "Confirmar y cobrar con Mercado Pago" : "Confirmar venta"}
             </button>
           </div>
         </aside>
@@ -1911,6 +2046,8 @@ export default function App() {
             <dl className="mt-6 grid grid-cols-[auto_1fr] gap-x-5 gap-y-3 text-sm">
               <dt className="font-bold text-stone-400">Internet</dt><dd>{navigator.onLine ? "Disponible" : "Sin conexión"}</dd>
               <dt className="font-bold text-stone-400">Supabase</dt><dd>{syncStatus.state === "error" ? "Error" : navigator.onLine ? "Disponible" : "No verificable"}</dd>
+              <dt className="font-bold text-stone-400">Sesión técnica</dt><dd className={sessionDegraded ? "text-amber-300" : undefined}>{!user.offline ? "En línea" : sessionDegraded ? "Sin sesión en línea (autorización en caché): no sincroniza" : "Offline (autorización en caché)"}</dd>
+              <dt className="font-bold text-stone-400">Mercado Pago</dt><dd className={mpAvailability.usable ? "text-emerald-300" : "text-amber-300"}>{mpAvailability.explanation}{mpLookupError ? ` · ${mpLookupError}` : ""}</dd>
               <dt className="font-bold text-stone-400">SQLite</dt><dd>Operativo</dd>
               <dt className="font-bold text-stone-400">Última sync</dt><dd>{localRuntime.lastSuccessfulSyncAt ? new Date(localRuntime.lastSuccessfulSyncAt).toLocaleString("es-AR") : "Nunca"}</dd>
               <dt className="font-bold text-stone-400">Pendientes</dt><dd>{localRuntime.pendingCount}</dd>
@@ -1924,6 +2061,9 @@ export default function App() {
               <dt className="font-bold text-stone-400">Último error</dt><dd className="break-words text-red-300">{syncStatus.lastError ?? outboxSummary?.lastError ?? localRuntime.lastError ?? "Ninguno"}</dd>
             </dl>
             <div className="mt-6 flex flex-wrap gap-3">
+              {sessionDegraded ? (
+                <button className="rounded-xl bg-amber-600 px-4 py-3 font-black text-stone-950 hover:bg-amber-500" onClick={() => { setDiagnosticsOpen(false); setReconnectOpen(true); }} type="button">Reconectar caja</button>
+              ) : null}
               <button className="rounded-xl bg-emerald-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void runSync()}>Sincronizar ahora</button>
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-black disabled:opacity-40" disabled={!navigator.onLine || user.offline} onClick={() => void retryLastEvent()}>Reenviar último evento</button>
             </div>
@@ -1996,6 +2136,16 @@ export default function App() {
             <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
+      ) : null}
+
+      {mpPanelSale && operator?.operatorToken && localRuntime?.deviceId ? (
+        <MercadoPagoPanel
+          sale={mpPanelSale}
+          context={{ deviceId: localRuntime.deviceId, operatorProfileId: operator.profileId, operatorToken: operator.operatorToken }}
+          sessionOffline={user.offline}
+          onClose={closeMercadoPagoPanel}
+          onVerification={mirrorMercadoPagoVerification}
+        />
       ) : null}
 
       {quickCreateCode !== null ? (
