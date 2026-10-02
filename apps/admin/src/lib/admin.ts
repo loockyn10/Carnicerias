@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
+import { getCurrentUser } from "./supabase/current-user";
 import { createClient } from "./supabase/server";
 
 export interface AdminContext {
@@ -25,15 +26,15 @@ export const getAdminContext = cache(async (): Promise<AdminContext | null> => {
   const startedAt = performance.now();
   const supabase = await createClient();
   const authStartedAt = performance.now();
-  const { data: authData } = await supabase.auth.getUser();
+  const user = await getCurrentUser(supabase);
   const authMs = Math.round(performance.now() - authStartedAt);
-  if (!authData.user) redirect("/login");
+  if (!user) redirect("/login");
 
   const membershipStartedAt = performance.now();
   const { data: membershipRow } = await supabase
     .from("organization_members")
     .select("organization_id, role:roles(key), organization:organizations(name, timezone)")
-    .eq("profile_id", authData.user.id)
+    .eq("profile_id", user.id)
     .eq("status", "ACTIVE")
     .limit(1)
     .maybeSingle();
@@ -45,8 +46,8 @@ export const getAdminContext = cache(async (): Promise<AdminContext | null> => {
   if (!membership || membership.role?.key !== "admin" || !membership.organization) return null;
 
   return {
-    userId: authData.user.id,
-    email: authData.user.email ?? authData.user.id,
+    userId: user.id,
+    email: user.email ?? user.id,
     organizationId: membership.organization_id,
     organizationName: membership.organization.name,
     timezone: membership.organization.timezone

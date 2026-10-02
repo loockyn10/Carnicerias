@@ -1,11 +1,12 @@
 import { redirect } from "next/navigation";
 
+import { getCurrentUser } from "../lib/supabase/current-user";
 import { createClient } from "../lib/supabase/server";
 
 export default async function HomePage() {
   const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
+  const user = await getCurrentUser(supabase);
 
-  redirect(data.user ? "/admin" : "/login");
+  redirect(user ? "/admin" : "/login");
 }
 

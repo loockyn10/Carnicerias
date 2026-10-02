@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { getCurrentUser } from "../../lib/supabase/current-user";
 import { createClient } from "../../lib/supabase/server";
 import { login } from "./actions";
 
@@ -9,9 +10,9 @@ interface LoginPageProps {
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
+  const user = await getCurrentUser(supabase);
 
-  if (data.user) {
+  if (user) {
     redirect("/admin");
   }
 
