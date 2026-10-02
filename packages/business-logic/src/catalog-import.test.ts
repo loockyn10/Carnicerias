@@ -68,17 +68,17 @@ describe("CSV parsing", () => {
 describe("column mapping suggestion", () => {
   it("recognises the SimplyGest-style headers from the spec example", () => {
     const mapping = suggestColumnMapping(["CODIGO", "DESCR", "BARRAS", "FAMILIA", "PRECIO", "COSTO", "STOCK"]);
-    expect(mapping).toEqual({ code: 0, name: 1, barcode: 2, category: 3, price: 4, cost: 5, stock: 6 });
+    expect(mapping).toEqual({ code: 0, name: 1, barcode: 2, category: 3, saleType: null, price: 4, cost: 5, supplier: null, supplierCode: null, stock: 6 });
   });
 
   it("does not assume exact names: accents, spaces and alternatives still map", () => {
     const mapping = suggestColumnMapping(["Cód. Artículo", "Descripción", "Código de Barras", "Rubro", "Precio de Venta", "Costo", "Existencia"]);
-    expect(mapping).toEqual({ code: 0, name: 1, barcode: 2, category: 3, price: 4, cost: 5, stock: 6 });
+    expect(mapping).toEqual({ code: 0, name: 1, barcode: 2, category: 3, saleType: null, price: 4, cost: 5, supplier: null, supplierCode: null, stock: 6 });
   });
 
   it("never gives one column to two fields, and leaves unknown fields unmapped", () => {
     const mapping = suggestColumnMapping(["Codigo", "Nombre", "Precio"]);
-    expect(mapping).toEqual({ code: 0, name: 1, barcode: null, category: null, price: 2, cost: null, stock: null });
+    expect(mapping).toEqual({ code: 0, name: 1, barcode: null, category: null, saleType: null, supplier: null, supplierCode: null, price: 2, cost: null, stock: null });
     expect(new Set(Object.values(mapping).filter((value) => value !== null)).size).toBe(3);
   });
 
@@ -90,7 +90,7 @@ describe("column mapping suggestion", () => {
 });
 
 describe("validateColumnMapping", () => {
-  const complete: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, price: 2, cost: null, stock: null };
+  const complete: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, saleType: null, supplier: null, supplierCode: null, price: 2, cost: null, stock: null };
 
   it("accepts name + price + a code", () => {
     expect(validateColumnMapping(complete)).toEqual([]);
@@ -120,19 +120,19 @@ describe("number formats", () => {
 
   it("samples the mapped columns of a table", () => {
     const table = tableFromRecords([["codigo", "nombre", "precio"], ["1", "A", "1,234.50"], ["2", "B", "9.99"]]);
-    expect(detectTableNumberFormat(table, { code: 0, name: 1, barcode: null, category: null, price: 2, cost: null, stock: null })).toBe("INTL");
+    expect(detectTableNumberFormat(table, { code: 0, name: 1, barcode: null, category: null, saleType: null, supplier: null, supplierCode: null, price: 2, cost: null, stock: null })).toBe("INTL");
   });
 
   it("parses prices to integer cents with half-up rounding", () => {
     const table = tableFromRecords([["c", "n", "p"], ["1", "A", "1.234,50"], ["2", "B", "0,005"], ["3", "C", "10"], ["4", "D", "$ 99,999"]]);
-    const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, price: 2, cost: null, stock: null };
+    const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, saleType: null, supplier: null, supplierCode: null, price: 2, cost: null, stock: null };
     const result = mapCatalogRows(table, mapping, AR_NO_STOCK);
     expect(result.rows.map((row) => row.display.priceCents)).toEqual([123450, 1, 1000, 10000]);
   });
 
   it("reads spreadsheet numbers without float noise", () => {
     const table = tableFromRecords([["c", "n", "p"], ["1", "A", 19.99], ["2", "B", 1.005], ["3", "C", 4500]]);
-    const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, price: 2, cost: null, stock: null };
+    const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, saleType: null, supplier: null, supplierCode: null, price: 2, cost: null, stock: null };
     expect(mapCatalogRows(table, mapping, AR_NO_STOCK).rows.map((row) => row.display.priceCents)).toEqual([1999, 101, 450000]);
   });
 });
@@ -230,7 +230,7 @@ describe("mapCatalogRows — the SimplyGest sample file", () => {
 });
 
 describe("mapCatalogRows — edge cases", () => {
-  const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: 2, category: null, price: 3, cost: null, stock: null };
+  const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: 2, category: null, saleType: null, supplier: null, supplierCode: null, price: 3, cost: null, stock: null };
   const run = (rows: string[][]) => mapCatalogRows(tableFromRecords([["c", "n", "b", "p"], ...rows]), mapping, AR_NO_STOCK);
 
   it("rejects a barcode that a spreadsheet turned into scientific notation", () => {
@@ -273,17 +273,23 @@ describe("mapCatalogRows — edge cases", () => {
     expect(rows[1]?.invalidReason).toBeNull();
   });
 
-  it("rejects non-positive and malformed prices, and a negative cost", () => {
+  it("accepts a price of 0 (SimplyGest products priced at the counter) and rejects negative or malformed ones, and a negative cost", () => {
     const withCost: CatalogColumnMapping = { ...mapping, cost: 4 };
-    const table = tableFromRecords([["c", "n", "b", "p", "k"], ["1", "A", "", "0", ""], ["2", "B", "", "abc", ""], ["3", "C", "", "-5", ""], ["4", "D", "", "10", "-2"], ["5", "E", "", "10", "0"]]);
+    const table = tableFromRecords([["c", "n", "b", "p", "k"], ["1", "A", "", "0", ""], ["2", "B", "", "abc", ""], ["3", "C", "", "-5", ""], ["4", "D", "", "10", "-2"], ["5", "E", "", "10", "0"], ["6", "F", "", "0,00", ""], ["7", "G", "", "-0", ""], ["8", "H", "", "", ""]]);
     const rows = mapCatalogRows(table, withCost, AR_NO_STOCK).rows;
     expect(rows.map((row) => row.invalidReason)).toEqual([
-      expect.stringContaining("mayor a 0"),
+      null,
       expect.stringContaining("Precio inválido"),
-      expect.stringContaining("mayor a 0"),
+      expect.stringContaining("no puede ser negativo"),
       expect.stringContaining("costo no puede ser negativo"),
-      null
+      null,
+      null,
+      null,
+      "Falta el precio de venta"
     ]);
+    expect(rows[0]?.payload.priceCents).toBe(0);
+    expect(rows[0]?.display.priceCents).toBe(0);
+    expect(Object.is(rows[6]?.payload.priceCents, 0)).toBe(true); // "-0" is a plain zero, not a negative zero
   });
 
   it("enforces the engine's length limits", () => {
@@ -303,6 +309,126 @@ describe("mapCatalogRows — edge cases", () => {
     expect(mapCatalogRows(table, mapping, { numberFormat: "INTL", importStock: false }).rows[0]?.display.priceCents).toBe(123450);
     // The same text read as Argentine is rejected rather than misread as 1.234 pesos.
     expect(mapCatalogRows(table, mapping, AR_NO_STOCK).rows[0]?.invalidReason).toContain("Precio inválido");
+  });
+});
+
+describe("tipo_venta (UNIT / WEIGHT)", () => {
+  const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, saleType: 2, price: 3, cost: null, supplier: null, supplierCode: null, stock: null };
+  const run = (rows: string[][], using: CatalogColumnMapping = mapping) => mapCatalogRows(tableFromRecords([["c", "n", "t", "p"], ...rows]), using, AR_NO_STOCK).rows;
+
+  it("UNIT and WEIGHT become the product's forma de venta (no longer forced to UNIT)", () => {
+    const rows = run([["1", "Coca", "UNIT", "10"], ["2", "Vacío", "WEIGHT", "20"]]);
+    expect(rows.map((row) => row.payload.unitType)).toEqual(["UNIT", "WEIGHT"]);
+    expect(rows.map((row) => row.display.saleType)).toEqual(["UNIT", "WEIGHT"]);
+  });
+
+  it("is case/space tolerant for the two valid values", () => {
+    expect(run([["1", "A", " unit ", "10"], ["2", "B", "Weight", "10"]]).map((row) => row.payload.unitType)).toEqual(["UNIT", "WEIGHT"]);
+  });
+
+  it("any other value is a validation error (a kilo must never silently become a unit)", () => {
+    const rows = run([["1", "A", "KG", "10"], ["2", "B", "UNIDAD", "10"], ["3", "C", "", "10"], ["4", "D", "0", "10"]]);
+    expect(rows.map((row) => row.invalidReason)).toEqual([
+      expect.stringContaining("Forma de venta inválida: “KG”"),
+      expect.stringContaining("Forma de venta inválida: “UNIDAD”"),
+      expect.stringContaining("Falta la forma de venta"),
+      expect.stringContaining("Forma de venta inválida: “0”")
+    ]);
+  });
+
+  it("with no tipo_venta column every product keeps the historical default (UNIT)", () => {
+    const rows = run([["1", "A", "WEIGHT", "10"]], { ...mapping, saleType: null });
+    expect(rows[0]?.payload.unitType).toBe("UNIT");
+  });
+});
+
+describe("proveedor y proveedor_codigo", () => {
+  const mapping: CatalogColumnMapping = { code: 0, name: 1, barcode: null, category: null, saleType: null, price: 2, cost: null, supplier: 3, supplierCode: 4, stock: null };
+  const run = (rows: string[][], using: CatalogColumnMapping = mapping) => mapCatalogRows(tableFromRecords([["c", "n", "p", "prov", "provcod"], ...rows]), using, AR_NO_STOCK);
+
+  it("a supplier name (and its code) travel in the payload, whitespace-normalized", () => {
+    const row = run([["1", "A", "10", "  Coca-Cola   FEMSA ", "p-01"]]).rows[0];
+    expect(row?.payload).toMatchObject({ supplierName: "Coca-Cola FEMSA", supplierCode: "P-01" });
+    expect(row?.display).toMatchObject({ supplier: "Coca-Cola FEMSA", supplierCode: "P-01" });
+  });
+
+  it("an empty supplier imports the product normally, without one", () => {
+    const row = run([["1", "A", "10", "", ""]]).rows[0];
+    expect(row?.invalidReason).toBeNull();
+    expect(row?.payload).not.toHaveProperty("supplierName");
+    expect(row?.payload).not.toHaveProperty("supplierCode");
+  });
+
+  it("placeholders (-, sin proveedor, a code of 0) also mean no supplier", () => {
+    const rows = run([["1", "A", "10", "-", "0"], ["2", "B", "10", "SIN PROVEEDOR", "000"], ["3", "C", "10", "n/a", ""]]).rows;
+    for (const row of rows) {
+      expect(row.invalidReason).toBeNull();
+      expect(row.payload).not.toHaveProperty("supplierName");
+      expect(row.payload).not.toHaveProperty("supplierCode");
+    }
+  });
+
+  it("a supplier code without a name is sent as is (the database knows whether that code already exists)", () => {
+    const row = run([["1", "A", "10", "", "P-9"]]).rows[0];
+    expect(row?.invalidReason).toBeNull();
+    expect(row?.payload).toMatchObject({ supplierCode: "P-9" });
+    expect(row?.payload).not.toHaveProperty("supplierName");
+  });
+
+  it("works with only the name column (the code column is optional)", () => {
+    const row = run([["1", "A", "10", "Distribuidora X", ""]], { ...mapping, supplierCode: null }).rows[0];
+    expect(row?.payload).toMatchObject({ supplierName: "Distribuidora X" });
+    expect(row?.payload).not.toHaveProperty("supplierCode");
+  });
+
+  it("lists each distinct supplier once, ignoring case/accents/spaces (the preview counts suppliers, not rows)", () => {
+    const result = run([["1", "A", "10", "Distribuidora Peña", ""], ["2", "B", "10", "DISTRIBUIDORA  pena", ""], ["3", "C", "10", "Coca-Cola", "P1"]]);
+    expect(result.suppliers).toEqual(["Distribuidora Peña", "Coca-Cola"]);
+  });
+
+  it("rejects an oversized supplier name or code with a readable cause", () => {
+    const rows = run([["1", "A", "10", "x".repeat(121), ""], ["2", "B", "10", "ok", "y".repeat(61)]]).rows;
+    expect(rows[0]?.invalidReason).toContain("nombre del proveedor supera los 120");
+    expect(rows[1]?.invalidReason).toContain("código del proveedor supera los 60");
+  });
+
+  it("a rejected row does not contribute its supplier to the list", () => {
+    expect(run([["1", "", "10", "Fantasma", ""]]).suppliers).toEqual([]);
+  });
+});
+
+describe("the final SimplyGest CSV layout", () => {
+  const headers = ["codigo", "barcode", "nombre", "categoria", "tipo_venta", "precio_venta", "costo", "proveedor", "proveedor_codigo"];
+
+  it("is recognised column by column (proveedor_codigo is not taken for the code, tipo_venta not for the price)", () => {
+    expect(suggestColumnMapping(headers)).toEqual({
+      code: 0, barcode: 1, name: 2, category: 3, saleType: 4, price: 5, cost: 6, supplier: 7, supplierCode: 8, stock: null
+    });
+  });
+
+  it("imports UNIT, WEIGHT, a zero price and suppliers end to end, with no stock column at all", () => {
+    const table = tableFromRecords([
+      headers,
+      ["1001", "7790895000010", "Coca Cola 2.25 L", "Bebidas", "UNIT", "3500", "2500", "Coca-Cola FEMSA", "P1"],
+      ["1002", "", "Vacío importado", "Carnes", "WEIGHT", "12000", "", "", ""],
+      ["1003", "7791234000001", "GALLETITAS X", "Almacen", "UNIT", "0", "", "Distribuidora X", ""]
+    ]);
+    const result = mapCatalogRows(table, suggestColumnMapping(table.headers), { numberFormat: "AR", importStock: false });
+    expect(result.invalidRows).toBe(0);
+    expect(result.rows.map((row) => row.payload)).toEqual([
+      { name: "Coca Cola 2.25 L", unitType: "UNIT", sku: "1001", barcodes: ["7790895000010"], categoryName: "Bebidas", priceCents: 350000, costCents: 250000, supplierName: "Coca-Cola FEMSA", supplierCode: "P1" },
+      { name: "Vacío importado", unitType: "WEIGHT", sku: "1002", categoryName: "Carnes", priceCents: 1200000 },
+      { name: "GALLETITAS X", unitType: "UNIT", sku: "1003", barcodes: ["7791234000001"], categoryName: "Almacen", priceCents: 0, supplierName: "Distribuidora X" }
+    ]);
+    expect(result.rows.every((row) => row.stockUnits === null)).toBe(true);
+    expect(result.suppliers).toEqual(["Coca-Cola FEMSA", "Distribuidora X"]);
+  });
+
+  it("re-mapping the same file gives byte-identical payloads (the base's UNCHANGED detection depends on it)", () => {
+    const table = tableFromRecords([headers, ["1001", "7790895000010", "Coca", "Bebidas", "UNIT", "3500", "2500", "Coca-Cola FEMSA", "P1"]]);
+    const first = mapCatalogRows(table, suggestColumnMapping(table.headers), AR_NO_STOCK).rows;
+    const second = mapCatalogRows(table, suggestColumnMapping(table.headers), AR_NO_STOCK).rows;
+    expect(JSON.stringify(first.map((row) => row.payload))).toBe(JSON.stringify(second.map((row) => row.payload)));
   });
 });
 

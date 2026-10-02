@@ -54,6 +54,20 @@ export function hasStock(stock: BranchStock, productId: string): boolean {
   return (stock.get(productId) ?? 0) > 0;
 }
 
+/**
+ * The stock the POS gates availability on. Central (almacén + carnicería) does NOT keep reliable
+ * stock — SimplyGest's was never trusted, and many products show 0 while physically on the shelf — so
+ * there availability never depends on it: every product enabled in the branch assortment is visible and
+ * sellable (search, scan and manual sale alike), and selling at stock 0 simply leaves the ledger at -1.
+ * Every other branch (Avenida, Janssen) keeps the gate: sin stock = gray, collapsed and not sellable.
+ * `true` for `centralPos` comes from the server capability of the device (production branch), never
+ * from a hardcoded branch name. `null` is the same "stock unknown, block nothing" the helpers above
+ * already understand, so every call site keeps working unchanged.
+ */
+export function stockForAvailability(stock: BranchStock, centralPos: boolean): BranchStock {
+  return centralPos ? null : stock;
+}
+
 /** Splits products into sellable-first groups, preserving the incoming (category, name) order inside each. */
 export function partitionByStock<T extends { productId: string }>(
   products: readonly T[],
@@ -99,40 +113,28 @@ export function buildBarcodeIndex<T extends BarcodeProductLike>(products: readon
 export type ScanOutcome<T> =
   /** No product of this branch has that code. */
   | { kind: "NOT_FOUND"; code: string }
-  /** Enabled here but the branch stock is <= 0: shown as "Sin stock", never added. Only returned
-   * when scans without stock are NOT allowed (every branch but Central, see `ScanOptions`). */
+  /** Enabled here but the branch stock is <= 0: shown as "Sin stock", never added. Never returned
+   * for Central: pass `stockForAvailability(stock, true)` (= null) and nothing is gated by stock. */
   | { kind: "NO_STOCK"; product: T }
-  /** UNIT product: each scan adds exactly one unit. `stockUnregistered` = the ledger says <= 0, so
-   * the caller warns (non-blocking) that the restock was probably never registered. */
-  | { kind: "ADD_UNIT"; product: T; stockUnregistered: boolean }
+  /** UNIT product: each scan adds exactly one unit. */
+  | { kind: "ADD_UNIT"; product: T }
   /** WEIGHT product: keep the existing weigh flow (open the weight dialog); a scan never turns a
    * weighed product into a per-unit sale. */
-  | { kind: "OPEN_WEIGHT"; product: T; stockUnregistered: boolean };
+  | { kind: "OPEN_WEIGHT"; product: T };
 
-export interface ScanOptions {
-  /**
-   * A product physically in front of the cashier was obviously received, so for the central
-   * (almacén) POS a scan of an enabled product with stock <= 0 is still added: nothing is invented
-   * in the ledger (the sale may leave it at -1 until the restock is registered). This applies to a
-   * SCAN only; clicking the product card keeps the "Sin stock" lock.
-   */
-  allowWithoutStock?: boolean;
-}
-
-/** `null` for an empty/blank code (nothing to resolve, not even an error). */
+/**
+ * `null` for an empty/blank code (nothing to resolve, not even an error). `stock` is what availability
+ * is gated on — already passed through `stockForAvailability`, so Central never gets NO_STOCK.
+ */
 export function resolveScan<T extends BarcodeProductLike>(
   index: ReadonlyMap<string, T>,
   stock: BranchStock,
-  rawCode: string,
-  options: ScanOptions = {}
+  rawCode: string
 ): ScanOutcome<T> | null {
   const code = normalizeBarcode(rawCode);
   if (code === null) return null;
   const product = index.get(code);
   if (!product) return { kind: "NOT_FOUND", code };
-  const stockUnregistered = !hasStock(stock, product.productId);
-  if (stockUnregistered && options.allowWithoutStock !== true) return { kind: "NO_STOCK", product };
-  return product.unitType === "UNIT"
-    ? { kind: "ADD_UNIT", product, stockUnregistered }
-    : { kind: "OPEN_WEIGHT", product, stockUnregistered };
+  if (!hasStock(stock, product.productId)) return { kind: "NO_STOCK", product };
+  return product.unitType === "UNIT" ? { kind: "ADD_UNIT", product } : { kind: "OPEN_WEIGHT", product };
 }

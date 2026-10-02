@@ -23,6 +23,10 @@ const SHIFT_HEARTBEAT_SCHEMA: &str = include_str!("../migrations/011_shift_heart
 const BRANCH_STOCK_PROJECTION_SCHEMA: &str = include_str!("../migrations/012_branch_stock_projection.sql");
 const PRODUCT_BARCODES_SCHEMA: &str = include_str!("../migrations/013_product_barcodes.sql");
 const PAYMENT_VERIFICATION_SCHEMA: &str = include_str!("../migrations/014_payment_verification.sql");
+const CATALOG_ZERO_PRICE_SCHEMA: &str = include_str!("../migrations/015_catalog_zero_price.sql");
+
+/// Un producto sin precio (precio 0, importado desde SimplyGest) nunca se vende: el POS pide el precio antes de agregarlo al ticket.
+const PRICE_REQUIRED: &str = "PRICE_REQUIRED: el producto no tiene precio; fijá el precio antes de venderlo.";
 
 /// Mensaje (y código estable) cuando se intenta registrar una Transferencia manual donde Mercado Pago es obligatorio.
 const MANUAL_TRANSFER_NOT_ALLOWED: &str = "MANUAL_TRANSFER_NOT_ALLOWED: la transferencia manual no está permitida en esta sucursal; cobrá con Mercado Pago.";
@@ -484,6 +488,16 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(PAYMENT_VERIFICATION_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (14, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
+    // 015: catalog_prices accepts price 0 ("sin precio", Central). Rebuilds a table nothing references, so
+    // the foreign-key pragma does not need to be toggled (unlike 009).
+    let catalog_zero_price_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 15)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !catalog_zero_price_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(CATALOG_ZERO_PRICE_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (15, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -1208,6 +1222,10 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
     for item in &sale.items {
         let price = parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?;
         let original_price = item.original_price_per_kg_cents.as_deref().map(|value| parse_i64(value, "originalPricePerKgCents")).transpose()?.unwrap_or(price);
+        // A product without price (0) is never sold, whatever the UI did: the line would be worth $0.
+        if price <= 0 || original_price <= 0 {
+            return Err(PRICE_REQUIRED.to_string());
+        }
         let subtotal = parse_i64(&item.subtotal_cents, "subtotalCents")?;
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
         let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
@@ -1866,7 +1884,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 14);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 15);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -1918,7 +1936,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 14);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 15);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -2969,5 +2987,90 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].provider.as_deref(), Some("MERCADOPAGO"));
         assert_eq!(recent[0].verification_status.as_deref(), Some("CANCELLED"));
+    }
+
+    // ---- products without price (Central, SimplyGest price 0) --------------------------------------
+
+    #[test]
+    fn zero_price_migration_keeps_existing_prices_and_relaxes_only_the_check() {
+        // Real upgrade scenario: a device already synced prices under the old `check (> 0)`.
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("pragma foreign_keys = on;").unwrap();
+        connection.execute_batch(INITIAL_SCHEMA).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('cat','org','Almacen',0,1,'2026-09-30T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('coca','org','cat','Coca Cola',null,'UNIT',1,'2026-09-30T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('coca','central',350000,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).unwrap();
+        // Before: a zero price is rejected by the old schema.
+        assert!(connection.execute("insert into catalog_prices values('coca','other',0,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).is_err());
+
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(CATALOG_ZERO_PRICE_SCHEMA).unwrap();
+        transaction.commit().unwrap();
+
+        assert_eq!(connection.query_row("select price_per_kg_cents from catalog_prices where product_id='coca' and branch_id='central'", [], |row| row.get::<_, i64>(0)).unwrap(), 350000);
+        // After: 0 is accepted, a negative price is still impossible, and the FK to the product stays.
+        connection.execute("insert into catalog_prices values('coca','other',0,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).unwrap();
+        assert!(connection.execute("insert into catalog_prices values('coca','neg',-1,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).is_err());
+        assert!(connection.execute("insert into catalog_prices values('ghost','central',100,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).is_err());
+    }
+
+    #[test]
+    fn a_catalog_pull_with_a_zero_price_product_is_stored_and_listed() {
+        let mut connection = catalog_fixture();
+        let mut priceless = catalog_row("galletitas", "GALLETITAS X", "UNIT", &["7791234000001"]);
+        priceless.price_per_kg_cents = "0".into();
+        let coca = catalog_row("coca", "Coca Cola 2.25 L", "UNIT", &["7790895000010"]);
+        apply_catalog_pull_inner(&mut connection, &pull(vec![priceless, coca], &[]), "profile", "device@example.test").unwrap();
+
+        let rows = local_catalog_inner(&connection, "central").unwrap();
+        let price_of = |id: &str| rows.iter().find(|row| row.product_id == id).map(|row| row.price_per_kg_cents.clone());
+        // The product WITHOUT price still reaches the screen (it is shown as "Sin precio") ...
+        assert_eq!(price_of("galletitas").as_deref(), Some("0"));
+        assert_eq!(price_of("coca").as_deref(), Some("450000"));
+        // ... and its barcode resolves, so a scan can open the price dialog.
+        assert_eq!(barcodes_of(&connection, "galletitas"), vec!["7791234000001".to_string()]);
+    }
+
+    #[test]
+    fn a_later_pull_replaces_a_zero_price_with_the_one_the_cashier_set() {
+        let mut connection = catalog_fixture();
+        let mut priceless = catalog_row("galletitas", "GALLETITAS X", "UNIT", &[]);
+        priceless.price_per_kg_cents = "0".into();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![priceless], &[]), "profile", "device@example.test").unwrap();
+        // Fran sets $1800: the next incremental pull delivers the product with its new price.
+        let mut priced = catalog_row("galletitas", "GALLETITAS X", "UNIT", &[]);
+        priced.price_per_kg_cents = "180000".into();
+        apply_catalog_pull_inner(&mut connection, &pull(vec![priced], &[]), "profile", "device@example.test").unwrap();
+        let rows = local_catalog_inner(&connection, "central").unwrap();
+        assert_eq!(rows.iter().filter(|row| row.product_id == "galletitas").count(), 1);
+        assert_eq!(rows.iter().find(|row| row.product_id == "galletitas").unwrap().price_per_kg_cents, "180000");
+    }
+
+    #[test]
+    fn a_sale_line_at_price_zero_is_rejected_locally_even_if_the_ui_let_it_through() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Almacen',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products values('product','org','category','GALLETITAS X',null,'UNIT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_prices values('product','branch',0,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
+        let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
+        let sale = OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id,
+            status: "COMPLETED".into(), total_cents: "0".into(), total_weight_grams: "0".into(),
+            created_at: "2026-09-13T00:00:00Z".into(), completed_at: "2026-09-13T00:00:00Z".into(),
+            items: vec![OfflineSaleItem { id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "GALLETITAS X".into(), weight_grams: None, quantity_units: Some(1),
+                price_per_kg_cents: "0".into(), original_price_per_kg_cents: Some("0".into()), discount_rule_id: None, discount_type: None, discount_value: None, promotion_mode: None, discount_cents: Some("0".into()),
+                cash_discount_bps: Some("0".into()), cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("0".into()), promotion_discount_cents: Some("0".into()), cost_cents_snapshot: None, profit_markup_bps_snapshot: None, subtotal_cents: "0".into() }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: "CASH".into(), amount_cents: "0".into(), provider: None },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1".into(), occurred_at: "2026-09-13T00:00:00Z".into() }]
+        };
+        let transaction = connection.transaction().unwrap();
+        let error = insert_sale(&transaction, &sale).unwrap_err();
+        assert!(error.starts_with("PRICE_REQUIRED"), "unexpected error: {error}");
+        drop(transaction);
+        assert_eq!(connection.query_row("select count(*) from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
 }

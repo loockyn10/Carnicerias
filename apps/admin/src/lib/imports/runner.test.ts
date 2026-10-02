@@ -1,4 +1,4 @@
-import { mapCatalogRows, parseCsvText, suggestColumnMapping, type MappedCatalogRow } from "@carnicerias/business-logic";
+import { mapCatalogRows, normalizeImportText, parseCsvText, suggestColumnMapping, tableFromRecords, type MappedCatalogRow } from "@carnicerias/business-logic";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -14,7 +14,8 @@ import {
   type ImportGateway,
   type ImportRowAction,
   type ImportServerRow,
-  type ImportStageRow
+  type ImportStageRow,
+  type PreviewSupplier
 } from "./runner";
 
 function fixtureRows(name: string, importStock = true): MappedCatalogRow[] {
@@ -30,6 +31,9 @@ class FakeGateway implements ImportGateway {
   failApplyOnBatch: number | null = null;
   failStage = false;
   stockVerdict: (row: ImportStageRow) => { action: ImportRowAction; reason: string | null } = () => ({ action: "CREATE", reason: "OPENING_BALANCE" });
+  // What the "database" already holds: applied product codes (a repeat is UNCHANGED) and suppliers.
+  readonly importedIds = new Set<string>();
+  readonly knownSuppliers = new Set<string>();
   private next = 0;
 
   createBatch(input: CreateImportBatchInput) {
@@ -54,7 +58,26 @@ class FakeGateway implements ImportGateway {
     const batch = this.batches.get(batchId);
     if (batch?.input.entityType === "stock_opening_balance") return { ...this.stockVerdict(row), message: null };
     if (typeof row.payload.invalidReason === "string") return { action: "ERROR", reason: "INVALID_ROW", message: row.payload.invalidReason };
+    if (this.importedIds.has(row.externalId)) return { action: "IGNORE", reason: "UNCHANGED", message: null };
     return { action: "CREATE", reason: "NEW", message: null };
+  }
+
+  listSuppliers(batchId: string): Promise<PreviewSupplier[]> {
+    const batch = this.batches.get(batchId);
+    if (!batch) return Promise.reject(new Error("unknown batch"));
+    this.calls.push(`suppliers:${batchId}`);
+    const grouped = new Map<string, PreviewSupplier>();
+    for (const row of batch.rows) {
+      const name = typeof row.payload.supplierName === "string" ? row.payload.supplierName : null;
+      if (name === null || this.verdict(batchId, row).action === "ERROR") continue;
+      const key = normalizeImportText(name);
+      const current = grouped.get(key);
+      const code = typeof row.payload.supplierCode === "string" ? row.payload.supplierCode : null;
+      grouped.set(key, current ? { ...current, rows: current.rows + 1 } : {
+        key: `N:${key}`, supplierId: this.knownSuppliers.has(key) ? `sup:${key}` : null, name, code, rows: 1
+      });
+    }
+    return Promise.resolve([...grouped.values()]);
   }
 
   previewBatch(batchId: string) {
@@ -92,6 +115,13 @@ class FakeGateway implements ImportGateway {
     const errors = verdicts.filter((action) => action === "ERROR").length;
     if (errors > 0 && !skipErrors) return Promise.reject(new Error("batch has errors"));
     batch.status = "APPLIED";
+    if (batch.input.entityType === "product") {
+      for (const row of batch.rows) {
+        if (this.verdict(batchId, row).action !== "CREATE") continue;
+        this.importedIds.add(row.externalId);
+        if (typeof row.payload.supplierName === "string") this.knownSuppliers.add(normalizeImportText(row.payload.supplierName));
+      }
+    }
     return Promise.resolve({
       created: verdicts.filter((action) => action === "CREATE").length, updated: 0,
       ignored: verdicts.filter((action) => action === "IGNORE").length, skippedErrors: errors
@@ -218,6 +248,76 @@ describe("runApply", () => {
     expect(error.stage).toBe("products");
     expect(error.partial.batchesApplied).toBe(1);
     expect(error.partial.products.created).toBeGreaterThan(900);
+    expect([...gateway.batches.values()].some((batch) => batch.input.entityType === "stock_opening_balance")).toBe(false);
+  });
+});
+
+describe("proveedores, tipo_venta y precio 0 en el flujo completo", () => {
+  const HEADERS = ["codigo", "barcode", "nombre", "categoria", "tipo_venta", "precio_venta", "costo", "proveedor", "proveedor_codigo"];
+  const FILE = [
+    ["1001", "7790895000010", "Coca Cola 2.25 L", "Bebidas", "UNIT", "3500", "2500", "Coca-Cola FEMSA", "P1"],
+    ["1002", "", "Vacío importado", "Carnes", "WEIGHT", "12000", "", "", ""],
+    ["1003", "7791234000001", "GALLETITAS X", "Almacen", "UNIT", "0", "", "Distribuidora X", ""],
+    ["1004", "", "Pepsi", "Bebidas", "UNIT", "3000", "", "coca-cola femsa", ""],
+    ["1005", "", "Roto", "Almacen", "CAJA", "100", "", "Distribuidora Z", ""],
+    ["1006", "", "Negativo", "Almacen", "UNIT", "-5", "", "Distribuidora Z", ""]
+  ];
+  const rows = () => {
+    const table = tableFromRecords([HEADERS, ...FILE]);
+    return mapCatalogRows(table, suggestColumnMapping(table.headers), { numberFormat: "AR", importStock: false }).rows;
+  };
+
+  it("stages UNIT, WEIGHT, the zero price and the suppliers exactly as the mapper produced them", async () => {
+    const gateway = new FakeGateway();
+    await runPreview(gateway, rows(), META);
+    const staged = [...gateway.batches.values()].flatMap((batch) => batch.rows);
+    expect(staged.find((row) => row.externalId === "1002")?.payload).toMatchObject({ unitType: "WEIGHT", priceCents: 1200000 });
+    expect(staged.find((row) => row.externalId === "1003")?.payload).toMatchObject({ unitType: "UNIT", priceCents: 0, supplierName: "Distribuidora X" });
+    expect(staged.find((row) => row.externalId === "1001")?.payload).toMatchObject({ supplierName: "Coca-Cola FEMSA", supplierCode: "P1" });
+  });
+
+  it("the preview audits the suppliers: each distinct one once, errors excluded, new vs reused", async () => {
+    const gateway = new FakeGateway();
+    gateway.knownSuppliers.add(normalizeImportText("Distribuidora X"));
+    const preview = await runPreview(gateway, rows(), META);
+    expect(preview.totals).toMatchObject({ create: 4, error: 2, suppliersNew: 1, suppliersReused: 1 });
+    expect(preview.suppliers.map((entry) => [entry.name, entry.supplierId !== null, entry.rows])).toEqual([
+      ["Coca-Cola FEMSA", false, 2], // rows 1001 and 1004 (same supplier, different spelling)
+      ["Distribuidora X", true, 1]
+      // "Distribuidora Z" only appears on the two rejected rows: it is NOT created
+    ]);
+  });
+
+  it("a supplier new in two different batches is counted once", async () => {
+    const gateway = new FakeGateway();
+    const big = Array.from({ length: 1100 }, (_, index) => ["C" + String(index), "", "Producto " + String(index), "Almacen", "UNIT", "100", "", "Mismo Proveedor", ""]);
+    const table = tableFromRecords([HEADERS, ...big]);
+    const mapped = mapCatalogRows(table, suggestColumnMapping(table.headers), { numberFormat: "AR", importStock: false }).rows;
+    const preview = await runPreview(gateway, mapped, META);
+    expect(preview.batches).toHaveLength(2);
+    expect(preview.totals).toMatchObject({ suppliersNew: 1, suppliersReused: 0 });
+    expect(preview.suppliers).toMatchObject([{ name: "Mismo Proveedor", rows: 1100 }]);
+  });
+
+  it("importing the same file twice: the second run creates nothing and reuses every supplier", async () => {
+    const gateway = new FakeGateway();
+    const first = await runPreview(gateway, rows(), META);
+    expect(first.totals).toMatchObject({ create: 4, suppliersNew: 2, suppliersReused: 0 });
+    await runApply(gateway, first, { skipErrors: true, importStock: false });
+
+    const second = await runPreview(gateway, rows(), META);
+    expect(second.totals).toMatchObject({ create: 0, update: 0, ignore: 4, error: 2, suppliersNew: 0, suppliersReused: 2 });
+    const again = await runApply(gateway, second, { skipErrors: true, importStock: false });
+    expect(again.products).toMatchObject({ created: 0, updated: 0, ignored: 4 });
+    expect(gateway.knownSuppliers.size).toBe(2);
+  });
+
+  it("never loads stock for a file whose mapping has no stock column (the final SimplyGest CSV)", async () => {
+    const gateway = new FakeGateway();
+    const preview = await runPreview(gateway, rows(), META);
+    expect(preview.totals).toMatchObject({ stockRows: 0, stockUnits: 0 });
+    const outcome = await runApply(gateway, preview, { skipErrors: true, importStock: false });
+    expect(outcome.stock).toBeNull();
     expect([...gateway.batches.values()].some((batch) => batch.input.entityType === "stock_opening_balance")).toBe(false);
   });
 });

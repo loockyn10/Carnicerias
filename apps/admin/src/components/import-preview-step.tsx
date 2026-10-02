@@ -23,6 +23,8 @@ function PriceCell({ entry, current, kind }: { entry: PreviewedRow; current: Cur
   const next = kind === "price" ? entry.row.display.priceCents : entry.row.display.costCents;
   const text = kind === "price" ? entry.row.display.priceText : entry.row.display.costText;
   if (next === null) return <span className={text !== "" && kind === "price" ? "text-red-700" : "text-stone-400"}>{text !== "" ? text : "—"}</span>;
+  // 0 is valid ("sin precio definido"): imported as is; the Central POS asks the cashier for it at the counter.
+  if (kind === "price" && next === 0) return <span>$0<span className="block text-[11px] text-amber-700" title="El producto se importa sin precio: la caja de Central lo pide al venderlo.">sin precio · se pide en la caja</span></span>;
   const known = entry.internalId ? current[entry.internalId] : undefined;
   const now = known ? known[kind === "price" ? 0 : 1] : null;
   if (entry.action === "UPDATE" && now !== null && now !== next) {
@@ -47,10 +49,9 @@ function ResultCell({ entry }: { entry: PreviewedRow }) {
 }
 
 export function ImportPreviewStep({
-  preview, importStock, newCategories, current, destinationName, busy, onConfirm, onBack, onCancel
+  preview, newCategories, current, destinationName, busy, onConfirm, onBack, onCancel
 }: {
   preview: ImportPreview;
-  importStock: boolean;
   newCategories: string[];
   current: CurrentCommercialValues;
   destinationName: string;
@@ -72,14 +73,14 @@ export function ImportPreviewStep({
       if (filter !== "ALL" && entry.action !== filter) return false;
       if (needle === "") return true;
       const d = entry.row.display;
-      return normalizeSearchText(`${d.name} ${d.sku} ${d.barcode} ${d.category} ${entry.message ?? ""}`).includes(needle);
+      return normalizeSearchText(`${d.name} ${d.sku} ${d.barcode} ${d.category} ${d.supplier} ${d.supplierCode} ${entry.message ?? ""}`).includes(needle);
     });
   }, [preview.rows, filter, search]);
   const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, pages - 1);
   const shown = visible.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
-  const hasWork = totals.create + totals.update > 0 || (importStock && totals.stockRows > 0);
+  const hasWork = totals.create + totals.update > 0;
   const blockedByErrors = totals.error > 0 && !acceptSkip;
   const blockedByLinks = totals.linkedExisting > 0 && !reviewedLinks;
   const canConfirm = hasWork && !blockedByErrors && !blockedByLinks && !busy;
@@ -108,7 +109,12 @@ export function ImportPreviewStep({
 
     <ul className="mt-3 space-y-1 text-sm text-stone-600">
       {newCategories.length > 0 ? <li>📁 {newCategories.length === 1 ? "Se creará" : "Se crearán"} <strong>{newCategories.length}</strong> categoría{newCategories.length === 1 ? "" : "s"} nueva{newCategories.length === 1 ? "" : "s"}: {newCategories.slice(0, 8).join(", ")}{newCategories.length > 8 ? "…" : ""}</li> : null}
-      {importStock ? <li>📦 Stock inicial en {destinationName}: <strong>{totals.stockRows.toLocaleString("es-AR")}</strong> producto{totals.stockRows === 1 ? "" : "s"} ({totals.stockUnits.toLocaleString("es-AR")} unidades). Un producto que ya tenga movimientos de stock en {destinationName} conserva el suyo: no se pisa.</li> : <li>📦 No se importa stock.</li>}
+      <li>🏷️ Proveedores: <strong>{totals.suppliersNew.toLocaleString("es-AR")}</strong> nuevo{totals.suppliersNew === 1 ? "" : "s"} (se {totals.suppliersNew === 1 ? "creará" : "crearán"}) · <strong>{totals.suppliersReused.toLocaleString("es-AR")}</strong> ya existente{totals.suppliersReused === 1 ? "" : "s"} (se {totals.suppliersReused === 1 ? "reutiliza" : "reutilizan"}). Un producto sin proveedor se importa igual.
+        {preview.suppliers.length > 0 ? <details className="mt-1 text-xs"><summary className="cursor-pointer font-bold text-stone-700">Ver los {preview.suppliers.length.toLocaleString("es-AR")} proveedor{preview.suppliers.length === 1 ? "" : "es"}</summary>
+          <ul className="mt-1 max-h-48 space-y-0.5 overflow-auto rounded-lg bg-stone-50 p-2">{preview.suppliers.map((supplier) => <li key={supplier.supplierId ?? supplier.key}><span className={`mr-2 rounded-full px-2 py-0.5 text-[10px] font-black ${supplier.supplierId === null ? "bg-emerald-100 text-emerald-800" : "bg-stone-200 text-stone-700"}`}>{supplier.supplierId === null ? "NUEVO" : "EXISTENTE"}</span>{supplier.name}{supplier.code ? <span className="ml-1 font-mono text-stone-400">({supplier.code})</span> : null} <span className="text-stone-400">· {supplier.rows.toLocaleString("es-AR")} fila{supplier.rows === 1 ? "" : "s"}</span></li>)}</ul>
+        </details> : null}
+      </li>
+      <li>📦 No se importa stock: los productos empiezan sin movimientos.</li>
       {preview.batches.length > 1 ? <li>🗂️ El archivo es grande: se procesa en {preview.batches.length} lotes internos, pero se confirma de una sola vez.</li> : null}
     </ul>
 
@@ -123,19 +129,20 @@ export function ImportPreviewStep({
       <div className="max-h-[60vh] overflow-auto">
         <table className="w-full min-w-[860px] text-left text-sm">
           <thead className="sticky top-0 bg-stone-50 text-stone-500"><tr>
-            <th className="p-3">Producto</th><th className="p-3">SKU</th><th className="p-3">Barcode</th><th className="p-3">Precio</th><th className="p-3">Costo</th><th className="p-3">Stock</th><th className="p-3">Resultado</th>
+            <th className="p-3">Producto</th><th className="p-3">SKU</th><th className="p-3">Barcode</th><th className="p-3">Venta</th><th className="p-3">Precio</th><th className="p-3">Costo</th><th className="p-3">Proveedor</th><th className="p-3">Resultado</th>
           </tr></thead>
           <tbody>
             {shown.map((entry) => <tr className="border-t border-stone-100 align-top" key={entry.row.rowNumber}>
               <td className="p-3"><span className="font-bold">{entry.row.display.name || "—"}</span><span className="block text-[11px] text-stone-400">fila {entry.row.rowNumber}</span></td>
               <td className="p-3 font-mono text-xs">{entry.row.display.sku || "—"}</td>
               <td className="p-3 font-mono text-xs">{entry.row.display.barcode || "—"}</td>
+              <td className="p-3 text-xs font-bold">{entry.row.display.saleType === "WEIGHT" ? "Por kg" : entry.row.display.saleType === "UNIT" ? "Por unidad" : "—"}</td>
               <td className="whitespace-nowrap p-3"><PriceCell current={current} entry={entry} kind="price" /></td>
               <td className="whitespace-nowrap p-3"><PriceCell current={current} entry={entry} kind="cost" /></td>
-              <td className="p-3">{importStock ? (entry.row.display.stockUnits !== null ? entry.row.display.stockUnits.toLocaleString("es-AR") : entry.row.display.stockText !== "" ? <span className="text-red-700">{entry.row.display.stockText}</span> : "—") : "—"}</td>
+              <td className="p-3 text-xs">{entry.row.display.supplier !== "" ? entry.row.display.supplier : entry.row.display.supplierCode !== "" ? <span className="font-mono">{entry.row.display.supplierCode}</span> : <span className="text-stone-400">—</span>}</td>
               <td className="p-3"><ResultCell entry={entry} /></td>
             </tr>)}
-            {shown.length === 0 ? <tr><td className="p-6 text-center text-stone-500" colSpan={7}>No hay filas con ese filtro.</td></tr> : null}
+            {shown.length === 0 ? <tr><td className="p-6 text-center text-stone-500" colSpan={8}>No hay filas con ese filtro.</td></tr> : null}
           </tbody>
         </table>
       </div>

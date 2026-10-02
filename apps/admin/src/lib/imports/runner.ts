@@ -58,11 +58,26 @@ export interface ImportApplyResult {
   skippedErrors: number;
 }
 
+/**
+ * A supplier the previewed batch will create (`supplierId === null`) or reuse. `key` identifies a NEW supplier
+ * across batches (its normalized name), so the same new supplier in two batches is counted once.
+ */
+export interface PreviewSupplier {
+  key: string;
+  supplierId: string | null;
+  name: string;
+  code: string | null;
+  /** Rows of the file that point at it (all batches added up). */
+  rows: number;
+}
+
 export interface ImportGateway {
   createBatch(input: CreateImportBatchInput): Promise<{ batchId: string }>;
   stageRows(batchId: string, rows: ImportStageRow[]): Promise<void>;
   previewBatch(batchId: string): Promise<{ summary: ImportBatchTotals; sameFileAlreadyApplied: boolean }>;
   listRows(batchId: string): Promise<ImportServerRow[]>;
+  /** Suppliers the batch would create / reuse (read-only; nothing is written before the confirmation). */
+  listSuppliers(batchId: string): Promise<PreviewSupplier[]>;
   applyBatch(batchId: string, skipErrors: boolean): Promise<ImportApplyResult>;
   cancelBatch(batchId: string): Promise<void>;
 }
@@ -96,12 +111,17 @@ export interface ImportPreviewTotals {
   /** Rows that will try to load an opening stock, and the units they carry. */
   stockRows: number;
   stockUnits: number;
+  /** Distinct suppliers the apply will create / reuse (rows that are errors do not count). */
+  suppliersNew: number;
+  suppliersReused: number;
 }
 
 export interface ImportPreview {
   meta: ImportRunMeta;
   batches: { batchId: string; rowCount: number; totals: ImportBatchTotals }[];
   rows: PreviewedRow[];
+  /** Every supplier the file refers to, new or existing, merged across batches (the audit of "proveedores"). */
+  suppliers: PreviewSupplier[];
   totals: ImportPreviewTotals;
   sameFileAlreadyApplied: boolean;
 }
@@ -144,7 +164,7 @@ function toStageRow(row: MappedCatalogRow): ImportStageRow {
 
 /** Counts the preview classification of every row. */
 export function summarizePreviewRows(rows: readonly PreviewedRow[]): ImportPreviewTotals {
-  const totals: ImportPreviewTotals = { total: rows.length, create: 0, update: 0, ignore: 0, error: 0, linkedExisting: 0, stockRows: 0, stockUnits: 0 };
+  const totals: ImportPreviewTotals = { total: rows.length, create: 0, update: 0, ignore: 0, error: 0, linkedExisting: 0, stockRows: 0, stockUnits: 0, suppliersNew: 0, suppliersReused: 0 };
   for (const entry of rows) {
     if (entry.action === "CREATE") totals.create += 1;
     else if (entry.action === "UPDATE") totals.update += 1;
@@ -157,6 +177,17 @@ export function summarizePreviewRows(rows: readonly PreviewedRow[]): ImportPrevi
     }
   }
   return totals;
+}
+
+/** Joins the suppliers of every batch: an existing supplier by id, a new one by its key (counted once). */
+export function mergePreviewSuppliers(perBatch: readonly (readonly PreviewSupplier[])[]): PreviewSupplier[] {
+  const merged = new Map<string, PreviewSupplier>();
+  for (const entry of perBatch.flat()) {
+    const id = entry.supplierId !== null ? `id:${entry.supplierId}` : `new:${entry.key}`;
+    const current = merged.get(id);
+    merged.set(id, current ? { ...current, rows: current.rows + entry.rows } : { ...entry });
+  }
+  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name, "es"));
 }
 
 /**
@@ -173,6 +204,7 @@ export async function runPreview(
   const created: string[] = [];
   const batches: ImportPreview["batches"] = [];
   const verdicts = new Map<number, ImportServerRow>();
+  const supplierLists: PreviewSupplier[][] = [];
   let sameFileAlreadyApplied = false;
   try {
     const slices = chunkItems(rows, IMPORT_BATCH_ROWS);
@@ -192,6 +224,7 @@ export async function runPreview(
       const preview = await gateway.previewBatch(batchId);
       sameFileAlreadyApplied = sameFileAlreadyApplied || preview.sameFileAlreadyApplied;
       for (const verdict of await gateway.listRows(batchId)) verdicts.set(verdict.rowNumber, verdict);
+      supplierLists.push(await gateway.listSuppliers(batchId));
       batches.push({ batchId, rowCount: slice.length, totals: preview.summary });
     }
   } catch (error) {
@@ -209,7 +242,11 @@ export async function runPreview(
       internalId: verdict?.internalId ?? null
     };
   });
-  return { meta, batches, rows: previewed, totals: summarizePreviewRows(previewed), sameFileAlreadyApplied };
+  const suppliers = mergePreviewSuppliers(supplierLists);
+  const totals = summarizePreviewRows(previewed);
+  totals.suppliersNew = suppliers.filter((entry) => entry.supplierId === null).length;
+  totals.suppliersReused = suppliers.length - totals.suppliersNew;
+  return { meta, batches, rows: previewed, suppliers, totals, sameFileAlreadyApplied };
 }
 
 /** Abandons an unconfirmed preview (nothing was written; the batches just stop being READY). */

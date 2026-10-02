@@ -125,6 +125,14 @@ async function saveProductBranchesAndBarcodes(productId: string, formData: FormD
     : undefined;
 }
 
+/** Proveedor principal (opcional) de la ficha del producto: vacío = sin proveedor. Sólo llama al servidor si cambió. */
+async function savePrimarySupplier(productId: string, formData: FormData): Promise<void> {
+  if (!formData.has("supplier_id")) return;
+  const supplierId = optionalId(formData, "supplier_id");
+  if (supplierId === optionalId(formData, "current_supplier_id")) return;
+  await rpcOrThrow("set_product_primary_supplier", { p_product_id: productId, p_supplier_id: supplierId });
+}
+
 export async function manageProductAction(_: ProductManageState, formData: FormData): Promise<ProductManageState> {
   try {
     const name = text(formData, "name");
@@ -165,10 +173,12 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
     }
 
     const warning = await saveProductBranchesAndBarcodes(productId, formData);
+    await savePrimarySupplier(productId, formData);
 
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/products");
     revalidatePath("/admin/promotions");
+    revalidatePath("/admin/suppliers");
     return { successToken: crypto.randomUUID(), ...(warning ? { warning } : {}) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo guardar el producto" };
@@ -202,12 +212,50 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
     if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
     await saveProductBranchesAndBarcodes(productId, formData);
+    await savePrimarySupplier(productId, formData);
     revalidatePath("/admin/products");
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/promotions");
+    revalidatePath("/admin/suppliers");
     return { success: true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo crear el producto" };
+  }
+}
+
+// ---- Proveedores -----------------------------------------------------------------------------
+export interface SupplierFormState { error?: string; successToken?: string }
+
+/** Alta o edición. Sólo el nombre es obligatorio; el resto vacío = sin dato. Duplicados (nombre o código) los rechaza el servidor. */
+export async function saveSupplierFormAction(_: SupplierFormState, formData: FormData): Promise<SupplierFormState> {
+  try {
+    await rpcOrThrow("save_supplier", {
+      p_supplier_id: optionalId(formData, "supplier_id"),
+      p_name: text(formData, "name"),
+      p_code: text(formData, "code") || null,
+      p_tax_id: text(formData, "tax_id") || null,
+      p_phone: text(formData, "phone") || null,
+      p_email: text(formData, "email") || null,
+      p_notes: text(formData, "notes") || null,
+      p_active: formData.get("active") === "on"
+    });
+    revalidatePath("/admin/suppliers");
+    revalidatePath("/admin/products");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar el proveedor" };
+  }
+}
+
+/** Activar / desactivar (un proveedor no se borra: conserva sus productos y su historial). */
+export async function setSupplierActiveFormAction(_: SupplierFormState, formData: FormData): Promise<SupplierFormState> {
+  try {
+    await rpcOrThrow("set_supplier_active", { p_supplier_id: text(formData, "supplier_id"), p_active: formData.get("active") === "on" });
+    revalidatePath("/admin/suppliers");
+    revalidatePath("/admin/products");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo cambiar el estado del proveedor" };
   }
 }
 

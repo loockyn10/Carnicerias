@@ -35,7 +35,7 @@ export default async function ImportsPage() {
     <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 className="text-3xl font-black tracking-tight">Importación de productos</h1>
-        <p className="mt-2 text-stone-600">Importá productos, precios, costos y stock desde SimplyGest u otros archivos.</p>
+        <p className="mt-2 text-stone-600">Importá productos, precios, costos y proveedores desde SimplyGest u otros archivos. El stock no se importa.</p>
       </div>
       <Link className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-bold text-stone-700 hover:bg-stone-50" href="/admin/settings">← Volver a Configuración</Link>
     </div>

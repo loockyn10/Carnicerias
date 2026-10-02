@@ -133,7 +133,7 @@ Las tabs de categoría del POS **no se infieren desde los productos**: existe un
 Cada sucursal vende sólo los productos **habilitados** en ella (`branch_product_assortment`, D-049). Es independiente del stock y de la política de stock (mínimo/objetivo):
 
 - habilitado + stock > 0 → visible y vendible en el POS;
-- habilitado + stock <= 0 → visible como "Sin stock" (no se elimina del catálogo de la sucursal);
+- habilitado + stock <= 0 → visible como "Sin stock" (no se elimina del catálogo de la sucursal) **en Avenida y Janssen**; en el POS de **Central** la disponibilidad no depende del stock: habilitado = visible y vendible con stock positivo, 0 o negativo (D-058, ver "Stock en Central" abajo);
 - no habilitado → no aparece en el POS de esa sucursal, ni en su stock/reposición/alertas de Admin.
 
 Central = carnicería + almacén; Avenida y Janssen = sólo carnicerías: lo importado desde SimplyGest se habilita sólo en Central. Un producto se habilita/deshabilita desde Admin (Productos → Administrar → "Se vende en"); deshabilitar conserva el historial y el stock (ver D-049).
@@ -142,9 +142,21 @@ Central = carnicería + almacén; Avenida y Janssen = sólo carnicerías: lo imp
 
 Un escaneo resuelve **localmente** contra el catálogo de la sucursal (D-050): `UNIT` suma 1 unidad; `WEIGHT` abre el flujo de peso existente; desconocido/no habilitado = "Producto no encontrado".
 
-**Stock <= 0 y scanner (D-052):** en el POS de **Central**, un escaneo de un producto habilitado con stock registrado <= 0 **sí se agrega** (aviso no bloqueante "Stock no registrado"): el producto está físicamente delante del cajero, así que lo probable es una reposición no registrada. No se inventa stock ni se genera reposición; el ledger puede quedar en negativo hasta que se registre. La excepción es **sólo del escaneo**: la selección manual (tarjetas/búsqueda) sigue gris/"Sin stock"/deshabilitada, y en el resto de las sucursales un escaneo sin stock sigue sin agregarse.
+**Stock <= 0 y scanner (D-058, reemplaza la excepción de D-052):** en el POS de **Central** el escaneo de un producto habilitado se agrega sin importar su stock (positivo, 0 o negativo), igual que la selección manual y la búsqueda; en el resto de las sucursales un escaneo sin stock sigue sin agregarse. Un producto sin precio nunca se agrega a $0 (ver "Productos sin precio").
 
 **Alta rápida desde el scanner (D-052):** en Central, un barcode desconocido abre un modal mínimo (nombre, costo opcional, precio) y crea el producto en una sola operación atómica: categoría `Almacen`, `UNIT`, `SELLABLE`, activo, habilitado **sólo en Central**, precio global vigente, costo si se informó, stock 0; después lo agrega al ticket. Requiere conexión (no hay cola offline de altas).
+
+## Stock en Central (D-058)
+
+Central es almacén + carnicería y **no lleva stock confiable**. En su POS todo producto habilitado en su surtido se ve y se vende con stock positivo, 0 o negativo (sin "Sin stock", sin tarjeta gris, sin sección colapsada; búsqueda, escaneo y venta manual normales). Vender con stock 0 deja el ledger en -1 y es válido: no se inventa stock ni se genera reposición. La regla es **sólo del POS de Central** (la sucursal productiva configurada, la misma capacidad del alta rápida); Avenida y Janssen mantienen el bloqueo por falta de stock. Tampoco se importa el stock de SimplyGest: los productos importados empiezan sin movimientos.
+
+## Productos sin precio (D-057)
+
+Precio 0 = "sin precio definido" (SimplyGest: productos en desuso o que el cajero precia en el momento). Es válido en el catálogo y se ve en el POS de Central, pero **nunca se vende a $0**: al tocarlo o escanearlo el POS pide el precio (modal "Producto sin precio", precio > 0) y lo guarda como **precio vigente** del producto (historial append-only: se cierra la vigencia anterior, no se pisa), actualiza el catálogo local y agrega el producto. No hay precio temporal por venta. Sin conexión no se puede fijar el precio (aviso, sin venta a $0 ni precio pendiente). La caja sólo puede fijar el precio de un producto que hoy no tiene (0 o inexistente); un producto con precio se cambia desde Admin. Un 0 del archivo de importación nunca pisa un precio ya cargado.
+
+## Proveedores (D-056)
+
+`suppliers` + `product_suppliers`: sólo el nombre es obligatorio; duplicados evitados por nombre normalizado (sin mayúsculas/acentos/espacios) y por código; se desactivan, no se borran; un producto tiene a lo sumo un proveedor **principal** (el vínculo es N:M a futuro) y puede no tener ninguno. Al importar, el proveedor del archivo se reutiliza o se crea una sola vez y queda principal; vacío = sin proveedor. Sin cuentas corrientes, pagos ni órdenes de compra todavía.
 
 ## Stock
 
@@ -154,7 +166,7 @@ Evitar estados derivados paralelos que puedan divergir.
 
 ### Stock migrado (apertura)
 
-El stock inicial traído de otro sistema es un movimiento `OPENING_BALANCE` del ledger (positivo, una vez por sucursal+producto, `WEIGHT` en gramos / `UNIT` en unidades), nunca una columna de stock actual (D-047). No es una compra ni dispara avisos de reposición. Ver `IMPORTS.md`.
+El stock inicial traído de otro sistema es un movimiento `OPENING_BALANCE` del ledger (positivo, una vez por sucursal+producto, `WEIGHT` en gramos / `UNIT` en unidades), nunca una columna de stock actual (D-047). No es una compra ni dispara avisos de reposición. Ver `IMPORTS.md`. **El stock histórico de SimplyGest NO se importa** (no es confiable, D-058): la pantalla de importación no ofrece la columna y no crea `OPENING_BALANCE`.
 
 Operaciones relevantes deben quedar trazables.
 

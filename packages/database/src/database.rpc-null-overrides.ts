@@ -268,6 +268,48 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
+  // p_supplier_id null = create; every optional contact field is `default null` in SQL (only the
+  // name is mandatory), where explicit null and omitted are the same.
+  save_supplier: {
+    Args: {
+      p_active?: boolean
+      p_code?: string | null
+      p_email?: string | null
+      p_name: string
+      p_notes?: string | null
+      p_phone?: string | null
+      p_supplier_id: string | null
+      p_tax_id?: string | null
+    }
+    Returns: string
+  }
+  // p_supplier_id null = "this product has no primary supplier".
+  set_product_primary_supplier: {
+    Args: { p_product_id: string; p_supplier_id: string | null }
+    Returns: Json
+  }
+  // The optional contact columns of suppliers are nullable; a `returns table` column is typed from
+  // its declared SQL type only.
+  list_suppliers_page: {
+    Args: {
+      p_limit?: number
+      p_offset?: number
+      p_search?: string | null
+      p_status?: string
+    }
+    Returns: {
+      active: boolean
+      code: string | null
+      email: string | null
+      name: string
+      notes: string | null
+      phone: string | null
+      product_count: number
+      supplier_id: string
+      tax_id: string | null
+      total_count: number
+    }[]
+  }
 }
 
 // Every key overridden here must still exist as an RPC in the generated file. If a migration

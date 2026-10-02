@@ -22,7 +22,7 @@ export const adminNavGroups: AdminNavGroup[] = [
     { icon: "♙", label: "Empleados", href: "/admin/employees", match: ["/admin/employees", "/admin/timekeeping"] }
   ] },
   { label: "Sistema", links: [
-    { icon: "⚙", label: "Configuración", href: "/admin/settings", match: ["/admin/settings", "/admin/devices", "/admin/announcements", "/admin/imports", "/admin/audit"] }
+    { icon: "⚙", label: "Configuración", href: "/admin/settings", match: ["/admin/settings", "/admin/devices", "/admin/announcements", "/admin/suppliers", "/admin/imports", "/admin/audit"] }
   ] }
 ];
 

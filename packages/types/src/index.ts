@@ -174,9 +174,17 @@ export interface ImportProductPayload {
   /** Exactly one of these may be used to name the category; else batch.defaultCategoryId. */
   categoryExternalId?: string;
   categoryName?: string;
-  /** Global list price: per kg for WEIGHT, per unit for UNIT. Omit to leave the price untouched. */
+  /**
+   * Global list price: per kg for WEIGHT, per unit for UNIT. Omit to leave the price untouched.
+   * 0 is valid ("sin precio definido": the Central POS asks the cashier); it only ever creates the
+   * product's first price and never overwrites one that is already loaded.
+   */
   priceCents?: number;
   costCents?: number;
+  /** Primary supplier. Absent/empty = the product is imported without a supplier. */
+  supplierName?: string;
+  /** The supplier's code in the source system; identifies it across imports when present. */
+  supplierCode?: string;
   active?: boolean;
   inventoryRole?: ProductInventoryRole;
   /**

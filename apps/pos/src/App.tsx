@@ -17,7 +17,7 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, stockForAvailability, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
@@ -25,8 +25,10 @@ import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime,
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
+import { isPriceMissing, NO_PRICE_OFFLINE_MESSAGE, parseSetPriceResult, resolveProductRequest } from "./lib/product-price";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 import { QuickProductModal } from "./QuickProductModal";
+import { ProductPriceModal } from "./ProductPriceModal";
 import { MercadoPagoPanel } from "./MercadoPagoPanel";
 import { resolveStartupUser } from "./lib/startup-session";
 import { cancelMercadoPagoOrder, fetchMercadoPagoConfig, fetchMercadoPagoStatus } from "./lib/mercadopago";
@@ -376,12 +378,13 @@ export default function App() {
   // sincronizado, en cuyo caso no se deshabilita nada (ver lib/catalog.ts).
   const [branchStock, setBranchStock] = useState<BranchStock>(null);
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
-  // POS de Central (el servidor lo decide, ver lib/quick-product.ts): habilita el alta rápida desde un
-  // scan desconocido y deja escanear productos habilitados aunque su stock registrado sea <= 0.
+  // POS de Central (el servidor lo decide: sucursal productiva, ver lib/quick-product.ts): habilita el
+  // alta rápida desde un scan desconocido y hace que la disponibilidad NO dependa del stock (ver
+  // `stockGate` abajo y lib/catalog.ts `stockForAvailability`).
   const [centralPos, setCentralPos] = useState(false);
   const [quickCreateCode, setQuickCreateCode] = useState<string | null>(null);
-  // La excepción de stock es de escaneo físico: sólo vale para la línea abierta desde un scan (peso).
-  const [selectedViaScan, setSelectedViaScan] = useState(false);
+  // Producto sin precio (precio 0) tocado o escaneado: nunca se agrega a $0, se pide el precio (lib/product-price.ts).
+  const [pricePromptProduct, setPricePromptProduct] = useState<CatalogProduct | null>(null);
   // A Central with thousands of products must not render thousands of cards on a low-end POS: the grid
   // shows the first GRID_PAGE and grows on demand. Search and barcode scan always work on the WHOLE catalog.
   const [gridLimit, setGridLimit] = useState(GRID_PAGE);
@@ -1027,11 +1030,17 @@ export default function App() {
     );
   }, [catalog, categoryId, search]);
 
+  // Sobre qué stock se decide la disponibilidad: en Central NINGUNO (almacén sin stock confiable: todo
+  // producto habilitado se ve y se vende, aunque figure en 0 o negativo); en el resto de las sucursales,
+  // el stock real de la sucursal. Lo decide la capacidad del servidor (`centralPos`), no el nombre.
+  const stockGate = useMemo(() => stockForAvailability(branchStock, centralPos), [branchStock, centralPos]);
+
   // Con stock primero; sin stock después (visibles, nunca eliminados del catálogo). La búsqueda
   // siempre incluye los sin stock, así se distingue "no existe" de "existe pero sin stock".
+  // En Central `stockGate` es null: todo queda en "Disponibles", sin sección "Sin stock".
   const { available: availableProducts, outOfStock: outOfStockProducts } = useMemo(
-    () => partitionByStock(filteredProducts, branchStock),
-    [filteredProducts, branchStock]
+    () => partitionByStock(filteredProducts, stockGate),
+    [filteredProducts, stockGate]
   );
   const searching = search.trim() !== "";
   const showOutOfStock = searching || outOfStockOpen;
@@ -1101,15 +1110,28 @@ export default function App() {
     }));
   }, [cashDiscountBps, paymentMethod]);
 
-  function openWeight(product: CatalogProduct, line?: TicketLine, viaScan = false) {
+  // Producto sin precio: NUNCA se agrega a $0. Con conexión se abre el modal para fijar el precio; sin
+  // conexión el mismo modal sólo avisa (no hay precio pendiente local ni venta a $0). Toda vía que agrega
+  // una línea nueva (tocar la card, escanear, resultado del servidor) pasa por acá. Devuelve true si
+  // interceptó el producto.
+  function interceptMissingPrice(product: CatalogProduct): boolean {
+    const online = Boolean(user) && !user?.offline && navigator.onLine;
+    if (resolveProductRequest(product, online) === "ADD") return false;
+    setScanFeedback(null);
+    setError(null);
+    setPricePromptProduct(product);
+    return true;
+  }
+
+  function openWeight(product: CatalogProduct, line?: TicketLine) {
     // No confiar sólo en el estilo/disabled de la card: toda vía que agrega una línea nueva pasa por acá.
-    // Un escaneo físico en Central es la única excepción (el producto está delante del cajero).
-    if (!line && !viaScan && !hasStock(branchStock, product.productId)) {
+    // Editar una línea que ya está en el ticket (ya tiene precio) no se bloquea nunca.
+    if (!line && interceptMissingPrice(product)) return;
+    if (!line && !hasStock(stockGate, product.productId)) {
       setError(`${product.productName} no tiene stock en esta sucursal.`);
       return;
     }
     setSelectedProduct(product);
-    setSelectedViaScan(viaScan);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
     setQuantityInput(line?.quantityUnits ?? 1);
@@ -1132,7 +1154,9 @@ export default function App() {
       >
         <span className="block text-lg font-black">{product.productName}</span>
         <span className="pos-product-category mt-2 block text-sm text-stone-400">{product.categoryName}</span>
-        <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>
+        {isPriceMissing(product)
+          ? <span className="mt-3 block text-xl font-black text-amber-300">Sin precio</span>
+          : <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>}
         {outOfStock
           ? <span className="mt-1 block text-xs font-black uppercase tracking-wide text-stone-400">Sin stock</span>
           : discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
@@ -1159,7 +1183,14 @@ export default function App() {
    */
   function commitSelectedProductLine(explicitWeightGrams?: number) {
     if (!selectedProduct) return;
-    if (!editingLineId && !selectedViaScan && !hasStock(branchStock, selectedProduct.productId)) {
+    if (!editingLineId && isPriceMissing(selectedProduct)) {
+      // Defensa en profundidad: el precio pudo cambiar a 0 entre abrir el diálogo y confirmarlo.
+      const missing = selectedProduct;
+      setSelectedProduct(null);
+      interceptMissingPrice(missing);
+      return;
+    }
+    if (!editingLineId && !hasStock(stockGate, selectedProduct.productId)) {
       setError(`${selectedProduct.productName} ya no tiene stock en esta sucursal.`);
       setSelectedProduct(null);
       return;
@@ -1218,7 +1249,8 @@ export default function App() {
   ticketRef.current = ticket;
   const barcodeIndex = useMemo(() => buildBarcodeIndex(catalog), [catalog]);
 
-  function addScannedUnit(product: CatalogProduct, note?: { stockUnregistered?: boolean; created?: boolean }) {
+  function addScannedUnit(product: CatalogProduct, note?: { created?: boolean; priceSet?: boolean }) {
+    if (interceptMissingPrice(product)) return;
     // Read/write through a ref so two scans landing before React re-renders both count.
     const current = ticketRef.current;
     const existing = current.find((line) => line.productId === product.productId && line.quantityUnits != null);
@@ -1228,13 +1260,12 @@ export default function App() {
     ticketRef.current = next;
     setTicket(next);
     setError(null);
-    // Aviso no bloqueante: el producto se agrega igual (el ledger puede quedar negativo hasta registrar la reposición).
-    if (note?.stockUnregistered) setScanFeedback({ tone: "warn", text: `Stock no registrado: ${product.productName} figura sin stock (×${String(quantity)})` });
-    else setScanFeedback({ tone: "ok", text: `${note?.created ? "Producto creado: " : ""}${product.productName} ×${String(quantity)}` });
+    setScanFeedback({ tone: "ok", text: `${note?.created ? "Producto creado: " : note?.priceSet ? `Precio guardado (${formatCurrency(product.pricePerKgCents)}): ` : ""}${product.productName} ×${String(quantity)}` });
   }
 
   function handleScan(rawCode: string) {
-    const outcome = resolveScan(barcodeIndex, branchStock, rawCode, { allowWithoutStock: centralPos });
+    // En Central `stockGate` es null: un producto habilitado se escanea y se vende aunque su stock figure en 0 o negativo.
+    const outcome = resolveScan(barcodeIndex, stockGate, rawCode);
     if (!outcome) return;
     if (outcome.kind === "NOT_FOUND") {
       // Sólo el POS de Central ofrece el alta; en el resto un código desconocido sigue siendo "no encontrado".
@@ -1244,11 +1275,11 @@ export default function App() {
     }
     if (outcome.kind === "NO_STOCK") { setScanFeedback({ tone: "warn", text: `${outcome.product.productName}: Sin stock` }); return; }
     if (outcome.kind === "OPEN_WEIGHT") {
-      setScanFeedback(outcome.stockUnregistered ? { tone: "warn", text: `Stock no registrado: ${outcome.product.productName} figura sin stock` } : null);
-      openWeight(outcome.product, undefined, true);
+      setScanFeedback(null);
+      openWeight(outcome.product);
       return;
     }
-    addScannedUnit(outcome.product, { stockUnregistered: outcome.stockUnregistered });
+    addScannedUnit(outcome.product);
   }
 
   function toCatalogProduct(row: QuickCatalogRow): CatalogProduct {
@@ -1301,7 +1332,7 @@ export default function App() {
     if (!(await ensureProductInLocalCatalog(product.productId))) return false;
     setCatalog((current) => (current.some((candidate) => candidate.productId === product.productId) ? current : [...current, product]));
     if (product.unitType === "UNIT") addScannedUnit(product, { created });
-    else openWeight(product, undefined, true);
+    else openWeight(product);
     return true;
   }
 
@@ -1344,10 +1375,51 @@ export default function App() {
     }
   }
 
+  // El precio recién fijado tiene que estar en el SQLite de esta caja antes de vender (confirm_local_sale
+  // sólo vende al precio del catálogo local): se sincroniza (pull incremental) y se verifica.
+  async function ensurePriceInLocalCatalog(productId: string, priceCents: bigint): Promise<boolean> {
+    if (!localRuntime?.branchId) return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await syncRunnerRef.current(); // si había un sync en curso (anterior al cambio) espera y reintenta
+      const rows = await localDatabase.catalog(localRuntime.branchId);
+      if (rows.some((row) => row.productId === productId && row.pricePerKgCents === String(priceCents))) return true;
+    }
+    return false;
+  }
+
+  /** Resolves to an error message for the modal, or null when the price was saved and the product added. */
+  async function setProductPrice(product: CatalogProduct, priceCents: bigint): Promise<string | null> {
+    if (!desktop) return "El precio sólo se puede fijar desde la caja de escritorio.";
+    if (!user || user.offline || !navigator.onLine) return NO_PRICE_OFFLINE_MESSAGE;
+    if (!localRuntime?.deviceId || !operator?.operatorToken) return "Seleccioná un empleado autorizado antes de fijar precios.";
+    const { data, error: priceError } = await supabase.rpc("set_pos_product_price", {
+      p_device_id: localRuntime.deviceId,
+      p_operator_profile_id: operator.profileId,
+      p_operator_token: operator.operatorToken,
+      p_product_id: product.productId,
+      p_price_cents: Number(priceCents)
+    });
+    if (priceError) {
+      void syncRunnerRef.current(); // p. ej. otra caja ya le puso precio: que el catálogo local se ponga al día
+      return resolveErrorMessage(priceError, "No se pudo guardar el precio");
+    }
+    const result = parseSetPriceResult(data);
+    if (!(await ensurePriceInLocalCatalog(product.productId, result.priceCents))) {
+      return "El precio se guardó, pero esta caja todavía no pudo sincronizarlo. Revisá la conexión y tocá «Guardar precio y agregar» otra vez (no se duplica).";
+    }
+    const priced: CatalogProduct = { ...product, pricePerKgCents: result.priceCents };
+    setCatalog((current) => current.map((candidate) => (candidate.productId === priced.productId ? priced : candidate)));
+    setPricePromptProduct(null);
+    // Un producto por unidad se agrega con 1 unidad (como un escaneo); uno por peso abre el diálogo de peso con el precio nuevo.
+    if (priced.unitType === "UNIT") addScannedUnit(priced, { priceSet: true });
+    else openWeight(priced);
+    return null;
+  }
+
   const scanHandlerRef = useRef(handleScan);
   scanHandlerRef.current = handleScan;
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
-    && !selectedProduct && quickCreateCode === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && !loading;
+    && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && !loading;
 
   useEffect(() => {
     if (!scannerEnabled) return;
@@ -1931,7 +2003,7 @@ export default function App() {
             }}
           />
           <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
-            {branchStock !== null && availableProducts.length > 0 ? <h3 className="col-span-full text-xs font-black uppercase tracking-widest text-stone-400">Disponibles</h3> : null}
+            {stockGate !== null && availableProducts.length > 0 ? <h3 className="col-span-full text-xs font-black uppercase tracking-widest text-stone-400">Disponibles</h3> : null}
             {visibleAvailable.map((product) => renderProductCard(product, false))}
             {outOfStockProducts.length > 0 ? (
               searching ? (
@@ -2223,6 +2295,15 @@ export default function App() {
           onClose={closeMercadoPagoPanel}
           onVerification={mirrorMercadoPagoVerification}
           onSettled={handleMercadoPagoSettled}
+        />
+      ) : null}
+
+      {pricePromptProduct !== null ? (
+        <ProductPriceModal
+          productName={pricePromptProduct.productName}
+          sessionOffline={user.offline}
+          onCancel={() => setPricePromptProduct(null)}
+          onSubmit={(priceCents) => setProductPrice(pricePromptProduct, priceCents)}
         />
       ) : null}
 

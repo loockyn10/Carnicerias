@@ -2,6 +2,18 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Desplegar proveedores + importación real SimplyGest + Central sin stock (acción del usuario)
+
+Implementado 2026-10-02 (ver `CURRENT_STATE.md` "Proveedores + importación real…", D-056/D-057/D-058). **No se importó ningún dato real.** Orden obligatorio:
+
+1. `supabase db push` (aplica `202610020053`–`055`; si Mercado Pago `051`/`052` todavía no estaban, van antes, en orden). Después `pnpm exec supabase gen types typescript --linked` y comparar con la edición manual de `database.types.ts` (+ `database.rpc-null-overrides.ts`: `save_supplier`, `set_product_primary_supplier`, `list_suppliers_page`).
+2. `pnpm build:pos:desktop` (Linux: `pnpm build:pos:linux:i386`) e **instalar el POS nuevo en Central ANTES de importar**: hay Rust/SQLite nuevos (`015`, `PRICE_REQUIRED`) y un POS viejo no puede guardar un producto de precio 0 (rompe el pull del catálogo). Avenida/Janssen no reciben productos importados, pero conviene actualizarlos igual (mismo instalador).
+3. `git push` (Vercel despliega el Admin con Proveedores y el importador nuevo).
+4. `pnpm db:reset && pnpm db:test` donde haya Docker: corre por primera vez contra Supabase real `suppliers.test.sql` (61), `import_suppliers_and_zero_price.test.sql` (56) y `pos_set_product_price.test.sql` (40).
+5. Ensayar en un proyecto descartable con el CSV final (`codigo, barcode, nombre, categoria, tipo_venta, precio_venta, costo, proveedor[, proveedor_codigo]`): preview (proveedores nuevos/reutilizados, errores) → confirmar → **reimportar el mismo archivo (debe dar 0 nuevos, 0 proveedores nuevos, sin precios nuevos)**.
+6. Smoke físico en Central (escáner USB): producto con stock 0 → se ve, se escanea y se vende (stock queda en -1); producto de precio 0 → tocar y escanear abren "Producto sin precio", $1800 → se agrega y el próximo escaneo ya vale $1800; sin Internet → aviso, no se vende a $0 y un producto con precio vende offline normal; Avenida/Janssen: un producto sin stock sigue gris y bloqueado.
+7. Confirmar las decisiones del sprint no pedidas explícitamente (lista en `CURRENT_STATE.md`): la caja sólo fija precio de un producto que no tiene precio, y sólo en Central.
+
 ## P0 — Mercado Pago en Avenida: aplicar el ciclo de vida de la venta (acción del usuario)
 
 Producción ya cobra y detecta pagos reales por polling (2026-10-02). Implementado en el repo, sin aplicar (D-055, `docs/MERCADOPAGO.md`): `supabase db push` (`202610020051`, `202610020052`), redeploy de `mp-create-order`, `mp-order-status`, `mp-cancel-order`, instalar el POS nuevo y repetir la prueba (pagado / cancelado / vencido; Admin muestra el estado real; Avenida sin "Transferencia").
@@ -59,7 +71,7 @@ Cada sprint requiere decisión explícita antes de tocar pricing, orden de descu
 1. ~~**Almacén operable en Admin (`UNIT`)**~~ — hecho (ronda 2): stock/ajustes/mermas/transferencias `UNIT`, barcodes en el modal de producto, surtido por sucursal, catálogo paginado. Queda: selector con búsqueda en Desposte y Promociones (hoy `<select>` completo) y regla de alertas de almacén sin stock.
 2. ~~**Importador real**~~ — pantalla hecha (2026-10-01, ver el P0 de arriba). Queda: ensayo con la exportación real en un proyecto descartable y luego producción; descarga de la lista de errores (hoy se ven en la tabla de la vista previa); varios códigos de barras por fila.
 3. ~~**POS: escaneo de código de barras**~~ — hecho (ronda 2, D-050); falta el smoke físico con escáner real (P0 de arriba).
-4. **Proveedores y compras**: `suppliers` (con importación vía `external_entity_links`, ampliando su `check`), compra/recepción → movimientos `PURCHASE` + costo vigente (`product_costs`), reemplaza `stock_operations.supplier` (texto libre) sin perder el historial, cuentas a pagar si se confirma el requisito.
+4. **Proveedores y compras**: ~~`suppliers` con importación vía `external_entity_links`~~ — hecho (2026-10-02, D-056: entidad, vínculo producto-proveedor, ABM en Admin, importador). Queda: compra/recepción → movimientos `PURCHASE` + costo vigente (`product_costs`), reemplazar `stock_operations.supplier` (texto libre) por `supplier_id` sin perder el historial, vínculos secundarios/`supplier_sku` en la UI, cuentas a pagar si se confirma el requisito.
 5. **Clientes mayoristas y precios especiales**: `customers`, lista de precios y/o precio por cliente con vigencia append-only (mismo patrón que `product_prices`, precedencia definida), selección de cliente en el POS (con impacto offline: sincronizar clientes/listas a SQLite), cuenta corriente/cobranzas. **Requiere decisión explícita de dónde entra el precio de cliente en el orden de ajustes** (hoy: precio de lista → recargo tarjeta → promoción, D-044) y cómo interactúa con promociones.
 6. **Corte (cutover) y cierre de SimplyGest**: conteo físico como `OPENING_BALANCE`, período en paralelo con conciliación (ventas/stock/caja), definición de qué historia se migra (propuesta: ventas históricas no se importan; SimplyGest queda como archivo de sólo lectura), y evaluación de facturación/comprobantes fiscales si hoy los emite SimplyGest (no cubierta por este repo).
 

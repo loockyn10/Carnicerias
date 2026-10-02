@@ -586,7 +586,7 @@ Alcance: el POS todavía **no** recibe ni usa barcodes (siguiente sprint: `barco
 
 Qué productos vende cada sucursal es `branch_product_assortment(branch_id, product_id)` (presencia = habilitado). **No** se reutilizó `branch_product_stock_settings`: esa tabla es una política de reposición (mínimo/objetivo) cuyas filas sólo existen si alguien configuró un umbral y cuya ausencia significa "sin política", no "no se vende"; usarla (o usar "tiene stock") como surtido haría desaparecer un producto del POS al agotarse y habilitaría productos por configurar un mínimo. Reglas:
 
-- habilitado + stock > 0 → visible y vendible; habilitado + stock <= 0 → visible como "Sin stock" (la fila sigue existiendo); no habilitado → no llega al POS de esa sucursal (`pull_pos_state`/`get_pos_catalog` filtran; lo que deja de estar habilitado viaja en `removedProductIds`; las tabs de categoría sólo listan categorías con algún producto habilitado).
+- habilitado + stock > 0 → visible y vendible; habilitado + stock <= 0 → visible como "Sin stock" (la fila sigue existiendo) **salvo en el POS de Central, donde la disponibilidad no depende del stock (D-058)**; no habilitado → no llega al POS de esa sucursal (`pull_pos_state`/`get_pos_catalog` filtran; lo que deja de estar habilitado viaja en `removedProductIds`; las tabs de categoría sólo listan categorías con algún producto habilitado).
 - Migración de datos: todo producto existente queda habilitado en toda sucursal existente (las carnicerías conservan exactamente su catálogo).
 - Un producto **nuevo** no se habilita solo: Admin lo pide al crearlo (por defecto todas las sucursales marcadas) y el importador lo habilita sólo en la sucursal destino (D-046). Una sucursal **nueva** empieza sin surtido; al crearla se puede copiar el de otra (`copy_branch_assortment`).
 - Deshabilitar borra la fila (configuración, no historia: ventas, stock y precios conservan sus snapshots) y queda auditado; si el producto aún tiene stock ahí, la RPC lo informa y el stock se conserva en el ledger.
@@ -605,7 +605,7 @@ Los barcodes viajan en el catálogo (`pull_pos_state` → `barcodes` por ítem �
 
 - código de un producto del catálogo de la sucursal, `UNIT`, con stock → suma **1 unidad** (un segundo escaneo del mismo producto incrementa su misma línea, con el mismo pricing/pack/recargo que la carga manual);
 - `WEIGHT` → abre el flujo de peso/balanza existente; nunca se vende por unidad por accidente;
-- habilitado pero sin stock → "<producto>: Sin stock", no se agrega (**excepción en Central, D-052:** se agrega con aviso "Stock no registrado");
+- habilitado pero sin stock → "<producto>: Sin stock", no se agrega (en **Central nunca ocurre: D-058** reemplazó la excepción de D-052 por una regla general);
 - código desconocido **o** de un producto no habilitado en la sucursal → "Producto no encontrado", no se agrega (el POS de una sucursal sólo conoce su propio catálogo, así que ambos casos son indistinguibles por diseño y no se filtran códigos de otras sucursales).
 
 **Motivo:** el mostrador no puede esperar red por cada botella, y el surtido por sucursal ya define qué existe en cada POS.
@@ -634,7 +634,7 @@ En el POS de Central (almacén), un barcode desconocido abre un modal con nombre
 - **Duplicados:** el POS sólo llama al servidor con un barcode desconocido localmente. Antes de abrir el modal, en línea, el POS pregunta al servidor (`resolve_pos_scan_barcode`) si el código ya existe en la organización; el servidor serializa por organización y busca el barcode antes de crear: si ya existe no crea nada. Si era un producto **activo, con precio y categoría activa que todavía no estaba en el surtido de Central, se habilita sólo en Central** (`branch_product_assortment`, auditado con el operador) y se devuelve para sumarlo al ticket sin modal (`EXISTS_ENABLED`; `EXISTS_SELLABLE` si ya se vendía ahí); un producto inactivo o sin precio **no se reactiva ni se habilita** (`EXISTS_UNSELLABLE`, sólo se informa). Esto es una excepción acotada a D-049, válida únicamente para el flujo de scanner de Central. La restricción única `(organization_id, barcode)` sigue siendo la última garantía. Repetir la llamada es idempotente.
 - **Sin cola offline:** sin conexión el modal abre pero no permite crear. "Es Central" se recuerda localmente (`localStorage`, por sucursal, refresco cada ≤ 6 h vía `get_pos_device_capabilities`) para que el modal y la excepción funcionen offline y tras reiniciar.
 - **Tras crear**, el POS hace un pull incremental y verifica que el producto esté en su SQLite antes de agregarlo (`confirm_local_sale` sólo vende productos del catálogo local).
-- **Scan vs click:** un escaneo de producto habilitado con stock <= 0 se agrega en Central con aviso "Stock no registrado" (ver DOMAIN_RULES); el click/búsqueda manual no cambia. Es una excepción de UX de escaneo, no un cambio del ledger ni de las reglas de stock.
+- **Scan vs click (superado por D-058):** originalmente un escaneo con stock <= 0 se agregaba en Central con aviso "Stock no registrado" y el click seguía bloqueado. D-058 lo generaliza: en Central ni el escaneo ni el click ni la búsqueda dependen del stock, así que el aviso y la excepción de escaneo se eliminaron.
 
 **Motivo:** Fran no debe ir al Admin por cada producto nuevo del almacén ni escanear dos veces, pero la caja no puede obtener permisos de catálogo ni un alta puede dejar productos a medias o duplicados.
 
@@ -650,7 +650,7 @@ La pantalla `/admin/imports` (CSV/Excel → motor de D-046) agrega, sin cambiar 
 - **Todas las filas del archivo se stagean**, también las que el cliente ya sabe inválidas (`payload.invalidReason` → `ERROR INVALID_ROW`, id sintético `INVALID:<fila>`): la base conserva el archivo completo y la vista previa sale de una única fuente. El cliente valida sobre **todo** el archivo (repetidos de código/barcode/nombre, números, longitudes) porque el motor sólo ve ≤1000 filas por lote.
 - **Categorías nuevas dentro del preview:** `createMissingCategories`; el preview las clasifica `CREATE` y se crean al aplicar (una sola vez por nombre normalizado). Antes habría que crearlas antes de previsualizar, o sea, escribir antes de confirmar.
 - **Una importación lógica = varios lotes** con el mismo `runId`, aplicados en orden; cada lote es atómico, la corrida no (no hay transacción de varios lotes con el tope por `statement_timeout`). Reintentar el mismo archivo continúa sin duplicar.
-- **Destino siempre Central, decidido en el servidor** (sucursal productiva, D-033/D-052); stock sólo `OPENING_BALANCE` en Central después de los productos, nunca una columna de stock (D-047).
+- **Destino siempre Central, decidido en el servidor** (sucursal productiva, D-033/D-052); el stock que antes podía cargarse como `OPENING_BALANCE` en Central **ya no se ofrece desde la pantalla (D-058)**, y nunca una columna de stock (D-047).
 - **Adopción de productos existentes** (`linkExistingBy` = barcode y SKU por defecto, nunca nombre) sólo si es inequívoca, requiere revisión explícita en la pantalla y no cambia la forma de venta (`UNIT_TYPE_MISMATCH`): la carnicería por kg no se convierte en `UNIT` por un SKU coincidente.
 - Un **nombre repetido** en el archivo con otro código es error (gana la primera fila): el motor no lo impide dentro de un lote pero sí entre lotes, y el resultado no debe depender de dónde cae cada fila. **Stock negativo/fraccionado** invalida la fila entera mientras "Importar stock actual" esté marcado.
 
@@ -682,3 +682,51 @@ La pantalla `/admin/imports` (CSV/Excel → motor de D-046) agrega, sin cambiar 
 - **Datos existentes:** la migración lleva las ventas Mercado Pago anteriores no confirmadas a `PENDING_PAYMENT` y las reconcilia (las canceladas/vencidas se anulan y su stock vuelve); las `CONFIRMED` no se tocan.
 
 **Motivo:** el objetivo de la integración es saber si el dinero llegó. Una venta "Mercado Pago" cancelada o vencida no puede figurar como cobrada ni como "Transferencia", y el empleado no debe poder declarar una transferencia que nunca ingresó.
+
+---
+
+## D-056 — Proveedores: entidad propia y vínculo N:M con productos; sólo el nombre es obligatorio
+
+**Status:** Active
+
+Un proveedor deja de ser un texto libre (`stock_operations.supplier`, que se conserva sin tocar) y pasa a ser `suppliers` (`organization_id`, `name`, `code`, `tax_id`, `phone`, `email`, `notes`, `active`) con `product_suppliers (product_id, supplier_id, is_primary, supplier_sku)`. Reglas:
+
+- **Sólo `name` es indispensable** (SimplyGest puede no traer CUIT/teléfono). Un producto sin proveedor es válido.
+- **Sin duplicados por normalización, no por `lower(name)`:** índice único `(organization_id, app_private.import_normalize_text(name))` — el mismo normalizador que ya usan productos y el importador (sin mayúsculas, acentos ni espacios repetidos) — más único `(organization_id, upper(code))` si hay código. Las RPC devuelven un error legible y la restricción es la última garantía (también ante dos importaciones concurrentes).
+- **RLS por organización y permiso** `suppliers.read/write` (sólo admin: un proveedor lleva datos fiscales/contacto). Nadie escribe las tablas directo: `save_supplier`, `set_supplier_active`, `set_product_primary_supplier`, `list_suppliers_page` (SECURITY DEFINER, auditadas).
+- **Un solo principal por producto** (índice único parcial). Cambiar de principal **degrada** al anterior a vínculo secundario (no pierde su código de proveedor); "sin proveedor" también sólo degrada: nunca se borra un vínculo. Por eso el contador de Admin es "productos como principal". Esta etapa la UI sólo administra el principal.
+- **Se desactivan, no se borran** (D-005): un proveedor inactivo conserva sus productos y deja de ofrecerse al asignarlo.
+- **Importador:** `payload.supplierName/supplierCode`. Se reutiliza por (vínculo externo `external_entity_links` tipo `supplier` → mismo código → mismo nombre normalizado) o se crea una sola vez; queda principal del producto. Proveedor vacío = producto sin proveedor y **no** le quita el que ya tuviera. Reimportar el mismo archivo no toca nada (la fila es `UNCHANGED`).
+- **Fuera de alcance:** cuentas corrientes, pagos, órdenes de compra, balances, facturas de proveedor, recepción/compras (siguen en TASKS).
+
+**Motivo:** SimplyGest asocia un proveedor a cada artículo y migrar sin esa información sería perderla; un modelo estructurado permite luego compras, múltiples proveedores y reportes sin migrar texto libre.
+
+---
+
+## D-057 — Producto con precio 0: válido, visible en Central, nunca se vende a $0; el cajero lo fija desde la caja
+
+**Status:** Active
+
+SimplyGest tiene productos válidos con precio 0 (ya no se usan, o "Fran les pone el precio en el momento"). Reglas:
+
+- **0 es un precio válido en la base** (`product_prices.price_cents >= 0`, antes `> 0`), sólo para representar "sin precio definido"; un precio negativo sigue imposible. `set_product_price` (Admin) sigue exigiendo > 0: Admin nunca fija un cero, sólo el importador. El importador acepta `priceCents >= 0`, **sólo crea la primera vigencia** de un 0 y nunca pisa un precio ya cargado (ni el que el cajero guardó): un 0 del archivo no es una baja de precio. Productos sin precio ni stock no se excluyen.
+- **El POS lo muestra normalmente** (tarjeta "Sin precio") pero **nunca lo agrega al ticket a $0**: tocar la tarjeta, escanear, buscar o recibirlo del servidor abren el mismo modal "Producto sin precio" (`resolveProductRequest`, único punto de decisión). SQLite relaja `catalog_prices` a `>= 0` (migración `015`) y `insert_sale` rechaza una línea a $0 (`PRICE_REQUIRED`) aunque la UI fallara; `local_sale_items` conserva `> 0`.
+- **El precio ingresado se guarda** (precio vigente, no temporal de esa venta): `set_pos_product_price(device, operador, token, producto, precio)` cierra la vigencia anterior (`valid_to`) e inserta la nueva (historial append-only), la cola de cambios del POS la entrega por el pull y la caja espera a tenerla en SQLite antes de vender. Idempotente (mismo precio = `UNCHANGED`).
+- **Autorización estrecha, sin elevar a la caja:** dispositivo activo + token de operador vigente (PIN) + permiso `prices.pos_set_missing` **del operador** (admin y employee) + dispositivo en la sucursal productiva (Central, fail-closed) + producto activo y habilitado en esa sucursal. Además **sólo fija el precio de un producto que hoy no tiene precio** (vigente 0 o inexistente): cambiar el precio de uno que ya vale algo sigue siendo decisión de Admin (D-037).
+- **Offline:** el modal sólo avisa "Este producto no tiene precio. Necesitás conexión para establecerlo."; no hay precio pendiente local ni venta a $0. Un producto con precio vende offline igual que siempre.
+- Un producto `UNIT` recién fijado se agrega con 1 unidad (como un escaneo); uno `WEIGHT` abre el diálogo de peso con el precio nuevo.
+
+**Motivo:** el dueño no puede cargar 2.700 precios antes de migrar, pero tampoco puede permitir ventas a $0 por un escaneo distraído; el cajero resuelve el precio una sola vez, queda auditado y el producto ya vale lo cargado en el siguiente escaneo.
+
+---
+
+## D-058 — Central no depende del stock; el stock histórico de SimplyGest no se importa
+
+**Status:** Active (enmienda D-049, D-050, D-052 y D-053)
+
+- **POS de Central (almacén + carnicería):** todo producto habilitado en `branch_product_assortment` es visible y vendible, con stock positivo, 0 o negativo: sin sección "Sin stock", sin tarjeta deshabilitada, con búsqueda, escaneo y venta manual normales. Vender con stock 0 puede dejar el ledger en -1 y es válido. Implementación: `stockForAvailability(stock, centralPos)` (`apps/pos/src/lib/catalog.ts`) devuelve `null` ("stock desconocido, no bloquear nada", semántica ya existente) para Central; el resto de la UI no cambia.
+- **"Es Central"** se decide con la misma capacidad que el alta rápida (D-052): `get_pos_device_capabilities.quickProductCreate` ⇔ el dispositivo está en `organizations.production_branch_id`; se recuerda localmente (≤ 6 h). No hay otra definición ni nombre hardcodeado. Sin capacidad conocida (primer arranque sin sync) la caja se comporta como el resto de las sucursales hasta que se refresca.
+- **Avenida y Janssen no cambian:** stock > 0 = disponible; 0, negativo o sin movimientos = gris, colapsado en "Sin stock" y no vendible (manual ni escaneo). El ledger, `get_pos_branch_stock`, reposición y alertas no cambian.
+- **No se importa stock de SimplyGest** (no es confiable: muchos productos figuran en 0 aunque existan). La pantalla de importación ya no ofrece ni sugiere la columna de stock (aunque el archivo la traiga) y no se escribe ningún `OPENING_BALANCE`; los productos empiezan sin movimientos. El motor de apertura de stock sigue en la base para un futuro conteo físico (D-047).
+
+**Motivo:** Fran no lleva stock confiable en Central; un catálogo de miles de productos "sin stock" gris sería inutilizable y bloquearía ventas reales.

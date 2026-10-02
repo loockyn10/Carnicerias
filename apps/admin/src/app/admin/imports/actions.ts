@@ -13,7 +13,8 @@ import {
   type ImportBatchTotals,
   type ImportRowAction,
   type ImportServerRow,
-  type ImportStageRow
+  type ImportStageRow,
+  type PreviewSupplier
 } from "../../../lib/imports/runner";
 import { createClient } from "../../../lib/supabase/server";
 
@@ -155,6 +156,33 @@ export async function listImportRowsAction(batchId: string): Promise<ImportActio
         message: row.message,
         internalId: row.internal_id
       }))
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Suppliers a previewed batch would create (supplierId null) or reuse. Read-only. */
+export async function listImportSuppliersAction(batchId: string): Promise<ImportActionResult<PreviewSupplier[]>> {
+  try {
+    await requireAdminContext();
+    requireUuid(batchId, "Lote");
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("list_import_batch_suppliers", { p_batch_id: batchId });
+    if (error) throw new Error(error.message);
+    const entries = Array.isArray(data) ? data : [];
+    return {
+      ok: true,
+      data: entries.map((raw) => {
+        const entry = asRecord(raw);
+        return {
+          key: typeof entry.key === "string" ? entry.key : "",
+          supplierId: typeof entry.supplierId === "string" ? entry.supplierId : null,
+          name: typeof entry.name === "string" ? entry.name : "",
+          code: typeof entry.code === "string" ? entry.code : null,
+          rows: num(entry.rows)
+        };
+      })
     };
   } catch (error) {
     return failure(error);

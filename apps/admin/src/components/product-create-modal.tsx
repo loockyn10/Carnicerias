@@ -3,10 +3,11 @@
 import { useActionState, useEffect, useState } from "react";
 import { createProductModalAction, type ProductModalState } from "../app/admin/actions";
 import { ProductPricingFields } from "./product-pricing-fields";
+import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories, branches }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[] }) {
+export function ProductCreateModal({ categories, branches, suppliers }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[] }) {
   const [open, setOpen] = useState(false);
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
@@ -43,6 +44,7 @@ export function ProductCreateModal({ categories, branches }: { categories: { id:
           </div>
         </div>
         <label className="grid gap-1 text-sm font-medium">Códigos de barras<textarea className={input} name="barcodes" placeholder="Uno por línea (opcional)" rows={2} /></label>
+        <SupplierSelect suppliers={suppliers} />
         <label className="grid gap-1 text-sm font-medium">Unidad<select className={input} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}><option value="WEIGHT">Peso</option><option value="UNIT">Unidad</option></select></label>
         <div className="rounded-lg bg-stone-50 p-3">
           <p className="text-sm font-bold">Se usa como</p>

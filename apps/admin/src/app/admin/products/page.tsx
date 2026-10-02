@@ -9,6 +9,7 @@ import { StatusBadge } from "../../../components/admin-ui";
 import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
+import { fetchAllRows } from "../../../lib/fetch-all";
 import { createPerfLogger } from "../../../lib/perf";
 import { promotionLabel, type PromotionLabelRow } from "../../../lib/promotion-label";
 import { saveCategoryAction } from "../actions";
@@ -56,16 +57,19 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const pageIds = pageRows.map((row) => row.product_id);
   const queryIds = pageIds.length ? pageIds : ["00000000-0000-0000-0000-000000000000"];
   const nowIso = new Date().toISOString();
-  const [categoryAssignmentsResult, unitTypeHistoryResult, pricesResult, discountsResult, costsResult] = await Promise.all([
+  const [categoryAssignmentsResult, unitTypeHistoryResult, pricesResult, discountsResult, costsResult, suppliersResult, primarySuppliersResult] = await Promise.all([
     perf.measure("categoryAssignments", supabase.from("product_category_assignments").select("product_id, category_id").eq("organization_id", context.organizationId).in("product_id", queryIds)),
     perf.measure("unitTypeLocks", supabase.rpc("get_products_unit_type_locks", { p_product_ids: queryIds })),
     perf.measure("prices", supabase.from("product_prices").select("id, product_id, branch_id, price_cents, valid_from, valid_to").eq("organization_id", context.organizationId).in("product_id", queryIds).or(`valid_to.is.null,valid_to.gt.${nowIso}`).order("valid_from", { ascending: false })),
     perf.measure("discounts", supabase.from("product_weight_discounts").select("id, product_id, branch_id, promotion_mode, minimum_grams, discount_type, discount_value, pack_quantity_grams, pack_quantity_units, pack_price_cents, active, valid_from, valid_until").eq("organization_id", context.organizationId).eq("active", true).in("product_id", queryIds).order("valid_from", { ascending: false })),
-    perf.measure("costs", supabase.from("product_costs").select("product_id, cost_cents, valid_from, valid_to").eq("organization_id", context.organizationId).in("product_id", queryIds).is("valid_to", null))
+    perf.measure("costs", supabase.from("product_costs").select("product_id, cost_cents, valid_from, valid_to").eq("organization_id", context.organizationId).in("product_id", queryIds).is("valid_to", null)),
+    // Proveedores para el selector (todas las filas: PostgREST trunca en silencio a 1000) y el proveedor principal de los productos de esta página.
+    perf.measure("suppliers", fetchAllRows((from, to) => supabase.from("suppliers").select("id, name, code, active").eq("organization_id", context.organizationId).order("name", { ascending: true }).order("id", { ascending: true }).range(from, to))),
+    perf.measure("primarySuppliers", supabase.from("product_suppliers").select("product_id, supplier_id").eq("organization_id", context.organizationId).eq("is_primary", true).in("product_id", queryIds))
   ]);
   perf.flush();
 
-  const error = [categoriesResult.error, branchesResult.error, pageResult.error, categoryAssignmentsResult.error, unitTypeHistoryResult.error, pricesResult.error, discountsResult.error, costsResult.error, cashResult.error].find(Boolean);
+  const error = [categoriesResult.error, branchesResult.error, pageResult.error, categoryAssignmentsResult.error, unitTypeHistoryResult.error, pricesResult.error, discountsResult.error, costsResult.error, suppliersResult.error, primarySuppliersResult.error, cashResult.error].find(Boolean);
   const categories = categoriesResult.data ?? [];
   const branches = branchesResult.data ?? [];
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
@@ -79,6 +83,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const now = Date.now();
   const cashDiscountBps = cashResult.data?.cash_discount_bps ?? 1000;
   const costByProduct = new Map((costsResult.data ?? []).map((row) => [row.product_id, row.cost_cents]));
+  const suppliers = suppliersResult.data;
+  const supplierNameById = new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
+  const primarySupplierByProduct = new Map((primarySuppliersResult.data ?? []).map((row) => [row.product_id, row.supplier_id]));
   const anyPriceByProduct = new Map<string, NonNullable<typeof pricesResult.data>[number]>();
   const globalPriceByProduct = new Map<string, NonNullable<typeof pricesResult.data>[number]>();
   for (const price of pricesResult.data ?? []) {
@@ -100,7 +107,8 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     .filter((product) => product.active && (product.inventory_role === "SELLABLE" || product.inventory_role === "BOTH"))
     .map((product) => ({
       id: product.id, name: product.name, categoryName: categoryNames.get(product.category_id ?? "") ?? "Sin categoría",
-      unitType: product.unit_type, currentPriceCents: globalPriceByProduct.get(product.id)?.price_cents ?? null
+      // Un precio 0 es "sin precio definido": se muestra como "sin precio" en el editor masivo, no como $0.
+      unitType: product.unit_type, currentPriceCents: (globalPriceByProduct.get(product.id)?.price_cents ?? 0) > 0 ? globalPriceByProduct.get(product.id)?.price_cents ?? null : null
     }));
   const pageHref = (target: number) => {
     const query = new URLSearchParams();
@@ -115,7 +123,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   };
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} /></div>
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} suppliers={suppliers} /></div>
     <SectionTabs active={activeTab} tabs={PRODUCTOS_TABS} />
     {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Recargo por tarjeta, aplicado en el POS sobre el precio de lista. Efectivo y transferencia no tienen ajuste.</p><div className="mt-4"><PricingSettingsModal cashDiscountBps={cashDiscountBps} /></div></section> : null}
     {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Precios de venta</h2><p className="mt-1 text-sm text-stone-600">Carga masiva del precio de lista (global, todas las sucursales). Sólo se guardan las filas que cambiaste.</p><BulkPriceEditor rows={bulkPriceRows} /></section> : null}
@@ -128,7 +136,11 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
       const label = promotion ? promotionLabel(promotion) : null;
       const unitSuffix = product.unit_type === "WEIGHT" ? "/kg" : "/unidad";
       const cost = costByProduct.get(product.id) ?? null;
-      return <tr className="border-b border-stone-100 last:border-0" key={product.id}><td className="p-4"><strong>{product.name}</strong>{product.sku ? <p className="text-xs text-stone-500">SKU {product.sku}</p> : null}</td><td className="p-4 text-stone-600">{categoryNames.get(product.category_id ?? "") ?? "Sin categoría"}</td><td className="p-4"><strong>{price ? `${formatCurrency(BigInt(price.price_cents))} ${unitSuffix}` : "SIN PRECIO"}</strong><p className="text-xs text-stone-500">{cost != null ? `${formatCurrency(BigInt(cost))} costo estimado` : price ? "Costo no disponible" : "No disponible en POS"}</p></td><td className="p-4 text-xs text-stone-600">{product.branch_ids.length === 0 ? <span className="font-bold text-amber-700">Ninguna sucursal</span> : product.branch_ids.length === branches.length ? "Todas" : product.branch_ids.map((id) => branchNames.get(id) ?? "—").join(", ")}</td><td className="p-4"><StatusBadge tone={product.active ? "success" : "neutral"}>{product.active ? "Activo" : "Inactivo"}</StatusBadge></td><td className="p-4 text-right"><ProductManageModal branches={branches} categories={categories.filter((item) => item.active || item.id === product.category_id).map((item) => ({ id: item.id, name: item.name }))} costCents={cost} price={price ? { cents: price.price_cents } : null} product={{ id: product.id, categoryId: product.category_id, categoryIds: categoryIdsByProduct.get(product.id) ?? [], name: product.name, slug: product.slug, sku: product.sku, unitType: product.unit_type, active: product.active, inventoryRole: product.inventory_role, hasUnitTypeHistory: productsWithUnitTypeHistory.has(product.id), barcodes: product.barcodes, branchIds: product.branch_ids }} promotion={promotion && label ? { id: promotion.id, label } : null} /></td></tr>;
+      // Precio 0 = "sin precio definido" (importado de SimplyGest): se ve en el POS de Central, que lo pide al vender.
+      const priceMissing = price !== undefined && price.price_cents <= 0;
+      const pricedNow = price !== undefined && price.price_cents > 0 ? price : null;
+      const supplierId = primarySupplierByProduct.get(product.id) ?? null;
+      return <tr className="border-b border-stone-100 last:border-0" key={product.id}><td className="p-4"><strong>{product.name}</strong>{product.sku ? <p className="text-xs text-stone-500">SKU {product.sku}</p> : null}{supplierId ? <p className="text-xs text-stone-500">Proveedor: {supplierNameById.get(supplierId) ?? "—"}</p> : null}</td><td className="p-4 text-stone-600">{categoryNames.get(product.category_id ?? "") ?? "Sin categoría"}</td><td className="p-4"><strong>{pricedNow ? `${formatCurrency(BigInt(pricedNow.price_cents))} ${unitSuffix}` : priceMissing ? "SIN PRECIO ($0)" : "SIN PRECIO"}</strong><p className="text-xs text-stone-500">{priceMissing ? "La caja de Central lo pide al venderlo" : cost != null ? `${formatCurrency(BigInt(cost))} costo estimado` : pricedNow ? "Costo no disponible" : "No disponible en POS"}</p></td><td className="p-4 text-xs text-stone-600">{product.branch_ids.length === 0 ? <span className="font-bold text-amber-700">Ninguna sucursal</span> : product.branch_ids.length === branches.length ? "Todas" : product.branch_ids.map((id) => branchNames.get(id) ?? "—").join(", ")}</td><td className="p-4"><StatusBadge tone={product.active ? "success" : "neutral"}>{product.active ? "Activo" : "Inactivo"}</StatusBadge></td><td className="p-4 text-right"><ProductManageModal branches={branches} categories={categories.filter((item) => item.active || item.id === product.category_id).map((item) => ({ id: item.id, name: item.name }))} costCents={cost} price={pricedNow ? { cents: pricedNow.price_cents } : null} suppliers={suppliers} product={{ id: product.id, categoryId: product.category_id, categoryIds: categoryIdsByProduct.get(product.id) ?? [], name: product.name, slug: product.slug, sku: product.sku, unitType: product.unit_type, active: product.active, inventoryRole: product.inventory_role, hasUnitTypeHistory: productsWithUnitTypeHistory.has(product.id), barcodes: product.barcodes, branchIds: product.branch_ids, primarySupplierId: supplierId }} promotion={promotion && label ? { id: promotion.id, label } : null} /></td></tr>;
     })}</tbody></table></div>{!products.length ? <p className="p-8 text-center text-stone-500">No hay productos para estos filtros.</p> : null}</section>
     {totalPages > 1 ? <nav aria-label="Paginación" className="mt-3 flex items-center justify-between text-sm">
       {page > 1 ? <Link className="font-bold text-rose-800 hover:underline" href={pageHref(page - 1)}>← Anterior</Link> : <span />}

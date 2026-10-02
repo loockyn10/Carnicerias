@@ -483,6 +483,20 @@ Corrige lo observado en la prueba real (3 ventas: 1 pagada, 2 canceladas; las tr
 - **Validación (2026-10-02):** `pnpm check` OK; `cargo test --lib` 75/75 (+7); pgTAP vía PGlite sin Docker: `mercadopago_sale_lifecycle.test.sql` 137/137 (nuevo; verificado con mutaciones), `mercadopago_payments.test.sql` 97/97, y la reparación de datos verificada con un fixture legado (1 pagada intacta, 2 canceladas/vencidas anuladas con stock devuelto, 2 pendientes); el resto de la suite da el mismo resultado con y sin las migraciones nuevas; las 5 Edge Functions bundlean con esbuild. **No** corrió contra Supabase ni Mercado Pago reales, ni el instalador Tauri con el cambio.
 - **Riesgo operativo:** un POS viejo que ofrezca "Transferencia" en Avenida generaría una venta rechazada por el servidor y bloquearía la cola de sincronización de ese equipo: instalar el POS nuevo junto con el `db push`.
 
+## Proveedores + importación real SimplyGest + comportamiento de Central — implementado 2026-10-02 (D-056/D-057/D-058, sin datos importados, sin aplicar a producción)
+
+Prepara la migración definitiva desde SimplyGest. **No se cargó ningún dato real ni se aplicó nada a producción.** Realidad operativa: Central = almacén + carnicería; Avenida/Janssen = carnicerías; lo importado se habilita sólo en Central; Fran no lleva stock confiable en Central; algunos productos tienen precio 0.
+
+- **Postgres `202610020053_suppliers.sql`:** `suppliers`, `product_suppliers` (RLS por organización + permiso `suppliers.read/write`, sólo admin; sin DML directo), índices únicos por nombre normalizado y por código, un principal por producto; RPC `save_supplier`, `set_supplier_active`, `set_product_primary_supplier`, `list_suppliers_page`; helpers privados `find_supplier`, `set_primary_supplier`; `external_entity_links` acepta `supplier`.
+- **Postgres `202610020054_import_suppliers_and_zero_price.sql`:** `product_prices.price_cents >= 0`; el importador acepta `priceCents >= 0` (un 0 sólo crea la primera vigencia, nunca pisa un precio), proveedor (`supplierName`/`supplierCode`) con reutilización/creación única y vínculo principal, `list_import_batch_suppliers` (qué proveedores se crean/reutilizan, para el preview). `CREATE OR REPLACE` de `import_classify_product`/`import_apply_product` con la misma firma que la 049.
+- **Postgres `202610020055_pos_set_product_price.sql`:** permiso `prices.pos_set_missing` (admin + employee), `app_private.pos_price_authorize`, `set_pos_product_price(device, operador, token, producto, precio)`.
+- **SQLite `015_catalog_zero_price.sql`** (Rust): `catalog_prices` acepta 0 (rebuild no destructivo); `insert_sale` rechaza una línea a $0 (`PRICE_REQUIRED`).
+- **Admin:** `/admin/suppliers` (listar, buscar, crear, editar, activar/desactivar, cantidad de productos; tarjeta en Configuración), selector buscable "Proveedor principal" (opcional) en crear/editar producto, "Proveedor" en la tabla de productos, "SIN PRECIO ($0)" para precio 0; importador: campos `tipo_venta` (UNIT/WEIGHT, otro valor = error), `proveedor`, `proveedor_codigo`, precio 0 válido, sin columna de stock, preview con proveedores nuevos/reutilizados y su lista.
+- **POS (React + Rust):** `stockForAvailability` — en Central la disponibilidad no depende del stock (visible y vendible con stock positivo, 0 o negativo; se eliminó la excepción de escaneo "Stock no registrado" de D-052); Avenida/Janssen intactos. Producto sin precio: tarjeta "Sin precio" + `ProductPriceModal` desde `resolveProductRequest` (tocar, escanear, buscar o resultado del servidor; nunca a $0); guardar → `set_pos_product_price` → sync → agrega; offline → aviso sin vender ni guardar.
+- **Decisiones del sprint no pedidas explícitamente (revisar):** (a) la caja sólo fija el precio de un producto que hoy no tiene precio (cambiar uno existente sigue siendo de Admin); (b) la RPC de la caja sólo funciona en Central (fail-closed); (c) un producto `UNIT` recién preciado se agrega con 1 unidad también al tocarlo (no abre el stepper); (d) un precio 0 del archivo nunca pisa un precio cargado y un proveedor vacío nunca quita el existente; (e) cambiar/limpiar el proveedor principal degrada a vínculo secundario, no borra; (f) la pantalla de importación ya no ofrece stock (el motor `stock_opening_balance` queda para un futuro conteo físico); (g) sin columna `tipo_venta` el archivo sigue importándose todo `UNIT` (con aviso).
+- **Riesgos operativos:** (1) instalar el POS nuevo en Central **antes** de importar: un POS viejo no puede guardar un precio 0 en SQLite (el `check (> 0)` rompe todo el pull del catálogo). (2) Avenida/Janssen no reciben esos productos (surtido), así que su POS no cambia. (3) El servidor sigue rechazando una venta a $0 por los `check` de `sale_items`.
+- **Validación (2026-10-02):** `pnpm check` OK (business-logic 223 tests, pos 142, admin 68, sync 12); `pnpm --filter @carnicerias/admin build` y `@carnicerias/pos build` OK; `cargo test --lib` 79/79 (+4: migración 015 sobre filas existentes, pull con precio 0, reemplazo del 0 por el precio fijado, venta a $0 rechazada). Postgres vía PGlite (PG 18, sin Docker; las 55 migraciones aplican) con shim de pgTAP: `suppliers.test.sql` 61/61, `import_suppliers_and_zero_price.test.sql` 56/56, `pos_set_product_price.test.sql` 40/40 (verificados con mutaciones: sin guarda de "ya tiene precio", sin chequeo de Central, sin chequeo de permiso, sobrescribir historial, sin vínculo principal, precio 0 sobrescribiendo); `import_infrastructure` 120/120, `import_ui_support` 64/64, `branch_assortment` 96/96, `pos_quick_product` 83/83, `offline_sync` 45/45 y el resto de la suite igual con y sin las migraciones nuevas (los fallos de `online_pos`, `operational_pilot`, `manual_pricing`, `promotions_pack`, `unit_sale_support`, `card_surcharge_pricing` son del shim y preexistentes). **No verificado:** Supabase real (`supabase test db` oficial, RLS/PostgREST reales), la pantalla de proveedores y los modales en navegador/Tauri reales ni con escáner (sólo typecheck/lint/build/tests unitarios), instalador con el cambio. `database.types.ts` y `database.rpc-null-overrides.ts` se editaron a mano (UTF-16): regenerar con `pnpm db:types` o `pnpm exec supabase gen types typescript --linked` **después** de `db push`.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -539,6 +553,9 @@ Corrige lo observado en la prueba real (3 ventas: 1 pagada, 2 canceladas; las tr
 50. `202610010050_mercadopago_payments.sql`
 51. `202610020051_sale_status_pending_payment.sql`
 52. `202610020052_mercadopago_sale_lifecycle.sql`
+53. `202610020053_suppliers.sql`
+54. `202610020054_import_suppliers_and_zero_price.sql`
+55. `202610020055_pos_set_product_price.sql`
 
 ### SQLite POS
 
@@ -556,6 +573,7 @@ Corrige lo observado en la prueba real (3 ventas: 1 pagada, 2 canceladas; las tr
 12. `012_branch_stock_projection.sql`
 13. `013_product_barcodes.sql`
 14. `014_payment_verification.sql`
+15. `015_catalog_zero_price.sql`
 
 ### Estado remoto
 

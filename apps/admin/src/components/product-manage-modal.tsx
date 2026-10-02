@@ -5,6 +5,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 
 import { manageProductAction, type ProductManageState } from "../app/admin/actions";
 import { ProductPricingFields } from "./product-pricing-fields";
+import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
@@ -14,15 +15,18 @@ interface ProductManageModalProps {
     sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean;
     inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH"; hasUnitTypeHistory: boolean;
     barcodes: string[]; branchIds: string[];
+    /** Proveedor principal actual (null = sin proveedor). */
+    primarySupplierId: string | null;
   };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
   categories: { id: string; name: string }[];
   branches: { id: string; name: string }[];
   costCents: number | null;
+  suppliers: SupplierOption[];
 }
 
-export function ProductManageModal({ product, price, promotion, categories, branches, costCents }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -87,6 +91,7 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           <label className="grid gap-1 text-sm font-medium">Códigos de barras
             <textarea className={input} defaultValue={product.barcodes.join("\n")} name="barcodes" placeholder="Uno por línea. Un producto puede tener varios." rows={2} />
           </label>
+          <SupplierSelect currentSupplierId={product.primarySupplierId} suppliers={suppliers} />
           <label className="grid gap-1 text-sm font-medium">
             Forma de venta
             <select className={input} disabled={product.hasUnitTypeHistory} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}>

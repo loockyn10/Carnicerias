@@ -37,7 +37,14 @@ export interface ImportDestinationView {
   code: string;
 }
 
-const EMPTY_MAPPING: CatalogColumnMapping = { code: null, name: null, barcode: null, category: null, price: null, cost: null, stock: null };
+const EMPTY_MAPPING: CatalogColumnMapping = { code: null, name: null, barcode: null, category: null, saleType: null, price: null, cost: null, supplier: null, supplierCode: null, stock: null };
+
+/**
+ * The SimplyGest stock is NOT trusted (Central does not keep reliable stock, many products read 0 while on
+ * the shelf), so this screen never imports it: no stock column is offered or suggested and no OPENING_BALANCE
+ * is ever written from here. The engine's opening-balance batches stay available for a future physical count.
+ */
+const IMPORT_STOCK = false;
 
 function ProgressBar({ progress }: { progress: Progress }) {
   const ratio = progress.done !== null && progress.total ? Math.min(1, progress.done / progress.total) : null;
@@ -61,7 +68,7 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
   const [stage, setStage] = useState<Stage>("pick");
   const [file, setFile] = useState<LoadedImportFile | null>(null);
   const [mapping, setMapping] = useState<CatalogColumnMapping>(EMPTY_MAPPING);
-  const [options, setOptions] = useState<ImportOptionsState>({ numberFormat: "AR", importStock: false, linkBy: { barcode: true, sku: true } });
+  const [options, setOptions] = useState<ImportOptionsState>({ numberFormat: "AR", linkBy: { barcode: true, sku: true } });
   const [progress, setProgress] = useState<Progress>({ message: "", done: null, total: null });
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [current, setCurrent] = useState<CurrentCommercialValues>({});
@@ -92,10 +99,11 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
     setBusy(true);
     try {
       const loaded = await loadImportFile(chosen);
-      const suggested = suggestColumnMapping(loaded.table.headers);
+      // Never suggest a stock column: a "stock"/"existencia" header would otherwise be picked up automatically.
+      const suggested: CatalogColumnMapping = { ...suggestColumnMapping(loaded.table.headers), stock: null };
       setFile(loaded);
       setMapping(suggested);
-      setOptions({ numberFormat: detectTableNumberFormat(loaded.table, suggested), importStock: suggested.stock !== null, linkBy: { barcode: true, sku: true } });
+      setOptions({ numberFormat: detectTableNumberFormat(loaded.table, suggested), linkBy: { barcode: true, sku: true } });
       setStage("mapping");
     } catch (reason) {
       setError(describeError(reason));
@@ -103,13 +111,6 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
       setBusy(false);
       if (fileInput.current) fileInput.current.value = "";
     }
-  }
-
-  function onMappingChange(next: CatalogColumnMapping) {
-    setMapping(next);
-    // The stock checkbox follows the column: choosing a stock column turns it on, clearing it off.
-    if (next.stock === null && options.importStock) setOptions({ ...options, importStock: false });
-    if (next.stock !== null && mapping.stock === null) setOptions({ ...options, importStock: true });
   }
 
   async function analyze() {
@@ -120,7 +121,7 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
     reportProgress("Leyendo el archivo");
     try {
       await abandonPreview();
-      const mapped = mapCatalogRows(file.table, mapping, { numberFormat: options.numberFormat, importStock: options.importStock && mapping.stock !== null });
+      const mapped = mapCatalogRows(file.table, mapping, { numberFormat: options.numberFormat, importStock: IMPORT_STOCK });
       const linkBy = (Object.keys(options.linkBy) as ImportLinkKey[]).filter((key) => options.linkBy[key]);
       const result = await runPreview(serverImportGateway, mapped.rows, {
         runId: crypto.randomUUID(), fileName: file.fileName, fileSha256: file.sha256, linkBy
@@ -152,7 +153,7 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
     setStage("applying");
     reportProgress("Importando");
     try {
-      const result = await runApply(serverImportGateway, preview, { skipErrors, importStock: options.importStock && mapping.stock !== null }, reportProgress);
+      const result = await runApply(serverImportGateway, preview, { skipErrors, importStock: IMPORT_STOCK }, reportProgress);
       setOutcome(result);
       setStage("done");
       router.refresh();
@@ -226,7 +227,7 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
       mapping={mapping}
       onAnalyze={() => { void analyze(); }}
       onChooseAnother={() => { void cancelAll(); }}
-      onMappingChange={onMappingChange}
+      onMappingChange={setMapping}
       onOptionsChange={setOptions}
       options={options}
       table={file.table}
@@ -242,7 +243,6 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
       busy={busy}
       current={current}
       destinationName={destination.name}
-      importStock={options.importStock && mapping.stock !== null}
       newCategories={newCategories}
       onBack={() => { void abandonPreview().then(() => { setStage("mapping"); }); }}
       onCancel={() => { void cancelAll(); }}
@@ -258,9 +258,8 @@ export function ImportWizard({ destination, destinationProblem, existingCategory
         <Stat label="Sin cambios" value={outcome.products.ignored} />
         <Stat label="Omitidos por error" tone={outcome.products.skippedErrors > 0 ? "text-red-700" : "text-stone-400"} value={outcome.products.skippedErrors} />
       </div>
-      {outcome.stock ? <p className="mt-4 text-sm text-stone-700">📦 Stock inicial cargado en {destination?.name ?? "Central"}: <strong>{outcome.stock.created.toLocaleString("es-AR")}</strong> producto{outcome.stock.created === 1 ? "" : "s"}.
-        {outcome.stock.ignored > 0 ? ` ${outcome.stock.ignored.toLocaleString("es-AR")} ya tenían movimientos de stock o venían en cero y no se modificaron.` : ""}
-        {outcome.stock.errors.length > 0 ? ` ${outcome.stock.errors.length.toLocaleString("es-AR")} no se pudieron cargar: ${outcome.stock.errors.slice(0, 3).map((item) => `${item.externalId} (${item.message})`).join("; ")}${outcome.stock.errors.length > 3 ? "…" : ""}.` : ""}</p> : <p className="mt-4 text-sm text-stone-600">📦 No se importó stock.</p>}
+      {preview && (preview.totals.suppliersNew > 0 || preview.totals.suppliersReused > 0) ? <p className="mt-4 text-sm text-stone-700">🏷️ Proveedores: <strong>{preview.totals.suppliersNew.toLocaleString("es-AR")}</strong> nuevo{preview.totals.suppliersNew === 1 ? "" : "s"} · <strong>{preview.totals.suppliersReused.toLocaleString("es-AR")}</strong> ya existente{preview.totals.suppliersReused === 1 ? "" : "s"} (reutilizado{preview.totals.suppliersReused === 1 ? "" : "s"}).</p> : null}
+      <p className="mt-2 text-sm text-stone-600">📦 No se importó stock: los productos empiezan sin movimientos. {destination?.name ?? "Central"} no depende del stock para mostrar ni vender.</p>
       <div className="mt-5 flex flex-wrap gap-3">
         <button className="rounded-lg bg-rose-800 px-5 py-2.5 text-sm font-bold text-white hover:bg-rose-900" onClick={reset} type="button">Importar otro archivo</button>
         <a className="rounded-lg border border-stone-300 px-4 py-2.5 text-sm font-bold text-stone-700 hover:bg-stone-50" href="#historial">Ver historial</a>

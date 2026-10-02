@@ -17,9 +17,12 @@ const REQUIRED: Record<CatalogImportField, string | null> = {
   name: "Obligatorio",
   barcode: "Código o código de barras: al menos uno",
   category: "Sin categoría → Almacen",
-  price: "Obligatorio",
+  saleType: "Opcional · UNIT o WEIGHT (sin columna: todo por UNIDAD)",
+  price: "Obligatorio · 0 = sin precio (se pide en la caja)",
   cost: "Opcional",
-  stock: "Opcional"
+  supplier: "Opcional · producto sin proveedor si va vacío",
+  supplierCode: "Opcional · identifica al proveedor al reimportar",
+  stock: "No se importa"
 };
 
 /** What each field becomes in SimplyGest-speak: "CODIGO → SKU". */
@@ -28,10 +31,16 @@ const TARGET_LABEL: Record<CatalogImportField, string> = {
   name: "Nombre",
   barcode: "Barcode",
   category: "Categoría",
+  saleType: "Forma de venta",
   price: "Precio",
   cost: "Costo",
+  supplier: "Proveedor",
+  supplierCode: "Código de proveedor",
   stock: "Stock inicial"
 };
+
+/** The SimplyGest stock is never imported from this screen (it is not trusted): the field is not offered. */
+const OFFERED_FIELDS = CATALOG_IMPORT_FIELDS.filter((field) => field !== "stock");
 
 const select = "w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
@@ -49,7 +58,6 @@ function samples(table: ImportTable, column: number | null): string {
 
 export interface ImportOptionsState {
   numberFormat: NumberFormat;
-  importStock: boolean;
   linkBy: Record<ImportLinkKey, boolean>;
 }
 
@@ -67,7 +75,6 @@ export function ImportMappingStep({
   onChooseAnother: () => void;
 }) {
   const problems = validateColumnMapping(mapping);
-  const stockMapped = mapping.stock !== null;
 
   return <section className="mt-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -83,7 +90,7 @@ export function ImportMappingStep({
       <table className="w-full min-w-[640px] text-left text-sm">
         <thead className="text-stone-500"><tr><th className="py-2 pr-3">Columna del archivo</th><th className="py-2 pr-3">Se importa como</th><th className="py-2 pr-3">Ejemplos</th></tr></thead>
         <tbody>
-          {CATALOG_IMPORT_FIELDS.map((field) => <tr className="border-t border-stone-100 align-top" key={field}>
+          {OFFERED_FIELDS.map((field) => <tr className="border-t border-stone-100 align-top" key={field}>
             <td className="py-2 pr-3">
               <select aria-label={`Columna para ${CATALOG_FIELD_LABELS[field]}`} className={select} disabled={busy}
                 onChange={(event) => onMappingChange({ ...mapping, [field]: event.target.value === "" ? null : Number(event.target.value) })}
@@ -107,13 +114,13 @@ export function ImportMappingStep({
         </select>
         <span className="text-xs font-normal text-stone-500">Detectado automáticamente; si un precio sale mal en la vista previa, cambialo.</span>
       </label>
-      <label className={`flex items-start gap-2 rounded-lg border border-stone-200 p-3 text-sm ${stockMapped ? "" : "opacity-60"}`}>
-        <input checked={stockMapped && options.importStock} className="mt-1" disabled={!stockMapped || busy} onChange={(event) => onOptionsChange({ ...options, importStock: event.target.checked })} type="checkbox" />
-        <span><strong>Importar stock actual</strong><span className="block text-xs text-stone-500">{stockMapped
-          ? "Se carga como stock inicial en Central, una sola vez por producto. Desmarcalo para importar sólo catálogo y precios (por ejemplo si después hacés un conteo físico)."
-          : "Elegí una columna de stock para poder importarlo."}</span></span>
-      </label>
+      <div className="rounded-lg border border-stone-200 p-3 text-sm">
+        <strong>El stock no se importa</strong>
+        <span className="block text-xs text-stone-500">El stock de SimplyGest no es confiable: los productos empiezan sin movimientos de stock y Central los muestra y vende igual. No hace falta una columna de stock.</span>
+      </div>
     </div>
+
+    {mapping.saleType === null ? <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Sin columna de <strong>forma de venta</strong>, todos los productos se importan <strong>por unidad</strong>. Si el archivo trae <code>UNIT</code>/<code>WEIGHT</code> (por unidad / por kg), elegí esa columna arriba.</p> : null}
 
     <details className="mt-3 rounded-lg border border-stone-200 p-3 text-sm">
       <summary className="cursor-pointer font-bold">Opciones avanzadas · productos que ya existen</summary>

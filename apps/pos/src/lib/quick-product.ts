@@ -102,7 +102,7 @@ function text(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function parseRow(value: unknown): QuickCatalogRow {
+export function parseCatalogRow(value: unknown): QuickCatalogRow {
   const row = asRecord(value, "producto");
   const unitType = row.unitType;
   if (unitType !== "WEIGHT" && unitType !== "UNIT") throw new Error("Respuesta inválida del servidor (unitType)");
@@ -134,7 +134,7 @@ export function parseQuickCreateResult(data: unknown): QuickCreateResult {
     case "CREATED":
     case "EXISTS_SELLABLE":
     case "EXISTS_ENABLED":
-      return { status: record.status, product: parseRow(record.product) };
+      return { status: record.status, product: parseCatalogRow(record.product) };
     case "EXISTS_UNSELLABLE":
       return { status: record.status, productName: typeof record.productName === "string" ? record.productName : "" };
     default:

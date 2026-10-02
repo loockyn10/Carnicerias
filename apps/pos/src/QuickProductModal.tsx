@@ -1,6 +1,7 @@
-import { useEffect, useState, type SyntheticEvent } from "react";
+import { useState, type SyntheticEvent } from "react";
 
 import { validateQuickProduct, type QuickProductFieldErrors } from "./lib/quick-product";
+import { useBrowserOnline } from "./lib/use-browser-online";
 
 interface QuickProductModalProps {
   /** Barcode just scanned (already normalized): shown as information, never asked. */
@@ -10,20 +11,6 @@ interface QuickProductModalProps {
   /** Creates the product and adds it to the ticket. Resolves to an error message, or null when done. */
   onSubmit: (input: { name: string; priceCents: bigint; costCents: bigint | null }) => Promise<string | null>;
   onCancel: () => void;
-}
-
-function useBrowserOnline(): boolean {
-  const [online, setOnline] = useState(() => navigator.onLine);
-  useEffect(() => {
-    const update = () => setOnline(navigator.onLine);
-    window.addEventListener("online", update);
-    window.addEventListener("offline", update);
-    return () => {
-      window.removeEventListener("online", update);
-      window.removeEventListener("offline", update);
-    };
-  }, []);
-  return online;
 }
 
 /**

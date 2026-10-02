@@ -21,8 +21,9 @@ const headers: Record<string, { title: string; description: string }> = {
   "/admin/timekeeping": { title: "Horas trabajadas", description: "Fichajes, revisiones y pago estimado por horas." },
   "/admin/devices": { title: "Dispositivos POS", description: "Terminales autorizadas para operar." },
   "/admin/audit": { title: "Auditoría", description: "Trazabilidad de los últimos eventos." },
-  "/admin/settings": { title: "Configuración", description: "Dispositivos, avisos, importaciones y auditoría." },
-  "/admin/imports": { title: "Importación de productos", description: "Productos, precios, costos y stock desde otros sistemas." },
+  "/admin/settings": { title: "Configuración", description: "Dispositivos, avisos, proveedores, importaciones y auditoría." },
+  "/admin/suppliers": { title: "Proveedores", description: "Alta y edición de proveedores y su vínculo con los productos." },
+  "/admin/imports": { title: "Importación de productos", description: "Productos, precios, costos y proveedores desde otros sistemas." },
   "/admin/attention": { title: "Centro de atención", description: "Problemas y movimientos relevantes por prioridad." }
 };
 

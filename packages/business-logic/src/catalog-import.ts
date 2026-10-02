@@ -5,7 +5,9 @@
  * duplicate/new/update, this module only (a) maps columns, (b) parses numbers/codes safely and
  * (c) rejects rows that can never be valid so the preview can explain why.
  *
- * Money is integer cents; stock is whole units (imported products are `UNIT`, D-042).
+ * Money is integer cents. The sale form comes from the file (`UNIT` or `WEIGHT`); a file with no such
+ * column keeps the historical default `UNIT`. A price of 0 is valid ("sin precio definido"); stock is
+ * whole units and is NOT offered by the Admin screen (the SimplyGest stock is not trusted).
  */
 import type { ImportProductPayload } from "@carnicerias/types";
 
@@ -29,7 +31,7 @@ export interface ImportTable {
   delimiter?: string;
 }
 
-export const CATALOG_IMPORT_FIELDS = ["code", "name", "barcode", "category", "price", "cost", "stock"] as const;
+export const CATALOG_IMPORT_FIELDS = ["code", "name", "barcode", "category", "saleType", "price", "cost", "supplier", "supplierCode", "stock"] as const;
 export type CatalogImportField = (typeof CATALOG_IMPORT_FIELDS)[number];
 /** Column index per field, or null when the file has no such column (or the user unmapped it). */
 export type CatalogColumnMapping = Record<CatalogImportField, number | null>;
@@ -42,8 +44,11 @@ export const CATALOG_FIELD_LABELS: Record<CatalogImportField, string> = {
   name: "Nombre",
   barcode: "Código de barras",
   category: "Categoría / familia",
+  saleType: "Forma de venta (UNIT / WEIGHT)",
   price: "Precio de venta",
   cost: "Costo",
+  supplier: "Proveedor",
+  supplierCode: "Código del proveedor",
   stock: "Stock actual"
 };
 
@@ -196,13 +201,20 @@ const FIELD_SYNONYMS: Record<CatalogImportField, readonly string[]> = {
   name: ["nombre", "descripcion", "descr", "desc", "descripcionarticulo", "nombreproducto", "producto", "detalle", "denominacion", "articulo"],
   barcode: ["codigodebarras", "codigobarras", "codigobarra", "codbarras", "codbarra", "barras", "barcode", "ean", "ean13", "gtin", "upc"],
   category: ["categoria", "familia", "rubro", "grupo", "linea", "seccion", "departamento", "subrubro", "subfamilia"],
+  saleType: ["tipoventa", "tipodeventa", "formaventa", "formadeventa", "tipounidad", "unittype", "saletype"],
   price: ["precioventa", "preciodeventa", "precio", "pventa", "pvp", "preciolista", "precio1", "precioefectivo", "preciofinal", "venta"],
   cost: ["costo", "preciocosto", "preciodecosto", "costounitario", "costoactual", "ultimocosto", "costoreposicion", "pcosto", "preciocompra", "compra"],
+  supplier: ["proveedor", "proveedorprincipal", "nombreproveedor", "supplier", "suppliername", "proveedorhabitual"],
+  supplierCode: ["proveedorcodigo", "codigoproveedor", "codproveedor", "proveedorcod", "codprov", "idproveedor", "proveedorid", "suppliercode", "supplierid"],
   stock: ["stockactual", "stock", "existencia", "existencias", "saldo", "cantidad", "stk", "disponible"]
 };
 
-/** Order matters: when two fields could claim the same column, the more specific one goes first. */
-const SUGGESTION_ORDER: readonly CatalogImportField[] = ["barcode", "cost", "price", "stock", "category", "code", "name"];
+/**
+ * Order matters: when two fields could claim the same column, the more specific one goes first
+ * ("proveedor_codigo" contains "codigo" and "tipo_venta" contains "venta": the supplier code and the
+ * sale type claim their columns before the generic code/price fields do).
+ */
+const SUGGESTION_ORDER: readonly CatalogImportField[] = ["saleType", "supplierCode", "supplier", "barcode", "cost", "price", "stock", "category", "code", "name"];
 
 /**
  * Suggests a mapping by common header names. It is only a starting point — the operator reviews
@@ -210,7 +222,7 @@ const SUGGESTION_ORDER: readonly CatalogImportField[] = ["barcode", "cost", "pri
  */
 export function suggestColumnMapping(headers: readonly string[]): CatalogColumnMapping {
   const keys = headers.map(headerKey);
-  const mapping: CatalogColumnMapping = { code: null, name: null, barcode: null, category: null, price: null, cost: null, stock: null };
+  const mapping: CatalogColumnMapping = { code: null, name: null, barcode: null, category: null, saleType: null, price: null, cost: null, supplier: null, supplierCode: null, stock: null };
   const used = new Set<number>();
   for (const field of SUGGESTION_ORDER) {
     let bestIndex = -1;
@@ -349,6 +361,10 @@ export interface CatalogRowDisplay {
   priceCents: number | null;
   costCents: number | null;
   stockUnits: number | null;
+  /** UNIT / WEIGHT as read from the file (the default UNIT when the file has no such column). */
+  saleType: "UNIT" | "WEIGHT" | null;
+  supplier: string;
+  supplierCode: string;
   /** Original text, so an invalid price/stock is shown as it came in the file. */
   priceText: string;
   costText: string;
@@ -375,6 +391,8 @@ export interface CatalogMappingResult {
   invalidRows: number;
   /** Distinct category names in the file (first spelling wins), for "N categorías nuevas". */
   categories: string[];
+  /** Distinct supplier names in the file (first spelling wins), for "N proveedores". */
+  suppliers: string[];
 }
 
 export const MAX_PRODUCT_NAME_LENGTH = 120;
@@ -384,6 +402,10 @@ export const MAX_CATEGORY_NAME_LENGTH = 100;
 const BARCODE_PATTERN = /^[A-Z0-9][A-Z0-9._-]{2,63}$/;
 const BARCODE_PLACEHOLDERS = new Set(["-", ".", "--", "n/a", "na", "s/c", "sc", "sin codigo", "sin barras", "sincodigo"]);
 const CATEGORY_PLACEHOLDERS = new Set(["-", ".", "--", "n/a", "na", "sin categoria", "sin familia", "sin rubro", "sin grupo"]);
+const SUPPLIER_PLACEHOLDERS = new Set(["-", ".", "--", "n/a", "na", "s/p", "sin proveedor", "sinproveedor"]);
+
+export const MAX_SUPPLIER_NAME_LENGTH = 120;
+export const MAX_SUPPLIER_CODE_LENGTH = 60;
 
 function cellText(cell: CellValue | undefined): string {
   if (cell === null || cell === undefined) return "";
@@ -423,7 +445,7 @@ function parseCatalogRow(row: ImportTableRow, mapping: CatalogColumnMapping, opt
   const categoryRaw = cellText(at("category")).replace(/\s+/g, " ");
   const display: CatalogRowDisplay = {
     name, sku: codeRaw.toUpperCase(), barcode: barcodeRaw, category: categoryRaw,
-    priceCents: null, costCents: null, stockUnits: null,
+    priceCents: null, costCents: null, stockUnits: null, saleType: null, supplier: "", supplierCode: "",
     priceText: cellText(at("price")), costText: cellText(at("cost")), stockText: options.importStock ? cellText(at("stock")) : ""
   };
   const fail = (invalid: string): RowParse => ({ invalid, display });
@@ -455,11 +477,28 @@ function parseCatalogRow(row: ImportTableRow, mapping: CatalogColumnMapping, opt
   else return fail("La fila no tiene código ni código de barras: sin uno de los dos no se puede identificar el producto (y evitar duplicarlo al reimportar)");
   if (externalId.length > 200) return fail("El código supera los 200 caracteres");
 
+  // Forma de venta. With no mapped column every product keeps the historical default (UNIT); with
+  // one, only UNIT or WEIGHT are valid (any other value would silently sell a kilo as a unit).
+  let saleType: "UNIT" | "WEIGHT" = "UNIT";
+  if (mapping.saleType !== null) {
+    const rawSaleType = cellText(at("saleType")).toUpperCase();
+    if (rawSaleType === "") return fail("Falta la forma de venta: tiene que ser UNIT o WEIGHT");
+    if (rawSaleType !== "UNIT" && rawSaleType !== "WEIGHT") {
+      return fail(`Forma de venta inválida: “${cellText(at("saleType"))}” (tiene que ser UNIT o WEIGHT)`);
+    }
+    saleType = rawSaleType;
+  }
+  display.saleType = saleType;
+
   const price = parseDecimal(at("price") ?? null, options.numberFormat);
   if (price === "empty") return fail("Falta el precio de venta");
   if (price === "invalid") return fail(`Precio inválido: “${display.priceText}”${options.numberFormat === "AR" ? " (se espera 1.234,56)" : " (se espera 1,234.56)"}`);
-  const priceCents = decimalToCents(price);
-  if (priceCents === null || price.negative || priceCents <= 0) return fail(`El precio debe ser mayor a 0 (llegó “${display.priceText}”)`);
+  const decimalCents = decimalToCents(price);
+  // 0 is a valid price in SimplyGest ("sin precio definido": the Central cashier sets it at the
+  // counter); only a negative one is wrong.
+  if (decimalCents === null) return fail(`Precio fuera de rango: “${display.priceText}”`);
+  if (decimalCents < 0) return fail(`El precio no puede ser negativo (llegó “${display.priceText}”)`);
+  const priceCents = decimalCents === 0 ? 0 : decimalCents; // "-0" is a zero, not a negative zero
   display.priceCents = priceCents;
 
   let costCents: number | null = null;
@@ -500,14 +539,26 @@ function parseCatalogRow(row: ImportTableRow, mapping: CatalogColumnMapping, opt
   }
   display.stockUnits = stockUnits;
 
+  // Proveedor (opcional). Vacío o un marcador ("-", "sin proveedor") = el producto va sin proveedor.
+  const supplierRaw = cellText(at("supplier")).replace(/\s+/g, " ");
+  const supplierCodeRaw = codeText(at("supplierCode")).toUpperCase();
+  const supplier = supplierRaw !== "" && !SUPPLIER_PLACEHOLDERS.has(normalizeImportText(supplierRaw)) ? supplierRaw : "";
+  const supplierCode = supplierCodeRaw !== "" && !/^0+$/.test(supplierCodeRaw) && !SUPPLIER_PLACEHOLDERS.has(normalizeImportText(supplierCodeRaw)) ? supplierCodeRaw : "";
+  if (supplier.length > MAX_SUPPLIER_NAME_LENGTH) return fail(`El nombre del proveedor supera los ${String(MAX_SUPPLIER_NAME_LENGTH)} caracteres`);
+  if (supplierCode.length > MAX_SUPPLIER_CODE_LENGTH) return fail(`El código del proveedor supera los ${String(MAX_SUPPLIER_CODE_LENGTH)} caracteres`);
+  display.supplier = supplier;
+  display.supplierCode = supplierCode;
+
   const payload: ImportProductPayload = {
     name,
-    unitType: "UNIT",
+    unitType: saleType,
     priceCents,
     ...(sku !== "" ? { sku } : {}),
     ...(barcode !== "" ? { barcodes: [barcode] } : {}),
     ...(category !== "" ? { categoryName: category } : {}),
-    ...(costCents !== null ? { costCents } : {})
+    ...(costCents !== null ? { costCents } : {}),
+    ...(supplier !== "" ? { supplierName: supplier } : {}),
+    ...(supplierCode !== "" ? { supplierCode } : {})
   };
   return { externalId, payload, stockUnits, display };
 }
@@ -525,6 +576,7 @@ export function mapCatalogRows(table: ImportTable, mapping: CatalogColumnMapping
   const firstByBarcode = new Map<string, number>();
   const firstByName = new Map<string, number>();
   const categories = new Map<string, string>();
+  const suppliers = new Map<string, string>();
   let invalidRows = 0;
 
   for (const row of table.rows) {
@@ -547,6 +599,8 @@ export function mapCatalogRows(table: ImportTable, mapping: CatalogColumnMapping
         firstByName.set(nameKey, row.rowNumber);
         const category = parsed.payload.categoryName;
         if (category && !categories.has(normalizeImportText(category))) categories.set(normalizeImportText(category), category);
+        const supplierName = parsed.payload.supplierName;
+        if (supplierName && !suppliers.has(normalizeImportText(supplierName))) suppliers.set(normalizeImportText(supplierName), supplierName);
       }
     }
 
@@ -573,7 +627,7 @@ export function mapCatalogRows(table: ImportTable, mapping: CatalogColumnMapping
       });
     }
   }
-  return { rows, totalRows: table.rows.length, invalidRows, categories: [...categories.values()] };
+  return { rows, totalRows: table.rows.length, invalidRows, categories: [...categories.values()], suppliers: [...suppliers.values()] };
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import {
   cancelImportBatchAction,
   createImportBatchAction,
   listImportRowsAction,
+  listImportSuppliersAction,
   previewImportBatchAction,
   stageImportRowsAction,
   type ImportActionResult
@@ -27,6 +28,9 @@ export const serverImportGateway: ImportGateway = {
   },
   async listRows(batchId) {
     return unwrap(await listImportRowsAction(batchId));
+  },
+  async listSuppliers(batchId) {
+    return unwrap(await listImportSuppliersAction(batchId));
   },
   async applyBatch(batchId, skipErrors) {
     return unwrap(await applyImportBatchAction(batchId, skipErrors));
