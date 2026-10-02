@@ -9,7 +9,7 @@ const KEY = "pos.mercadopago.enabled";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-interface Memory { deviceId: string; branchId: string; enabled: boolean }
+interface Memory { deviceId: string; branchId: string; enabled: boolean; manualTransferAllowed?: boolean }
 
 function defaultStorage(): StorageLike | null {
   try {
@@ -30,10 +30,27 @@ export function readMercadoPagoEnabled(deviceId: string | null, branchId: string
   }
 }
 
-export function writeMercadoPagoEnabled(deviceId: string, branchId: string, enabled: boolean, storage: StorageLike | null = defaultStorage()): void {
+/**
+ * Lo recordado sobre la política de transferencia manual de la sucursal: `false` = prohibida (Mercado Pago
+ * obligatorio), `true` = permitida, `null` = nunca consultado. Misma regla que `readMercadoPagoEnabled`.
+ */
+export function readManualTransferAllowed(deviceId: string | null, branchId: string | null, storage: StorageLike | null = defaultStorage()): boolean | null {
+  if (!deviceId || !branchId || !storage) return null;
+  try {
+    const parsed = JSON.parse(storage.getItem(KEY) ?? "null") as Partial<Memory> | null;
+    if (parsed?.deviceId !== deviceId || parsed.branchId !== branchId || typeof parsed.manualTransferAllowed !== "boolean") return null;
+    return parsed.manualTransferAllowed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeMercadoPagoEnabled(
+  deviceId: string, branchId: string, enabled: boolean, manualTransferAllowed = true, storage: StorageLike | null = defaultStorage()
+): void {
   if (!storage) return;
   try {
-    storage.setItem(KEY, JSON.stringify({ deviceId, branchId, enabled } satisfies Memory));
+    storage.setItem(KEY, JSON.stringify({ deviceId, branchId, enabled, manualTransferAllowed } satisfies Memory));
   } catch {
     // Almacenamiento bloqueado/lleno: simplemente no se recuerda.
   }

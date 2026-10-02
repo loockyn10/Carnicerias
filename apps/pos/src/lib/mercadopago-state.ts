@@ -14,6 +14,8 @@ export interface MercadoPagoOrderState {
   confirmedAmountCents: number | null;
   amountMismatch: boolean;
   expiresAt: string | null;
+  /** Estado de la VENTA en el servidor (PENDING_PAYMENT / COMPLETED / CANCELLED); null si aún no llegó. */
+  saleStatus: string | null;
 }
 
 export type MercadoPagoActionResult =
@@ -50,7 +52,8 @@ export function normalizeOrderState(value: unknown): MercadoPagoOrderState | nul
     expectedAmountCents: numberOrNull(record.expectedAmountCents),
     confirmedAmountCents: numberOrNull(record.confirmedAmountCents),
     amountMismatch: record.amountMismatch === true,
-    expiresAt: typeof record.expiresAt === "string" ? record.expiresAt : null
+    expiresAt: typeof record.expiresAt === "string" ? record.expiresAt : null,
+    saleStatus: typeof record.saleStatus === "string" ? record.saleStatus : null
   };
 }
 
@@ -93,4 +96,18 @@ export function isPastExpiry(order: MercadoPagoOrderState | null, nowMs: number)
   if (!order?.expiresAt) return false;
   const expires = Date.parse(order.expiresAt);
   return Number.isFinite(expires) && nowMs > expires;
+}
+
+/** Texto corto del estado de cobro de una venta local (comprobantes del POS). El dinero NO cuenta hasta CONFIRMED. */
+export function describeLocalPayment(provider: string | null, verificationStatus: string | null): { label: string; tone: "ok" | "wait" | "bad" } | null {
+  if (provider !== "MERCADOPAGO") return null;
+  switch (verificationStatus) {
+    case "CONFIRMED": return { label: "Mercado Pago · pago confirmado", tone: "ok" };
+    case "CANCELLED": return { label: "Mercado Pago · cobro cancelado (venta anulada)", tone: "bad" };
+    case "EXPIRED": return { label: "Mercado Pago · cobro vencido (venta anulada)", tone: "bad" };
+    case "MISMATCH": return { label: "Mercado Pago · monto distinto (avisar al administrador)", tone: "bad" };
+    case "REFUNDED": return { label: "Mercado Pago · pago devuelto", tone: "bad" };
+    case "ERROR": return { label: "Mercado Pago · cobro con error (pendiente)", tone: "wait" };
+    default: return { label: "Mercado Pago · pago pendiente", tone: "wait" };
+  }
 }

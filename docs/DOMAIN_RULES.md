@@ -14,7 +14,9 @@ Este archivo contiene reglas de negocio que no deben reinterpretarse durante una
 
 ## Estados de venta
 
-Sólo las ventas `COMPLETED` se consideran activas para métricas comerciales y consumo de stock. Una anulación conserva la venta y el pago y compensa stock mediante movimientos `RETURN`; no borra historia.
+Sólo las ventas `COMPLETED` se consideran activas para métricas comerciales y recaudación. Una anulación conserva la venta y el pago y compensa stock mediante movimientos `RETURN`; no borra historia.
+
+`PENDING_PAYMENT` (D-055): venta Mercado Pago cuyo pago todavía no fue acreditado. **No es dinero cobrado**: no suma a rendiciones, dashboard, analítica ni reposición, pero su stock queda reservado (descontado). Pasa a `COMPLETED` cuando el backend confirma la acreditación y a `CANCELLED` (stock restituido una sola vez) si el cobro se cancela o vence sin acreditar.
 
 ## Formación de precio
 
@@ -49,10 +51,11 @@ El nombre técnico histórico sigue conteniendo `cash_discount` (`organization_c
 ## Pagos verificados (Mercado Pago, D-054)
 
 - Una venta Mercado Pago se registra como `TRANSFER` + `provider = MERCADOPAGO`: **mismo precio que efectivo/transferencia** (sin recargo de tarjeta; ver D-054 sobre la confirmación pendiente).
+- **Una venta Mercado Pago no está cobrada hasta `CONFIRMED`** (D-055): nace `PENDING_PAYMENT` y sólo la acreditación confirmada por el backend la completa; `CANCELLED`/`EXPIRED` sin acreditación la anulan. El polling del POS alcanza; el webhook es complementario y ambos aplican la misma transición.
 - Estado de verificación (`PENDING` → `CONFIRMED` | `EXPIRED` | `CANCELLED` | `ERROR` | `MISMATCH` | `REFUNDED`) lo decide **sólo el backend** tras consultar a Mercado Pago. Ninguna acción de empleado, POS o Admin lo marca como verificado.
 - "Confirmado" exige acreditación real y que lo acreditado = lo esperado = total validado de la venta.
 - El POS nunca muestra "Pago confirmado" antes de esa confirmación. Una venta Mercado Pago no acreditada no se oculta: queda como `NO_ACCREDITATION` (con hora y monto) para el cierre y la revisión de cámaras.
-- Una transferencia manual (sin proveedor) sigue siendo un medio no verificable (`NOT_REQUIRED`); no se migra el historial.
+- Una transferencia manual (sin proveedor) sigue siendo un medio no verificable (`NOT_REQUIRED`); no se migra el historial. **En una sucursal con Mercado Pago habilitado y `require_verified_digital_payments`, la transferencia manual no existe** (ni en el POS ni en el servidor); en sucursales sin Mercado Pago (Central) se mantiene.
 
 ## Orden de ajustes
 

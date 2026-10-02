@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { describePaymentState, formatCurrency, type PaymentVerificationStatus } from "@carnicerias/business-logic";
+import { describePaymentState, formatCurrency, type MercadoPagoOutcome, type PaymentVerificationStatus } from "@carnicerias/business-logic";
 
 import {
   cancelMercadoPagoOrder,
@@ -21,10 +21,12 @@ interface MercadoPagoPanelProps {
   context: MercadoPagoContext;
   /** La sesión de Supabase es la offline en caché: no hay JWT real para llamar al backend. */
   sessionOffline: boolean;
-  /** Cierra el panel. NO cancela el cobro: la venta queda pendiente de acreditación. */
+  /** Cierra el panel. NO cancela el cobro: si sigue esperando, la venta queda en "MP pendientes". */
   onClose: () => void;
   /** Cada vez que el servidor informa un estado distinto, para reflejarlo en el caché local. */
   onVerification: (saleId: string, status: PaymentVerificationStatus) => void;
+  /** El cobro TERMINÓ (pagado, sin acreditación o con algo que revisar): el padre avisa y refresca stock/sync. */
+  onSettled: (saleId: string, outcome: Exclude<MercadoPagoOutcome, "WAITING">, title: string) => void;
 }
 
 function useBrowserOnline(): boolean {
@@ -48,37 +50,58 @@ const TONE_CLASSES = {
   error: "border-red-500 bg-red-950 text-red-100"
 } as const;
 
+/** Tras un pago confirmado el panel se cierra solo; tras un cobro vencido da unos segundos para leerlo. */
+const AUTO_CLOSE_PAID_MS = 3_500;
+const AUTO_CLOSE_NOT_PAID_MS = 4_500;
+
 /**
  * Cobro con Mercado Pago de una venta YA registrada. Sólo muestra "Pago confirmado" cuando el
- * backend lo confirmó (acreditación consultada a Mercado Pago); mientras tanto "Esperando pago…",
- * "Pago pendiente" o el estado final (vencido/cancelado/error). Cerrar el panel no cancela nada.
+ * backend lo confirmó (acreditación consultada a Mercado Pago); mientras tanto "Esperando pago…".
+ * Cerrar el panel mientras se espera NO cancela nada (queda en "MP pendientes"); "Cancelar cobro"
+ * termina el cobro: si Mercado Pago confirma que no hubo acreditación la venta queda anulada y el
+ * panel se cierra solo (ya no hay nada pendiente). Un cobro vencido o cancelado es terminal: no se
+ * ofrece "generar cobro nuevo".
  */
-export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVerification }: MercadoPagoPanelProps) {
+export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVerification, onSettled }: MercadoPagoPanelProps) {
   const browserOnline = useBrowserOnline();
   const online = browserOnline && !sessionOffline;
   const [order, setOrder] = useState<MercadoPagoOrderState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // El servidor ya no admite un cobro para esta venta (está anulada): es un final "sin acreditación".
+  const [notPayable, setNotPayable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const inFlight = useRef(false);
   const autoStarted = useRef(false);
   const lastReported = useRef<PaymentVerificationStatus | null>(null);
+  const settledOutcome = useRef<MercadoPagoOutcome | null>(null);
+  const cancelRequested = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
+  const onVerificationRef = useRef(onVerification);
+  onVerificationRef.current = onVerification;
   // Primitivos (no el objeto `context`): callbacks estables aunque el padre re-renderice.
   const { deviceId, operatorProfileId, operatorToken } = context;
+
+  const report = useCallback((verification: PaymentVerificationStatus) => {
+    if (lastReported.current === verification) return;
+    lastReported.current = verification;
+    onVerificationRef.current(sale.saleId, verification);
+  }, [sale.saleId]);
 
   const apply = useCallback((result: MercadoPagoActionResult) => {
     if (result.order) setOrder(result.order);
     setFailure(result.ok ? null : result.message);
-    if (result.order) {
-      const verification = deriveLocalVerification(result.order);
-      if (lastReported.current !== verification) {
-        lastReported.current = verification;
-        onVerification(sale.saleId, verification);
-      }
+    if (!result.ok && result.code === "SALE_NOT_PAYABLE") {
+      // La venta ya está anulada en el servidor: terminó sin acreditación.
+      setNotPayable(true);
+      report("CANCELLED");
+      return;
     }
-  }, [onVerification, sale.saleId]);
+    if (result.order) report(deriveLocalVerification(result.order));
+  }, [report]);
 
   // Una sola operación a la vez (poll / alta / reintento / cancelación).
   const run = useCallback(async (action: () => Promise<MercadoPagoActionResult>) => {
@@ -103,17 +126,19 @@ export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVer
   // existente si ya hay una. Si falla, el reintento es explícito (botón), nunca un bucle.
   useEffect(() => {
     if (!online) { autoStarted.current = false; return; }
-    if (!order && !autoStarted.current) {
+    if (!order && !autoStarted.current && !notPayable) {
       autoStarted.current = true;
       void start(false);
     }
-  }, [online, order, start]);
+  }, [online, order, notPayable, start]);
 
-  const view = describePaymentState({
-    status: order?.status ?? null,
-    verification: order?.amountMismatch ? "MISMATCH" : order?.verificationStatus ?? null,
-    online
-  });
+  const view = notPayable
+    ? describePaymentState({ status: null, verification: "CANCELLED", online })
+    : describePaymentState({
+        status: order?.status ?? null,
+        verification: order?.amountMismatch ? "MISMATCH" : order?.verificationStatus ?? null,
+        online
+      });
 
   // Consulta periódica mientras se espera. Un REQUESTING se re-intenta con el MISMO alta (misma idempotency key).
   useEffect(() => {
@@ -126,15 +151,50 @@ export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVer
     return () => window.clearInterval(timer);
   }, [online, view.polling, order, start, run, deviceId, sale.saleId]);
 
-  // Pago confirmado: cierre automático.
-  const confirmed = view.tone === "success";
+  // El cobro terminó: se avisa UNA vez y el panel se cierra solo (inmediato tras una cancelación
+  // voluntaria; con unos segundos para leerlo si venció o si ya estaba anulada). Un monto distinto o
+  // una devolución quedan a la vista hasta que el cajero toque "Listo".
+  const outcome = view.outcome;
   useEffect(() => {
-    if (!confirmed) return;
-    const timer = window.setTimeout(() => { onCloseRef.current(); }, 3_500);
+    if (outcome === "WAITING") return;
+    if (settledOutcome.current !== outcome) {
+      settledOutcome.current = outcome;
+      onSettledRef.current(sale.saleId, outcome, view.title);
+    }
+    if (outcome === "NEEDS_ATTENTION") return;
+    const delay = outcome === "PAID" ? AUTO_CLOSE_PAID_MS : cancelRequested.current ? 0 : AUTO_CLOSE_NOT_PAID_MS;
+    const timer = window.setTimeout(() => { onCloseRef.current(); }, delay);
     return () => window.clearTimeout(timer);
-  }, [confirmed]);
+  }, [outcome, sale.saleId, view.title]);
+
+  async function cancelCharge() {
+    cancelRequested.current = true;
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      const result = await cancelMercadoPagoOrder(deviceId, sale.saleId);
+      apply(result);
+      const after = describePaymentState({
+        status: result.order?.status ?? null,
+        verification: result.order?.amountMismatch ? "MISMATCH" : result.order?.verificationStatus ?? null,
+        online: true
+      });
+      if (result.ok && after.outcome === "WAITING") {
+        // Mercado Pago no confirmó la cancelación (y tampoco el pago): no se anula nada a ciegas.
+        cancelRequested.current = false;
+        setFailure("Mercado Pago no confirmó la cancelación. Probá de nuevo en unos segundos.");
+      } else if (!result.ok) {
+        cancelRequested.current = false;
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
 
   const expiredButUnconfirmed = view.polling && isPastExpiry(order, now);
+  const finished = outcome !== "WAITING";
 
   return (
     <div className="pos-modal-backdrop fixed inset-0 z-[70] grid place-items-center bg-black/85 p-4" role="dialog" aria-modal="true" aria-labelledby="mp-title">
@@ -147,8 +207,8 @@ export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVer
           <p className="mt-2 text-sm">{expiredButUnconfirmed ? "El tiempo del cobro terminó; verificando con Mercado Pago…" : view.detail}</p>
         </div>
 
-        {failure && !confirmed ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{failure}</p> : null}
-        {!online && !confirmed ? <p className="mt-4 text-sm text-amber-300">Sin conexión. La venta quedó registrada; el pago se verificará al reconectar.</p> : null}
+        {failure && outcome !== "PAID" && outcome !== "NOT_PAID" ? <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-200">{failure}</p> : null}
+        {!online && !finished ? <p className="mt-4 text-sm text-amber-300">Sin conexión. La venta quedó registrada; el pago se verificará al reconectar.</p> : null}
 
         <div className="mt-6 grid gap-3">
           {view.canRetry && online ? (
@@ -157,15 +217,15 @@ export function MercadoPagoPanel({ sale, context, sessionOffline, onClose, onVer
             </button>
           ) : null}
           {view.canCancel ? (
-            <button className="rounded-xl border border-stone-600 px-5 py-3 font-bold hover:bg-stone-800 disabled:opacity-50" disabled={busy || !online} onClick={() => void run(() => cancelMercadoPagoOrder(deviceId, sale.saleId))}>
-              Cancelar cobro
+            <button className="rounded-xl border border-stone-600 px-5 py-3 font-bold hover:bg-stone-800 disabled:opacity-50" disabled={busy || !online} onClick={() => void cancelCharge()}>
+              {view.cancelLabel}
             </button>
           ) : null}
           <button className="rounded-xl border border-stone-700 px-5 py-3 font-bold text-stone-300 hover:bg-stone-800" onClick={onClose}>
-            {confirmed ? "Listo" : "Cerrar (el cobro queda pendiente)"}
+            {finished ? "Listo" : "Cerrar y continuar luego"}
           </button>
         </div>
-        {!confirmed ? <p className="mt-4 text-xs text-stone-500">La venta ya está registrada. Si el pago no se acredita, el administrador la verá como “sin acreditación”.</p> : null}
+        {!finished ? <p className="mt-4 text-xs text-stone-500">La venta ya está registrada, pero no cuenta como cobrada hasta que Mercado Pago acredite el pago. Si cerrás, la retomás desde “MP pendientes”.</p> : null}
       </section>
     </div>
   );

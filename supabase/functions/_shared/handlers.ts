@@ -120,6 +120,10 @@ function rpcFailure(result: RpcResult): Response {
   if (result.errorMessage === "MP_NOT_CONFIGURED") {
     return failure(409, "MP_NOT_CONFIGURED", "Mercado Pago no está habilitado para esta sucursal.");
   }
+  if (result.errorMessage === "SALE_NOT_PAYABLE") {
+    // La venta ya está anulada (o no es Mercado Pago): no admite un cobro nuevo.
+    return failure(409, "SALE_NOT_PAYABLE", "La venta ya no admite un cobro con Mercado Pago.");
+  }
   if (result.errorCode === "28000" || result.status === 401) return failure(401, "UNAUTHENTICATED", "Sesión no válida.");
   if (result.errorCode === "42501" || result.status === 403) return failure(403, "FORBIDDEN", "No autorizado para este dispositivo u operador.");
   if (result.errorCode === "22023" || result.errorCode === "23514") {
@@ -198,10 +202,20 @@ function publicOrder(order: unknown): JsonObject | null {
     confirmedAmountCents: o.confirmedAmountCents ?? null,
     amountMismatch: o.amountMismatch ?? false,
     expiresAt: o.expiresAt ?? null,
-    confirmedAt: o.confirmedAt ?? null
+    confirmedAt: o.confirmedAt ?? null,
+    // Estado de la VENTA en el servidor (PENDING_PAYMENT / COMPLETED / CANCELLED); null si todavía no llegó.
+    saleStatus: o.saleStatus ?? null
   };
 }
 
+/**
+ * ÚNICA puerta por la que un estado de Mercado Pago entra al sistema: la usan el polling del POS
+ * (mp-order-status), la cancelación (mp-cancel-order) y el webhook (mp-webhook). Todos terminan en la
+ * RPC `mp_apply_order_state`, que resuelve la transición de la orden, del pago y de la VENTA
+ * (PENDING_PAYMENT -> COMPLETED | CANCELLED, con el stock) de forma atómica e idempotente. `source`
+ * sólo se anota para auditoría: nunca cambia el resultado. El webhook es complementario: sin él, el
+ * polling alcanza.
+ */
 async function applyMpOrder(deps: HandlerDeps, mpOrder: MercadoPagoOrder, source: "POLL" | "WEBHOOK" | "CANCEL"): Promise<{ result: RpcResult; found: boolean }> {
   const interpreted = interpretOrder(mpOrder);
   const result = await rpc(deps, "mp_apply_order_state", {
@@ -355,8 +369,11 @@ export async function handleOrderStatus(req: Request, deps: HandlerDeps): Promis
 }
 
 // ---------------------------------------------------------------------------
-// POST mp-cancel-order — el empleado cancela un cobro pendiente (no borra la venta)
+// POST mp-cancel-order — el empleado cancela el cobro de una venta que no se acreditó
 // ---------------------------------------------------------------------------
+// Resultado: si Mercado Pago confirma que NO hubo acreditación, la venta queda anulada y su stock
+// restituido (lo resuelve mp_apply_order_state / mp_abandon_unpaid_sale, una sola vez). Si en esa
+// carrera el pago ya había entrado, CONFIRMED gana: la venta no se anula.
 
 export async function handleCancelOrder(req: Request, deps: HandlerDeps): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -370,20 +387,36 @@ export async function handleCancelOrder(req: Request, deps: HandlerDeps): Promis
   if (!status.ok) return rpcFailure(status);
   const order = asObject(status.data);
   const mpOrderId = typeof order?.mpOrderId === "string" ? order.mpOrderId : null;
-  if (!order || !mpOrderId || order.status !== "CREATED") {
+
+  // Cobro vivo en Mercado Pago: se intenta cancelar y SIEMPRE se re-consulta (si ya estaba pagado, la
+  // cancelación falla y la consulta lo refleja como CONFIRMED, que gana).
+  if (order && mpOrderId && order.status === "CREATED") {
+    await mpRequest(deps, "POST", `/v1/orders/${encodeURIComponent(mpOrderId)}/cancel`, { idempotencyKey: crypto.randomUUID() });
+    const fetched = await mpRequest(deps, "GET", `/v1/orders/${encodeURIComponent(mpOrderId)}`);
+    if (!fetched.ok || !fetched.body) return failure(502, "MP_UNAVAILABLE", "No se pudo confirmar la cancelación con Mercado Pago.", { order: publicOrder(order) });
+    await applyMpOrder(deps, fetched.body as MercadoPagoOrder, "CANCEL");
+    const after = await loadStatus(deps, jwt, body.deviceId, body.saleId);
+    if (!after.ok) return rpcFailure(after);
+    const finalOrder = asObject(after.data);
+    return jsonResponse(200, { ok: true, order: publicOrder(finalOrder), cancelled: finalOrder?.status === "CANCELLED" });
+  }
+
+  // Cobro en alta (REQUESTING) o ya pagado (CONFIRMED): nada que cancelar acá; CONFIRMED manda.
+  if (order && (order.status === "REQUESTING" || order.status === "CONFIRMED")) {
     return jsonResponse(200, { ok: true, order: publicOrder(order), cancelled: false });
   }
 
-  // El estado final lo decide MP: se intenta cancelar y SIEMPRE se re-consulta (si ya estaba
-  // pagada, la cancelación falla y la consulta lo refleja como CONFIRMED).
-  await mpRequest(deps, "POST", `/v1/orders/${encodeURIComponent(mpOrderId)}/cancel`, { idempotencyKey: crypto.randomUUID() });
-  const fetched = await mpRequest(deps, "GET", `/v1/orders/${encodeURIComponent(mpOrderId)}`);
-  if (!fetched.ok || !fetched.body) return failure(502, "MP_UNAVAILABLE", "No se pudo confirmar la cancelación con Mercado Pago.", { order: publicOrder(order) });
-  await applyMpOrder(deps, fetched.body as MercadoPagoOrder, "CANCEL");
+  // Sin cobro vivo (nunca se generó, falló el alta, o ya terminó vencido/cancelado): no hay nada que
+  // cancelar en Mercado Pago, sólo hay que cerrar la venta sin acreditación (idempotente).
+  const abandoned = await rpc(deps, "mp_abandon_unpaid_sale", { p_device_id: body.deviceId, p_sale_id: body.saleId }, { jwt });
+  if (!abandoned.ok) return rpcFailure(abandoned);
+  const outcome = asObject(abandoned.data);
+  if (outcome?.reason === "SALE_NOT_SYNCED") {
+    return failure(409, "SALE_NOT_SYNCED", "La venta todavía no llegó al servidor. Esperá unos segundos y reintentá.", { order: publicOrder(order) });
+  }
   const after = await loadStatus(deps, jwt, body.deviceId, body.saleId);
   if (!after.ok) return rpcFailure(after);
-  const finalOrder = asObject(after.data);
-  return jsonResponse(200, { ok: true, order: publicOrder(finalOrder), cancelled: finalOrder?.status === "CANCELLED" });
+  return jsonResponse(200, { ok: true, order: publicOrder(asObject(after.data)), cancelled: outcome?.abandoned === true });
 }
 
 // ---------------------------------------------------------------------------

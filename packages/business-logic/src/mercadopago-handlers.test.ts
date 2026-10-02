@@ -186,6 +186,14 @@ describe("mp-create-order", () => {
     expect(mpCalls()).toHaveLength(0);
   });
 
+  it("refuses (409 SALE_NOT_PAYABLE) a new charge for a sale that was already annulled", async () => {
+    route(`POST ${rpcPath("mp_prepare_order")}`, { status: 400, body: { code: "P0001", message: "SALE_NOT_PAYABLE" } });
+    const response = await handleCreateOrder(request("mp-create-order", { ...createBody, retry: true }), deps());
+    expect(response.status).toBe(409);
+    expect((await response.json() as { code: string }).code).toBe("SALE_NOT_PAYABLE");
+    expect(mpCalls()).toHaveLength(0);
+  });
+
   it("rejects bad input before touching anything", async () => {
     expect((await handleCreateOrder(request("mp-create-order", createBody, { jwt: null }), deps())).status).toBe(401);
     expect((await handleCreateOrder(request("mp-create-order", { ...createBody, amountCents: -5 }), deps())).status).toBe(400);
@@ -291,6 +299,71 @@ describe("mp-cancel-order", () => {
     const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean };
     expect(json.cancelled).toBe(false);
     expect(mpCalls()).toHaveLength(0);
+    expect(rpcCalls("mp_abandon_unpaid_sale")).toHaveLength(0);
+  });
+
+  it("reports the annulled sale to the POS after a successful cancellation (so it can close the panel)", async () => {
+    let reads = 0;
+    route(`POST ${rpcPath("mp_get_order_status")}`, () => ({ status: 200, body: reads++ === 0 ? created : { ...created, status: "CANCELLED", verificationStatus: "CANCELLED", saleStatus: "CANCELLED" } }));
+    route(`POST MP/v1/orders/${MP_ORDER}/cancel`, { status: 200, body: { status: "canceled" } });
+    route(`GET MP/v1/orders/${MP_ORDER}`, { status: 200, body: { id: MP_ORDER, external_reference: SALE, status: "canceled", status_detail: "canceled" } });
+    route(`POST ${rpcPath("mp_apply_order_state")}`, { status: 200, body: { found: true } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean; order: { status: string; verificationStatus: string; saleStatus: string } };
+    expect(json.cancelled).toBe(true);
+    expect(json.order).toMatchObject({ status: "CANCELLED", verificationStatus: "CANCELLED", saleStatus: "CANCELLED" });
+  });
+
+  it("an order still CREATED after the attempt (Mercado Pago did not cancel) is NOT reported as cancelled", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: created });
+    route(`POST MP/v1/orders/${MP_ORDER}/cancel`, { status: 500 });
+    route(`GET MP/v1/orders/${MP_ORDER}`, { status: 200, body: { id: MP_ORDER, external_reference: SALE, status: "created", status_detail: "created" } });
+    route(`POST ${rpcPath("mp_apply_order_state")}`, { status: 200, body: { found: true } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean; order: { status: string } };
+    expect(json.cancelled).toBe(false);
+    expect(json.order.status).toBe("CREATED");
+  });
+
+  it("with no live charge (failed creation) the unpaid sale is annulled in the backend, never at Mercado Pago", async () => {
+    let reads = 0;
+    route(`POST ${rpcPath("mp_get_order_status")}`, () => ({ status: 200, body: reads++ === 0 ? { ...created, status: "ERROR", mpOrderId: null } : { saleId: SALE, status: null, verificationStatus: "CANCELLED", saleStatus: "CANCELLED" } }));
+    route(`POST ${rpcPath("mp_abandon_unpaid_sale")}`, { status: 200, body: { saleId: SALE, abandoned: true, changed: true, saleStatus: "CANCELLED" } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean; order: { saleStatus: string } };
+    expect(json.cancelled).toBe(true);
+    expect(json.order.saleStatus).toBe("CANCELLED");
+    expect(mpCalls()).toHaveLength(0);
+    // The device JWT authorizes it (the RPC validates device/branch), not the service key.
+    expect(rpcCalls("mp_abandon_unpaid_sale")[0]?.headers.authorization).toBe("Bearer user-jwt");
+  });
+
+  it("is idempotent for an already finished charge: cancelling again changes nothing and still answers 'cancelled'", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: { ...created, status: "CANCELLED", verificationStatus: "CANCELLED", saleStatus: "CANCELLED" } });
+    route(`POST ${rpcPath("mp_abandon_unpaid_sale")}`, { status: 200, body: { saleId: SALE, abandoned: true, changed: false, saleStatus: "CANCELLED" } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean };
+    expect(json.cancelled).toBe(true);
+    expect(mpCalls()).toHaveLength(0);
+  });
+
+  it("does not annul a sale whose charge is still being created (it might be paid any moment)", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: { ...created, status: "REQUESTING", mpOrderId: null } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean };
+    expect(json.cancelled).toBe(false);
+    expect(rpcCalls("mp_abandon_unpaid_sale")).toHaveLength(0);
+    expect(mpCalls()).toHaveLength(0);
+  });
+
+  it("asks the cashier to wait when the sale has not reached the server yet", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: null });
+    route(`POST ${rpcPath("mp_abandon_unpaid_sale")}`, { status: 200, body: { saleId: SALE, abandoned: false, reason: "SALE_NOT_SYNCED" } });
+    const response = await handleCancelOrder(request("mp-cancel-order", body), deps());
+    expect(response.status).toBe(409);
+    expect((await response.json() as { code: string }).code).toBe("SALE_NOT_SYNCED");
+  });
+
+  it("never reports a sale as cancelled when the backend refuses to abandon it (paid / not pending)", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: { ...created, status: "ERROR", mpOrderId: null } });
+    route(`POST ${rpcPath("mp_abandon_unpaid_sale")}`, { status: 200, body: { saleId: SALE, abandoned: false, reason: "NOT_PENDING", saleStatus: "COMPLETED" } });
+    const json = await (await handleCancelOrder(request("mp-cancel-order", body), deps())).json() as { cancelled: boolean };
+    expect(json.cancelled).toBe(false);
   });
 });
 
@@ -356,6 +429,39 @@ describe("mp-webhook", () => {
     const [first, second] = rpcCalls("mp_apply_order_state");
     expect(first?.body).toEqual(second?.body);
     expect(rpcCalls("mp_record_webhook_event")[0]?.body).toMatchObject({ p_dedupe_key: `order.processed|${MP_ORDER}|${requestId}` });
+  });
+
+  it("applies exactly the same transition as polling: same RPC, same arguments, only the source differs", async () => {
+    const orders: Record<string, unknown>[] = [
+      accreditedOrder,
+      { id: MP_ORDER, external_reference: SALE, status: "canceled", status_detail: "canceled", total_amount: "75000.00" },
+      { id: MP_ORDER, external_reference: SALE, status: "expired", status_detail: "expired", total_amount: "75000.00" },
+      { id: MP_ORDER, external_reference: SALE, status: "created", status_detail: "created", total_amount: "75000.00" }
+    ];
+    for (const mpOrder of orders) {
+      calls = []; routes = new Map();
+      route(`GET MP/v1/orders/${MP_ORDER}`, { status: 200, body: mpOrder });
+      route(`POST ${rpcPath("mp_apply_order_state")}`, { status: 200, body: { found: true } });
+      route(`POST ${rpcPath("mp_record_webhook_event")}`, { status: 200, body: 1 });
+      route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: preparedOrder({ status: "CREATED", mpOrderId: MP_ORDER, needsMpCall: false, lastCheckedAt: "2026-10-01T17:00:00Z" }) });
+      await handleWebhook(webhook(), deps());
+      await handleOrderStatus(request("mp-order-status", { deviceId: DEVICE, saleId: SALE }), deps());
+      const applied = rpcCalls("mp_apply_order_state").map((call) => call.body as Record<string, unknown>);
+      expect(applied).toHaveLength(2);
+      const { p_source: webhookSource, ...webhookArgs } = applied[0] ?? {};
+      const { p_source: pollSource, ...pollArgs } = applied[1] ?? {};
+      expect(webhookSource).toBe("WEBHOOK");
+      expect(pollSource).toBe("POLL");
+      expect(webhookArgs).toEqual(pollArgs);
+    }
+  });
+
+  it("works without the webhook at all: polling alone confirms, with no signature or secret involved", async () => {
+    route(`POST ${rpcPath("mp_get_order_status")}`, { status: 200, body: preparedOrder({ status: "CREATED", mpOrderId: MP_ORDER, needsMpCall: false, lastCheckedAt: "2026-10-01T17:00:00Z" }) });
+    route(`GET MP/v1/orders/${MP_ORDER}`, { status: 200, body: accreditedOrder });
+    route(`POST ${rpcPath("mp_apply_order_state")}`, { status: 200, body: { found: true } });
+    await handleOrderStatus(request("mp-order-status", { deviceId: DEVICE, saleId: SALE }), deps({ MERCADOPAGO_WEBHOOK_SECRET: undefined }));
+    expect(rpcCalls("mp_apply_order_state")[0]?.body).toMatchObject({ p_new_status: "CONFIRMED", p_source: "POLL" });
   });
 
   it("acknowledges (200) orders that are not ours, so Mercado Pago stops retrying", async () => {

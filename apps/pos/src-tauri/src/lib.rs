@@ -24,6 +24,9 @@ const BRANCH_STOCK_PROJECTION_SCHEMA: &str = include_str!("../migrations/012_bra
 const PRODUCT_BARCODES_SCHEMA: &str = include_str!("../migrations/013_product_barcodes.sql");
 const PAYMENT_VERIFICATION_SCHEMA: &str = include_str!("../migrations/014_payment_verification.sql");
 
+/// Mensaje (y código estable) cuando se intenta registrar una Transferencia manual donde Mercado Pago es obligatorio.
+const MANUAL_TRANSFER_NOT_ALLOWED: &str = "MANUAL_TRANSFER_NOT_ALLOWED: la transferencia manual no está permitida en esta sucursal; cobrá con Mercado Pago.";
+
 struct DatabaseState(Mutex<Connection>);
 struct OperatorSessionState(AtomicBool);
 
@@ -285,6 +288,10 @@ struct RecentLocalSale {
     total_weight_grams: String,
     completed_at: String,
     synced_at: Option<String>,
+    /// Proveedor que verifica el cobro (hoy sólo "MERCADOPAGO"); None = medio manual.
+    provider: Option<String>,
+    /// Estado de verificación cacheado del pago (NOT_REQUIRED para medios manuales).
+    verification_status: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -896,6 +903,11 @@ fn local_branch_stock_inner(connection: &Connection, branch_id: &str) -> Result<
         quantities.insert(product_id, quantity);
     }
 
+    // A Mercado Pago sale that ended without accreditation (cancelled / expired) is annulled by the
+    // server and its stock goes back to the ledger, so it must not hold stock here either: excluded
+    // by construction (exactly once, no second local ledger). If the snapshot already contains its
+    // SALE movement but not yet the server's RETURN, the figure is briefly conservative until the
+    // next snapshot (the POS syncs right after a cancellation).
     // Sales this device made that the snapshot cannot contain: still unsynced, or synced after the
     // snapshot was applied (the server figure predates them). Sales synced before the snapshot are
     // already in the server sum, so counting them again would double-subtract. julianday() (not a
@@ -905,6 +917,10 @@ fn local_branch_stock_inner(connection: &Connection, branch_id: &str) -> Result<
         .prepare(
             "select product_id, sum(quantity_grams) from local_stock_movements
              where branch_id = ?1 and (synced_at is null or julianday(synced_at) > julianday(?2))
+               and sale_id not in (
+                 select sale_id from local_payments
+                 where provider is not null and verification_status in ('CANCELLED', 'EXPIRED')
+               )
              group by product_id",
         )
         .map_err(|error| error.to_string())?;
@@ -1159,6 +1175,14 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
     }
     if sale.items.len() != sale.stock_movements.len() {
         return Err("Every sale item needs one stock movement".to_string());
+    }
+    // Una sucursal con Mercado Pago obligatorio no admite Transferencia manual: la política la informó
+    // el servidor (`mp_get_branch_config`) y se recuerda en SQLite para valer también sin Internet. No
+    // es sólo un botón oculto: la venta ni siquiera se registra (y el servidor la rechazaría igual).
+    if sale.payment.method == "TRANSFER" && sale.payment.provider.is_none()
+        && metadata(transaction, "manual_transfer_blocked_branch")?.as_deref() == Some(sale.branch_id.as_str())
+    {
+        return Err(MANUAL_TRANSFER_NOT_ALLOWED.to_string());
     }
 
     let authorized: bool = transaction
@@ -1451,11 +1475,16 @@ fn confirm_local_sale(state: State<'_, DatabaseState>, sale: OfflineSalePayload)
 #[tauri::command]
 fn get_recent_local_sales(state: State<'_, DatabaseState>, limit: i64) -> Result<Vec<RecentLocalSale>, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    recent_local_sales(&connection, limit)
+}
+
+fn recent_local_sales(connection: &Connection, limit: i64) -> Result<Vec<RecentLocalSale>, String> {
     let safe_limit = limit.clamp(1, 25);
     let mut statement = connection
         .prepare(
-            "select id, status, total_cents, total_weight_grams, completed_at, synced_at
-             from local_sales order by completed_at desc, id desc limit ?1",
+            "select s.id, s.status, s.total_cents, s.total_weight_grams, s.completed_at, s.synced_at, p.provider, p.verification_status
+             from local_sales s left join local_payments p on p.sale_id = s.id
+             order by s.completed_at desc, s.id desc limit ?1",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1467,6 +1496,8 @@ fn get_recent_local_sales(state: State<'_, DatabaseState>, limit: i64) -> Result
                 total_weight_grams: row.get::<_, i64>(3)?.to_string(),
                 completed_at: row.get(4)?,
                 synced_at: row.get(5)?,
+                provider: row.get(6)?,
+                verification_status: row.get(7)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -1482,16 +1513,22 @@ struct PendingProviderPayment {
     verification_status: String,
 }
 
-/// Ventas locales declaradas Mercado Pago que todavía no tienen el pago confirmado (más recientes
-/// primero). Permite retomar un cobro tras un reinicio. Es un caché: el servidor decide.
+/// Cobros Mercado Pago que el cajero todavía puede RETOMAR (más recientes primero): sólo los que siguen
+/// esperando (`PENDING`) o fallaron técnicamente y se pueden reintentar (`ERROR`). Un cobro terminado
+/// (CONFIRMED, CANCELLED, EXPIRED) o que resuelve el administrador (MISMATCH, REFUNDED) NUNCA figura.
+/// Es un caché: el servidor decide. `include_stale` también trae los de más de 12 h (para que el POS
+/// los reconcilie contra el servidor al arrancar); el aviso de pantalla no los muestra.
 #[tauri::command]
-fn get_pending_provider_payments(state: State<'_, DatabaseState>, limit: i64) -> Result<Vec<PendingProviderPayment>, String> {
+fn get_pending_provider_payments(state: State<'_, DatabaseState>, limit: i64, include_stale: bool) -> Result<Vec<PendingProviderPayment>, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
-    // Sólo las de las últimas 12 h: el aviso del cajero no puede quedar clavado para siempre por
-    // una venta sin acreditar (esas las ve el administrador en la conciliación del servidor).
-    let cutoff: String = connection
-        .query_row("select strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')", [], |row| row.get(0))
-        .map_err(|error| error.to_string())?;
+    let cutoff: String = if include_stale {
+        "0000-01-01T00:00:00Z".to_string()
+    } else {
+        // Sólo las de las últimas 12 h: el aviso del cajero no puede quedar clavado para siempre.
+        connection
+            .query_row("select strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?
+    };
     pending_provider_payments(&connection, limit, &cutoff)
 }
 
@@ -1501,7 +1538,7 @@ fn pending_provider_payments(connection: &Connection, limit: i64, completed_sinc
         .prepare(
             "select s.id, s.total_cents, s.completed_at, p.verification_status
              from local_payments p join local_sales s on s.id = p.sale_id
-             where p.provider = 'MERCADOPAGO' and p.verification_status not in ('CONFIRMED', 'REFUNDED')
+             where p.provider = 'MERCADOPAGO' and p.verification_status in ('PENDING', 'ERROR')
                and s.completed_at >= ?2
              order by s.completed_at desc, s.id desc limit ?1",
         )
@@ -1522,7 +1559,8 @@ fn pending_provider_payments(connection: &Connection, limit: i64, completed_sinc
 const PROVIDER_VERIFICATION_STATUSES: [&str; 7] = ["PENDING", "CONFIRMED", "EXPIRED", "CANCELLED", "ERROR", "MISMATCH", "REFUNDED"];
 
 /// Refleja localmente el estado que informó el SERVIDOR. Sólo actúa sobre pagos de proveedor, valida
-/// el estado y no retrocede un pago ya CONFIRMED (sólo puede pasar a REFUNDED).
+/// el estado y no retrocede: un pago CONFIRMED sólo puede pasar a REFUNDED, y un cobro ya terminado sin
+/// acreditación (CANCELLED / EXPIRED / MISMATCH) no vuelve a PENDING/ERROR por una consulta vieja.
 fn apply_provider_payment_status(connection: &Connection, sale_id: &str, status: &str) -> Result<bool, String> {
     if !PROVIDER_VERIFICATION_STATUSES.contains(&status) {
         return Err("Invalid payment verification status".to_string());
@@ -1532,11 +1570,32 @@ fn apply_provider_payment_status(connection: &Connection, sale_id: &str, status:
             "update local_payments set verification_status = ?2
              where sale_id = ?1 and provider is not null and verification_status <> ?2
                and (verification_status <> 'CONFIRMED' or ?2 = 'REFUNDED')
-               and verification_status <> 'REFUNDED'",
+               and verification_status <> 'REFUNDED'
+               and (?2 not in ('PENDING', 'ERROR') or verification_status in ('PENDING', 'ERROR'))",
             params![sale_id, status],
         )
         .map_err(|error| error.to_string())?;
     Ok(changed > 0)
+}
+
+/// Recuerda (por sucursal del dispositivo) si la Transferencia manual está prohibida. Sólo la sucursal
+/// de este dispositivo puede fijarla; `allowed = true` la levanta.
+fn set_manual_transfer_policy_inner(connection: &mut Connection, branch_id: &str, allowed: bool) -> Result<(), String> {
+    let device_branch: Option<String> = connection
+        .query_row("select branch_id from local_device where singleton = 1", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if device_branch.as_deref() != Some(branch_id) {
+        return Err("The transfer policy is for a different branch than this device".to_string());
+    }
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    set_metadata(&transaction, "manual_transfer_blocked_branch", if allowed { "" } else { branch_id }, &now())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_manual_transfer_policy(state: State<'_, DatabaseState>, branch_id: String, allowed: bool) -> Result<(), String> {
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    set_manual_transfer_policy_inner(&mut connection, &branch_id, allowed)
 }
 
 #[tauri::command]
@@ -1771,6 +1830,7 @@ pub fn run() {
             get_recent_local_sales,
             get_pending_provider_payments,
             set_local_payment_verification,
+            set_manual_transfer_policy,
             get_due_outbox,
             get_outbox_summary,
             mark_outbox_syncing,
@@ -2764,5 +2824,150 @@ mod tests {
         connection.execute("insert into local_payments(id, sale_id, method, amount_cents, created_at) values('p','s','CASH',100,'2026-09-30T00:00:00Z')", []).unwrap();
         assert_eq!(connection.query_row("select verification_status from local_payments where id='p'", [], |row| row.get::<_, String>(0)).unwrap(), "NOT_REQUIRED");
         assert!(connection.query_row("select provider is null from local_payments where id='p'", [], |row| row.get::<_, bool>(0)).unwrap());
+    }
+
+    // ---- Mercado Pago (D-055): el ciclo de vida de la venta en la caja ---------------------------
+    fn pending_mercadopago_sale(connection: &mut Connection, device_id: &str, quantity: i64) -> String {
+        let mut sale = unit_sale_payload(device_id.to_string(), quantity, 800 * quantity, unit_sale_item(quantity, 800 * quantity, 0, 0, None));
+        sale.payment.method = "TRANSFER".into();
+        sale.payment.provider = Some("MERCADOPAGO".into());
+        let sale_id = sale.sale_id.clone();
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        sale_id
+    }
+
+    #[test]
+    fn mp_pending_chip_lists_only_charges_the_cashier_can_resume() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let mut expected_listed = Vec::new();
+        for status in ["PENDING", "ERROR", "EXPIRED", "CANCELLED", "CONFIRMED", "MISMATCH", "REFUNDED"] {
+            let sale_id = pending_mercadopago_sale(&mut connection, &device_id, 1);
+            if status != "PENDING" {
+                apply_provider_payment_status(&connection, &sale_id, status).unwrap();
+            }
+            if status == "PENDING" || status == "ERROR" {
+                expected_listed.push(sale_id);
+            }
+        }
+        let mut listed: Vec<String> = pending_provider_payments(&connection, 25, "0000").unwrap().into_iter().map(|payment| payment.sale_id).collect();
+        listed.sort();
+        expected_listed.sort();
+        assert_eq!(listed, expected_listed, "only PENDING and ERROR are recoverable: CONFIRMED / CANCELLED / EXPIRED / MISMATCH / REFUNDED never are");
+    }
+
+    #[test]
+    fn closing_the_panel_keeps_a_pending_charge_but_a_cancellation_removes_it_for_good() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale_id = pending_mercadopago_sale(&mut connection, &device_id, 2);
+        // Closing the modal changes nothing locally: the charge is still pending and listed.
+        assert_eq!(pending_provider_payments(&connection, 10, "0000").unwrap().len(), 1);
+        assert_eq!(pending_provider_payments(&connection, 10, "0000").unwrap().len(), 1);
+        // The backend reports the cancellation: it is gone and never comes back (not even by a stale PENDING).
+        assert!(apply_provider_payment_status(&connection, &sale_id, "CANCELLED").unwrap());
+        assert!(pending_provider_payments(&connection, 10, "0000").unwrap().is_empty());
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "PENDING").unwrap(), "a stale poll can never bring a finished charge back to PENDING");
+        assert!(!apply_provider_payment_status(&connection, &sale_id, "ERROR").unwrap());
+        assert!(pending_provider_payments(&connection, 10, "0000").unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unaccredited_mercadopago_sale_does_not_hold_local_stock_and_returns_it_exactly_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("hamburguesa", "10")])).unwrap();
+        let stock = |connection: &Connection| stock_of(&local_branch_stock_inner(connection, "branch").unwrap(), "hamburguesa");
+
+        let sale_id = pending_mercadopago_sale(&mut connection, &device_id, 3);
+        assert_eq!(stock(&connection), Some(7), "while pending the stock is reserved");
+
+        apply_provider_payment_status(&connection, &sale_id, "CANCELLED").unwrap();
+        assert_eq!(stock(&connection), Some(10), "a cancelled charge gives the stock back");
+        apply_provider_payment_status(&connection, &sale_id, "CANCELLED").unwrap();
+        apply_provider_payment_status(&connection, &sale_id, "EXPIRED").unwrap();
+        assert_eq!(stock(&connection), Some(10), "repeating or re-reporting the cancellation never restores it twice");
+
+        let paid = pending_mercadopago_sale(&mut connection, &device_id, 2);
+        assert_eq!(stock(&connection), Some(8));
+        apply_provider_payment_status(&connection, &paid, "CONFIRMED").unwrap();
+        assert_eq!(stock(&connection), Some(8), "a confirmed payment keeps the stock deducted");
+        apply_provider_payment_status(&connection, &paid, "CANCELLED").unwrap();
+        assert_eq!(stock(&connection), Some(8), "and a confirmation never regresses");
+
+        let expired = pending_mercadopago_sale(&mut connection, &device_id, 4);
+        assert_eq!(stock(&connection), Some(4));
+        apply_provider_payment_status(&connection, &expired, "EXPIRED").unwrap();
+        assert_eq!(stock(&connection), Some(8), "an expired charge gives its stock back too");
+    }
+
+    #[test]
+    fn a_cash_sale_always_holds_its_stock() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        apply_branch_stock_inner(&mut connection, &snapshot(&[("hamburguesa", "10")])).unwrap();
+        let sale = unit_sale_payload(device_id, 3, 2400, unit_sale_item(3, 2400, 0, 0, None));
+        let transaction = connection.transaction().unwrap();
+        insert_sale(&transaction, &sale).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(stock_of(&local_branch_stock_inner(&connection, "branch").unwrap(), "hamburguesa"), Some(7));
+    }
+
+    #[test]
+    fn manual_transfer_is_refused_where_mercadopago_is_required_and_everything_else_still_sells() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let attempt = |connection: &mut Connection, method: &str, provider: Option<&str>| -> Result<(), String> {
+            let sale = mercadopago_payload(device_id.clone(), method, provider);
+            let transaction = connection.transaction().unwrap();
+            let result = insert_sale(&transaction, &sale);
+            if result.is_ok() { transaction.commit().unwrap(); }
+            result
+        };
+        // Without any policy (Central, or not learned yet) a manual transfer works as always.
+        assert!(attempt(&mut connection, "TRANSFER", None).is_ok());
+
+        set_manual_transfer_policy_inner(&mut connection, "branch", false).unwrap();
+        let blocked = attempt(&mut connection, "TRANSFER", None).unwrap_err();
+        assert!(blocked.starts_with("MANUAL_TRANSFER_NOT_ALLOWED"), "{blocked}");
+        assert!(attempt(&mut connection, "TRANSFER", Some("MERCADOPAGO")).is_ok(), "Mercado Pago is the legitimate digital method");
+        assert!(attempt(&mut connection, "CASH", None).is_ok(), "cash is untouched");
+        let blocked_count: i64 = connection.query_row("select count(*) from local_sales", [], |row| row.get(0)).unwrap();
+        assert_eq!(blocked_count, 3, "the refused sale was not stored: manual + Mercado Pago + cash");
+
+        // The rule is lifted the moment the server says so.
+        set_manual_transfer_policy_inner(&mut connection, "branch", true).unwrap();
+        assert!(attempt(&mut connection, "TRANSFER", None).is_ok());
+    }
+
+    #[test]
+    fn the_transfer_policy_only_applies_to_the_branch_of_this_device() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let _device_id = unit_sale_device(&connection);
+        assert!(set_manual_transfer_policy_inner(&mut connection, "another-branch", false).is_err());
+        assert_eq!(metadata(&connection, "manual_transfer_blocked_branch").unwrap(), None);
+        set_manual_transfer_policy_inner(&mut connection, "branch", false).unwrap();
+        assert_eq!(metadata(&connection, "manual_transfer_blocked_branch").unwrap().as_deref(), Some("branch"));
+    }
+
+    #[test]
+    fn recent_sales_report_the_payment_provider_and_verification() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let device_id = unit_sale_device(&connection);
+        let sale_id = pending_mercadopago_sale(&mut connection, &device_id, 1);
+        apply_provider_payment_status(&connection, &sale_id, "CANCELLED").unwrap();
+        let recent = recent_local_sales(&connection, 10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].provider.as_deref(), Some("MERCADOPAGO"));
+        assert_eq!(recent[0].verification_status.as_deref(), Some("CANCELLED"));
     }
 }

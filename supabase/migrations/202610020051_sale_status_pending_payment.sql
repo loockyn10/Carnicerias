@@ -1,0 +1,11 @@
+-- Estado de venta "esperando que el proveedor acredite el pago" (Mercado Pago, D-054 / D-055).
+--
+-- Una venta Mercado Pago NO está cobrada hasta que el backend confirme la acreditación: nace
+-- PENDING_PAYMENT y pasa a COMPLETED (acreditado) o CANCELLED (cancelado / vencido sin acreditar).
+-- Como cada reporte, rendición y métrica filtra `status = 'COMPLETED'`, un pago sin acreditar queda
+-- fuera de la recaudación sin tocar ninguna de esas consultas.
+--
+-- ALTER TYPE ... ADD VALUE no puede usarse en la misma transacción que lo agrega (restricción dura
+-- de PostgreSQL), por eso es su propia migración de una sola sentencia (mismo patrón que 202609300041).
+-- Todo lo que usa el valor vive en la migración siguiente.
+alter type public.sale_status add value if not exists 'PENDING_PAYMENT';

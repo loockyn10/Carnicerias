@@ -10,13 +10,13 @@ import {
 
 const order = (over: Partial<MercadoPagoOrderState> = {}): MercadoPagoOrderState => ({
   saleId: "sale", attempt: 1, status: "CREATED", verificationStatus: null, expectedAmountCents: 7_500_000,
-  confirmedAmountCents: null, amountMismatch: false, expiresAt: null, ...over
+  confirmedAmountCents: null, amountMismatch: false, expiresAt: null, saleStatus: null, ...over
 });
 
 describe("normalizeOrderState", () => {
   it("keeps the fields the backend reports and drops everything else", () => {
     expect(normalizeOrderState({ saleId: "s", attempt: 2, status: "CREATED", verificationStatus: "PENDING", expectedAmountCents: 100, confirmedAmountCents: null, amountMismatch: false, expiresAt: "2026-10-01T18:00:00Z", mpOrderId: "ORD1", idempotencyKey: "secret-ish" }))
-      .toEqual({ saleId: "s", attempt: 2, status: "CREATED", verificationStatus: "PENDING", expectedAmountCents: 100, confirmedAmountCents: null, amountMismatch: false, expiresAt: "2026-10-01T18:00:00Z" });
+      .toEqual({ saleId: "s", attempt: 2, status: "CREATED", verificationStatus: "PENDING", expectedAmountCents: 100, confirmedAmountCents: null, amountMismatch: false, expiresAt: "2026-10-01T18:00:00Z", saleStatus: null });
   });
   it("never turns an unknown status into a success", () => {
     expect(normalizeOrderState({ saleId: "s", status: "PAID", verificationStatus: "VERIFIED" })).toMatchObject({ status: null, verificationStatus: null });
@@ -50,6 +50,7 @@ describe("deriveLocalVerification — CONFIRMED only when the backend says so", 
     expect(deriveLocalVerification(order({ status: "CONFIRMED", verificationStatus: "CONFIRMED" }))).toBe("CONFIRMED");
     expect(deriveLocalVerification(order({ status: "CONFIRMED", verificationStatus: "PENDING" }))).toBe("PENDING");
     expect(deriveLocalVerification(order({ status: "EXPIRED", verificationStatus: "EXPIRED" }))).toBe("EXPIRED");
+    expect(deriveLocalVerification(order({ status: null, verificationStatus: "CANCELLED", saleStatus: "CANCELLED" }))).toBe("CANCELLED");
   });
   it("derives from the order while the sale has not reached the server yet", () => {
     expect(deriveLocalVerification(order({ status: "CONFIRMED" }))).toBe("CONFIRMED");

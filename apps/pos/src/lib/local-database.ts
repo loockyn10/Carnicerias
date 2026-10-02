@@ -86,6 +86,10 @@ export interface RecentLocalSale {
   totalWeightGrams: string;
   completedAt: string;
   syncedAt: string | null;
+  /** "MERCADOPAGO" si el cobro lo verifica Mercado Pago; null = medio manual. */
+  provider: string | null;
+  /** Estado de verificación cacheado del pago (NOT_REQUIRED para medios manuales). */
+  verificationStatus: string | null;
 }
 /** Venta local declarada Mercado Pago cuyo pago el servidor todavía no confirmó (caché local). */
 export interface PendingProviderPayment {
@@ -137,7 +141,11 @@ export const localDatabase = {
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),
   recentSales: (limit = 10) => desktopOnly<RecentLocalSale[]>("get_recent_local_sales", { limit }),
-  pendingProviderPayments: (limit = 10) => desktopOnly<PendingProviderPayment[]>("get_pending_provider_payments", { limit }),
+  /** Cobros Mercado Pago que se pueden retomar (PENDING / ERROR). `includeStale` suma los de más de 12 h
+   * (sólo para reconciliarlos contra el servidor; el aviso de pantalla no los muestra). */
+  pendingProviderPayments: (limit = 10, includeStale = false) => desktopOnly<PendingProviderPayment[]>("get_pending_provider_payments", { limit, includeStale }),
+  /** Recuerda en SQLite si la transferencia manual está prohibida en la sucursal del dispositivo. */
+  setManualTransferPolicy: (branchId: string, allowed: boolean) => desktopVoid("set_manual_transfer_policy", { branchId, allowed }),
   setPaymentVerification: (saleId: string, status: string) => desktopOnly<boolean>("set_local_payment_verification", { saleId, status }),
   dueOutbox: (currentTime: string) =>
     desktopOnly<OutboxRecord[]>("get_due_outbox", { currentTime }),

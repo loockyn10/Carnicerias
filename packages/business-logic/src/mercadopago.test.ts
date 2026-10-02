@@ -9,6 +9,8 @@ import {
   centsToDecimalString,
   computeWebhookSignature,
   describePaymentState,
+  isNotAccreditedVerification,
+  isRecoverableMercadoPagoPayment,
   interpretOrder,
   parseDecimalToCents,
   parseExternalReference,
@@ -186,12 +188,46 @@ describe("POS payment panel — never claims a payment that the backend has not 
     expect(view("CREATED")).toMatchObject({ title: "Esperando pago…", polling: true, canCancel: true });
     expect(view("CREATED", null, false)).toMatchObject({ title: "Pago pendiente", polling: true, canCancel: false });
   });
-  it("terminal failures allow a retry", () => {
-    for (const status of ["EXPIRED", "CANCELLED", "ERROR"] as const) {
+  it("a technical ERROR can be retried or the sale annulled; it is not a cancellation", () => {
+    const v = view("ERROR");
+    expect(v).toMatchObject({ canRetry: true, canCancel: true, polling: false, outcome: "WAITING", tone: "error" });
+    expect(v.title).not.toContain("cancelado");
+  });
+  it("CANCELLED and EXPIRED are terminal and not paid: never retryable, never cancellable, never pending", () => {
+    for (const status of ["EXPIRED", "CANCELLED"] as const) {
       const v = view(status);
-      expect(v.canRetry).toBe(true);
-      expect(v.polling).toBe(false);
+      expect(v).toMatchObject({ outcome: "NOT_PAID", canRetry: false, canCancel: false, polling: false });
+      expect(v.detail).toContain("anulada");
     }
+    expect(view("CANCELLED").title).toBe("Cobro cancelado");
+    expect(view("EXPIRED").title).toBe("Cobro vencido");
+    // Sale annulled with no live order (abandoned before a charge existed): same final reading.
+    expect(view(null, "CANCELLED")).toMatchObject({ outcome: "NOT_PAID", canRetry: false });
+    expect(view(null, "EXPIRED")).toMatchObject({ outcome: "NOT_PAID", canRetry: false });
+  });
+  it("a pending charge is the only one the cashier can resume or cancel", () => {
+    expect(view("CREATED")).toMatchObject({ outcome: "WAITING", canCancel: true, cancelLabel: "Cancelar cobro" });
+    expect(view(null)).toMatchObject({ outcome: "WAITING", canRetry: true, canCancel: true });
+    expect(view("CONFIRMED", "CONFIRMED").outcome).toBe("PAID");
+    expect(view("CONFIRMED", "MISMATCH").outcome).toBe("NEEDS_ATTENTION");
+    expect(view("REFUNDED").outcome).toBe("NEEDS_ATTENTION");
+  });
+});
+
+describe("which Mercado Pago charges the cashier can resume ('MP pendientes')", () => {
+  it("only a charge still waiting (PENDING) or technically failed (ERROR) is recoverable", () => {
+    expect(isRecoverableMercadoPagoPayment("PENDING")).toBe(true);
+    expect(isRecoverableMercadoPagoPayment("ERROR")).toBe(true);
+  });
+  it("no terminal state is ever recoverable", () => {
+    for (const status of ["CONFIRMED", "CANCELLED", "CANCELED", "EXPIRED", "REFUNDED", "MISMATCH", "NO_ACCREDITATION", "NOT_REQUIRED", null, undefined, ""]) {
+      expect(isRecoverableMercadoPagoPayment(status)).toBe(false);
+    }
+  });
+  it("cancelled and expired charges are the 'not accredited' ones", () => {
+    expect(isNotAccreditedVerification("CANCELLED")).toBe(true);
+    expect(isNotAccreditedVerification("EXPIRED")).toBe(true);
+    for (const status of ["PENDING", "CONFIRMED", "ERROR", "MISMATCH", "REFUNDED", null]) expect(isNotAccreditedVerification(status)).toBe(false);
   });
 });
 

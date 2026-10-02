@@ -379,18 +379,35 @@ export function buildPosPayload(input: PosInput): Record<string, unknown> {
 
 export type MercadoPagoPanelTone = "waiting" | "success" | "warning" | "error";
 
+/**
+ * Cómo terminó (o no) el cobro, en términos de dinero:
+ *   WAITING          sigue esperando la acreditación (o hay que reintentar generar el cobro)
+ *   PAID             Mercado Pago acreditó el monto exacto
+ *   NOT_PAID         terminó SIN acreditación (cancelado o vencido): la venta queda anulada
+ *   NEEDS_ATTENTION  dinero devuelto o monto distinto: lo resuelve el administrador
+ */
+export type MercadoPagoOutcome = "WAITING" | "PAID" | "NOT_PAID" | "NEEDS_ATTENTION";
+
 export interface MercadoPagoPanelView {
   tone: MercadoPagoPanelTone;
   title: string;
   detail: string;
+  outcome: MercadoPagoOutcome;
   /** Mientras sea true el POS sigue consultando. */
   polling: boolean;
-  /** Permite generar un cobro nuevo para la misma venta. */
+  /** Permite generar un cobro nuevo para la misma venta (sólo si el alta falló; nunca tras cancelar/vencer). */
   canRetry: boolean;
-  /** Permite cancelar el cobro en curso. */
+  /** Permite cancelar el cobro en curso / anular la venta que no tiene cobro vivo. */
   canCancel: boolean;
+  cancelLabel: string;
 }
 
+const NOT_PAID_VIEW_BASE = { tone: "warning", outcome: "NOT_PAID", polling: false, canRetry: false, canCancel: false, cancelLabel: "" } as const;
+
+/**
+ * Los estados terminales sin acreditación (CANCELLED / EXPIRED) son definitivos: la venta ya quedó
+ * anulada en el servidor, así que no se ofrece "generar cobro nuevo" ni se deja el cobro "pendiente".
+ */
 export function describePaymentState(input: {
   status: MercadoPagoOrderStatus | null;
   verification: PaymentVerificationStatus | null;
@@ -399,29 +416,47 @@ export function describePaymentState(input: {
   const { status, verification } = input;
   // El estado de la venta (que ya compara montos) manda sobre el de la orden.
   if (verification === "MISMATCH") {
-    return { tone: "error", title: "Monto acreditado distinto", detail: "El importe cobrado no coincide con la venta. Avisá al administrador.", polling: false, canRetry: false, canCancel: false };
+    return { tone: "error", title: "Monto acreditado distinto", detail: "El importe cobrado no coincide con la venta. Avisá al administrador.", outcome: "NEEDS_ATTENTION", polling: false, canRetry: false, canCancel: false, cancelLabel: "" };
   }
   if (status === "CONFIRMED" && verification !== "PENDING") {
-    return { tone: "success", title: "✓ Pago confirmado", detail: "Mercado Pago acreditó el pago.", polling: false, canRetry: false, canCancel: false };
+    return { tone: "success", title: "✓ Pago confirmado", detail: "Mercado Pago acreditó el pago.", outcome: "PAID", polling: false, canRetry: false, canCancel: false, cancelLabel: "" };
+  }
+  if (status === "REFUNDED" || verification === "REFUNDED") {
+    return { tone: "warning", title: "Pago devuelto", detail: "Mercado Pago informó una devolución.", outcome: "NEEDS_ATTENTION", polling: false, canRetry: false, canCancel: false, cancelLabel: "" };
+  }
+  if (status === "EXPIRED" || (status === null && verification === "EXPIRED")) {
+    return { ...NOT_PAID_VIEW_BASE, title: "Cobro vencido", detail: "El tiempo para pagar terminó sin acreditación. La venta quedó anulada: no se cobró." };
+  }
+  if (status === "CANCELLED" || (status === null && verification === "CANCELLED")) {
+    return { ...NOT_PAID_VIEW_BASE, title: "Cobro cancelado", detail: "El cobro fue cancelado sin acreditación. La venta quedó anulada: no se cobró." };
   }
   switch (status) {
-    case "REFUNDED":
-      return { tone: "warning", title: "Pago devuelto", detail: "Mercado Pago informó una devolución.", polling: false, canRetry: false, canCancel: false };
-    case "EXPIRED":
-      return { tone: "warning", title: "Cobro vencido", detail: "El tiempo para pagar terminó sin acreditación.", polling: false, canRetry: true, canCancel: false };
-    case "CANCELLED":
-      return { tone: "warning", title: "Cobro cancelado", detail: "El cobro fue cancelado sin acreditación.", polling: false, canRetry: true, canCancel: false };
     case "ERROR":
-      return { tone: "error", title: "No se pudo generar el cobro", detail: "Reintentá o usá otro medio de pago.", polling: false, canRetry: true, canCancel: false };
+      return { tone: "error", title: "No se pudo generar el cobro", detail: "Reintentá, o anulá la venta para cobrar con otro medio.", outcome: "WAITING", polling: false, canRetry: true, canCancel: true, cancelLabel: "Anular venta (no se cobró)" };
     case "REQUESTING":
       return input.online
-        ? { tone: "waiting", title: "Generando cobro…", detail: "Un momento.", polling: true, canRetry: false, canCancel: false }
-        : { tone: "warning", title: "Pago pendiente", detail: "Sin conexión: el cobro se generará al reconectar.", polling: true, canRetry: false, canCancel: false };
+        ? { tone: "waiting", title: "Generando cobro…", detail: "Un momento.", outcome: "WAITING", polling: true, canRetry: false, canCancel: false, cancelLabel: "" }
+        : { tone: "warning", title: "Pago pendiente", detail: "Sin conexión: el cobro se generará al reconectar.", outcome: "WAITING", polling: true, canRetry: false, canCancel: false, cancelLabel: "" };
     case "CREATED":
       return input.online
-        ? { tone: "waiting", title: "Esperando pago…", detail: "Pedile al cliente que escanee el QR de la caja.", polling: true, canRetry: false, canCancel: true }
-        : { tone: "warning", title: "Pago pendiente", detail: "Sin conexión: se verificará al reconectar.", polling: true, canRetry: false, canCancel: false };
+        ? { tone: "waiting", title: "Esperando pago…", detail: "Pedile al cliente que escanee el QR de la caja.", outcome: "WAITING", polling: true, canRetry: false, canCancel: true, cancelLabel: "Cancelar cobro" }
+        : { tone: "warning", title: "Pago pendiente", detail: "Sin conexión: se verificará al reconectar.", outcome: "WAITING", polling: true, canRetry: false, canCancel: false, cancelLabel: "" };
     default:
-      return { tone: "warning", title: "Pago pendiente", detail: "Todavía no hay un cobro generado para esta venta.", polling: false, canRetry: true, canCancel: false };
+      return { tone: "warning", title: "Pago pendiente", detail: "Todavía no hay un cobro generado para esta venta.", outcome: "WAITING", polling: false, canRetry: true, canCancel: true, cancelLabel: "Anular venta (no se cobró)" };
   }
+}
+
+/**
+ * ¿Un cobro con este estado de verificación se puede RETOMAR desde "MP pendientes"? Sólo el que sigue
+ * esperando (PENDING) o el que falló técnicamente y se puede reintentar (ERROR). Nunca un estado
+ * terminal: CONFIRMED, CANCELLED, EXPIRED (sin acreditación, venta anulada), REFUNDED ni MISMATCH
+ * (esos los resuelve el administrador).
+ */
+export function isRecoverableMercadoPagoPayment(verification: PaymentVerificationStatus | string | null | undefined): boolean {
+  return verification === "PENDING" || verification === "ERROR";
+}
+
+/** Estados de verificación que anulan la venta (no acreditada): su stock deja de contar en la caja. */
+export function isNotAccreditedVerification(verification: PaymentVerificationStatus | string | null | undefined): boolean {
+  return verification === "CANCELLED" || verification === "EXPIRED";
 }

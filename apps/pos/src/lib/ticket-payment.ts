@@ -35,3 +35,12 @@ export function isSaleConfirmable(input: {
 export function validatePaymentMethodForSale(paymentMethod: PaymentMethod | null): string | null {
   return paymentMethod === null ? "Seleccioná un método de pago." : null;
 }
+
+/**
+ * Botones de método de pago que se ofrecen. En una sucursal con Mercado Pago obligatorio la
+ * "Transferencia" manual no existe (el único medio digital es Mercado Pago, verificado por el backend);
+ * Efectivo y Tarjeta no cambian.
+ */
+export function filterPaymentMethodButtons<T extends { value: PaymentMethod }>(buttons: readonly T[], manualTransferOffered: boolean): T[] {
+  return buttons.filter((button) => button.value !== "TRANSFER" || manualTransferOffered);
+}

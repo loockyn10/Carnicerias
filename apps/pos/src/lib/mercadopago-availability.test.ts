@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isSessionDegraded, parseBranchConfigResponse, resolveMercadoPagoAvailability } from "./mercadopago-availability";
-import { readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./mercadopago-capability";
+import { isManualTransferOffered, isSessionDegraded, parseBranchConfigResponse, resolveMercadoPagoAvailability } from "./mercadopago-availability";
+import { readManualTransferAllowed, readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./mercadopago-capability";
 import { resolveStartupUser, type StartupRuntime } from "./startup-session";
 
 const BRANCH = "22222222-2222-4222-8222-222222222222";
@@ -14,8 +14,12 @@ const base = {
 
 describe("parseBranchConfigResponse — errors are never swallowed", () => {
   it("reads enabled true/false", () => {
-    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: true, qrMode: "static" }, null, BRANCH)).toEqual({ status: "ok", enabled: true });
-    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: false }, null, BRANCH)).toEqual({ status: "ok", enabled: false });
+    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: true, qrMode: "static", manualTransferAllowed: false }, null, BRANCH)).toEqual({ status: "ok", enabled: true, manualTransferAllowed: false });
+    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: false, manualTransferAllowed: true }, null, BRANCH)).toEqual({ status: "ok", enabled: false, manualTransferAllowed: true });
+  });
+  it("a server that does not report the transfer policy keeps manual transfer allowed", () => {
+    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: true }, null, BRANCH)).toEqual({ status: "ok", enabled: true, manualTransferAllowed: true });
+    expect(parseBranchConfigResponse({ branchId: BRANCH, enabled: true, manualTransferAllowed: "no" }, null, BRANCH)).toMatchObject({ manualTransferAllowed: true });
   });
   it("keeps the PostgREST error code and message", () => {
     expect(parseBranchConfigResponse(null, { code: "42501", message: "Device is not authorized" }, BRANCH)).toEqual({ status: "error", code: "42501", message: "Device is not authorized" });
@@ -118,16 +122,18 @@ describe("remembered capability (per device + branch)", () => {
   it("round-trips for the same device and branch", () => {
     const storage = fakeStorage();
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, storage)).toBeNull();
-    writeMercadoPagoEnabled(DEVICE, BRANCH, true, storage);
+    writeMercadoPagoEnabled(DEVICE, BRANCH, true, true, storage);
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, storage)).toBe(true);
-    writeMercadoPagoEnabled(DEVICE, BRANCH, false, storage);
+    writeMercadoPagoEnabled(DEVICE, BRANCH, false, true, storage);
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, storage)).toBe(false);
   });
   it("never leaks to another branch (Central) or another device", () => {
     const storage = fakeStorage();
-    writeMercadoPagoEnabled(DEVICE, BRANCH, true, storage);
+    writeMercadoPagoEnabled(DEVICE, BRANCH, true, false, storage);
     expect(readMercadoPagoEnabled(DEVICE, "central-branch", storage)).toBeNull();
+    expect(readManualTransferAllowed(DEVICE, "central-branch", storage)).toBeNull();
     expect(readMercadoPagoEnabled("other-device", BRANCH, storage)).toBeNull();
+    expect(readManualTransferAllowed("other-device", BRANCH, storage)).toBeNull();
     expect(readMercadoPagoEnabled(null, BRANCH, storage)).toBeNull();
     expect(readMercadoPagoEnabled(DEVICE, null, storage)).toBeNull();
   });
@@ -135,7 +141,43 @@ describe("remembered capability (per device + branch)", () => {
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, fakeStorage({ "pos.mercadopago.enabled": "{not json" }))).toBeNull();
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, fakeStorage({ "pos.mercadopago.enabled": JSON.stringify({ deviceId: DEVICE, branchId: BRANCH, enabled: "yes" }) }))).toBeNull();
     expect(readMercadoPagoEnabled(DEVICE, BRANCH, null)).toBeNull();
-    expect(() => writeMercadoPagoEnabled(DEVICE, BRANCH, true, { getItem: () => null, setItem: () => { throw new Error("quota"); } })).not.toThrow();
-    expect(() => writeMercadoPagoEnabled(DEVICE, BRANCH, true, null)).not.toThrow();
+    expect(() => writeMercadoPagoEnabled(DEVICE, BRANCH, true, true, { getItem: () => null, setItem: () => { throw new Error("quota"); } })).not.toThrow();
+    expect(() => writeMercadoPagoEnabled(DEVICE, BRANCH, true, true, null)).not.toThrow();
+  });
+});
+
+describe("manual transfer in a branch that requires Mercado Pago (no hardcoded branch)", () => {
+  function fakeStorage() {
+    const data: Record<string, string> = {};
+    return { getItem: (key: string) => data[key] ?? null, setItem: (key: string, value: string) => { data[key] = value; } };
+  }
+
+  it("Avenida-like branch (Mercado Pago enabled + required): the 'Transferencia' button is not offered", () => {
+    expect(isManualTransferOffered({ mercadoPagoEnabled: true, manualTransferAllowed: false })).toBe(false);
+  });
+  it("Central-like branch (no Mercado Pago): the 'Transferencia' button stays", () => {
+    expect(isManualTransferOffered({ mercadoPagoEnabled: false, manualTransferAllowed: true })).toBe(true);
+    expect(isManualTransferOffered({ mercadoPagoEnabled: false, manualTransferAllowed: false })).toBe(true);
+  });
+  it("Mercado Pago enabled but the rule relaxed (e.g. Mercado Pago is down): manual transfer is offered", () => {
+    expect(isManualTransferOffered({ mercadoPagoEnabled: true, manualTransferAllowed: true })).toBe(true);
+  });
+  it("never learned (first start offline): nothing is invented, the usual buttons stay", () => {
+    expect(isManualTransferOffered({ mercadoPagoEnabled: null, manualTransferAllowed: null })).toBe(true);
+    expect(isManualTransferOffered({ mercadoPagoEnabled: true, manualTransferAllowed: null })).toBe(true);
+  });
+  it("any other branch enabled tomorrow gets the same rule from its configuration alone", () => {
+    const storage = fakeStorage();
+    writeMercadoPagoEnabled(DEVICE, "janssen-branch", true, false, storage);
+    expect(isManualTransferOffered({
+      mercadoPagoEnabled: readMercadoPagoEnabled(DEVICE, "janssen-branch", storage),
+      manualTransferAllowed: readManualTransferAllowed(DEVICE, "janssen-branch", storage)
+    })).toBe(false);
+  });
+  it("the remembered policy survives a restart without Internet and never leaks to another branch", () => {
+    const storage = fakeStorage();
+    writeMercadoPagoEnabled(DEVICE, BRANCH, true, false, storage);
+    expect(readManualTransferAllowed(DEVICE, BRANCH, storage)).toBe(false);
+    expect(readManualTransferAllowed(DEVICE, "central-branch", storage)).toBeNull();
   });
 });

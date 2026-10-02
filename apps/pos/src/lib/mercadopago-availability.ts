@@ -5,7 +5,7 @@
 
 /** Resultado de `mp_get_branch_config`, sin tragarse el error: el motivo llega hasta el diagnóstico. */
 export type MercadoPagoConfigResult =
-  | { status: "ok"; enabled: boolean }
+  | { status: "ok"; enabled: boolean; manualTransferAllowed: boolean }
   | { status: "error"; code: string; message: string };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -30,7 +30,20 @@ export function parseBranchConfigResponse(
   if (expectedBranchId && typeof record.branchId === "string" && record.branchId !== expectedBranchId) {
     return { status: "error", code: "BRANCH_MISMATCH", message: "La configuración recibida es de otra sucursal" };
   }
-  return { status: "ok", enabled: record.enabled };
+  // Un servidor que todavía no informa la política sigue permitiendo la transferencia manual (no hay
+  // forma de que la prohíba); sólo un `false` explícito la esconde.
+  const manualTransferAllowed = typeof record.manualTransferAllowed === "boolean" ? record.manualTransferAllowed : true;
+  return { status: "ok", enabled: record.enabled, manualTransferAllowed };
+}
+
+/**
+ * ¿Se ofrece el botón "Transferencia" (manual) en el POS? Una sucursal con Mercado Pago habilitado y
+ * obligatorio (`manualTransferAllowed === false`, que decide el servidor por configuración de sucursal,
+ * nunca por nombre) cobra lo digital sólo con Mercado Pago verificado. Sin información (nunca
+ * consultado) se mantiene el comportamiento de siempre; el servidor rechaza igual lo que no corresponda.
+ */
+export function isManualTransferOffered(input: { mercadoPagoEnabled: boolean | null; manualTransferAllowed: boolean | null }): boolean {
+  return !(input.mercadoPagoEnabled === true && input.manualTransferAllowed === false);
 }
 
 export type MercadoPagoUnavailableReason =

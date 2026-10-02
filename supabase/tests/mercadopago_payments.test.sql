@@ -318,8 +318,10 @@ select is((select verification_status from public.payments where sale_id = 'c700
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'c1000000-0000-4000-8000-000000000001', true);
-select lives_ok($$select public.sync_offline_sale('c4000000-0000-4000-8000-000000000001', 'c8000000-0000-4000-8000-000000000003', (select payload from mp_payloads where name = 's3'))$$, 'a manual transfer syncs');
-select is((select verification_status || '/' || coalesce(provider, 'none') from public.payments where sale_id = 'c7000000-0000-4000-8000-000000000003'), 'NOT_REQUIRED/none', 'a manual transfer is not part of the Mercado Pago flow');
+-- Avenida has Mercado Pago enabled (and requires verified digital payments), so a manual transfer is
+-- refused. The lifecycle test (mercadopago_sale_lifecycle.test.sql) covers a branch without it.
+select throws_ok($$select public.sync_offline_sale('c4000000-0000-4000-8000-000000000001', 'c8000000-0000-4000-8000-000000000003', (select payload from mp_payloads where name = 's3'))$$, 'P0001', 'MANUAL_TRANSFER_NOT_ALLOWED', 'a manual transfer is refused where Mercado Pago is the required digital method');
+select is((select count(*) from public.payments where sale_id = 'c7000000-0000-4000-8000-000000000003'), 0::bigint, 'and nothing of it is stored');
 
 select throws_ok($$select * from public.get_mercadopago_reconciliation(now() - interval '1 day', now() + interval '1 day')$$, '42501', null, 'employees cannot read the reconciliation report');
 select set_config('request.jwt.claim.sub', 'c1000000-0000-4000-8000-000000000004', true);

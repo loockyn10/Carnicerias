@@ -20,7 +20,7 @@ import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } 
 import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
-import { INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
+import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
@@ -29,9 +29,11 @@ import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop }
 import { QuickProductModal } from "./QuickProductModal";
 import { MercadoPagoPanel } from "./MercadoPagoPanel";
 import { resolveStartupUser } from "./lib/startup-session";
-import { fetchMercadoPagoConfig } from "./lib/mercadopago";
-import { isSessionDegraded, resolveMercadoPagoAvailability } from "./lib/mercadopago-availability";
-import { readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./lib/mercadopago-capability";
+import { cancelMercadoPagoOrder, fetchMercadoPagoConfig, fetchMercadoPagoStatus } from "./lib/mercadopago";
+import { isManualTransferOffered, isSessionDegraded, resolveMercadoPagoAvailability } from "./lib/mercadopago-availability";
+import { readManualTransferAllowed, readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./lib/mercadopago-capability";
+import { reconcilePendingMercadoPago } from "./lib/mercadopago-reconcile";
+import { describeLocalPayment } from "./lib/mercadopago-state";
 
 interface AuthUser {
   id: string;
@@ -95,6 +97,9 @@ const PAYMENT_METHOD_BUTTONS: { value: PaymentMethod; label: string; activeClass
 ];
 
 const SHIFT_DURATION_REFRESH_MS = 60_000;
+// Mercado Pago: cada cuánto se reconcilian los cobros pendientes, y desde cuándo una venta sin cobro vivo se da por abandonada.
+const MP_RECONCILE_INTERVAL_MS = 60_000;
+const MP_ABANDONED_AFTER_MS = 12 * 60 * 60 * 1000;
 const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 // Marks a failure already reported via reportStageError (message + diagnostics already set),
@@ -397,6 +402,8 @@ export default function App() {
   const [paymentProvider, setPaymentProvider] = useState<"MERCADOPAGO" | null>(null);
   // Lo último que se supo de la sucursal: true/false (servidor o memoria local) o null = nunca consultado.
   const [mpKnownEnabled, setMpKnownEnabled] = useState<boolean | null>(null);
+  // Política de la sucursal sobre la transferencia manual (false = prohibida: Mercado Pago obligatorio).
+  const [mpManualTransferAllowed, setMpManualTransferAllowed] = useState<boolean | null>(null);
   const [mpLookupError, setMpLookupError] = useState<string | null>(null);
   const [reconnectOpen, setReconnectOpen] = useState(false);
   const [mpPanelSale, setMpPanelSale] = useState<{ saleId: string; totalCents: bigint } | null>(null);
@@ -457,7 +464,9 @@ export default function App() {
       totalCents: String(sale.total_cents),
       totalWeightGrams: String(sale.total_weight_grams),
       completedAt: sale.completed_at ?? "",
-      syncedAt: sale.completed_at
+      syncedAt: sale.completed_at,
+      provider: null,
+      verificationStatus: null
     })));
   }, [branchId, desktop, user]);
 
@@ -1378,6 +1387,17 @@ export default function App() {
     browserOnline: online, knownEnabled: mpKnownEnabled, lookupFailed: mpLookupError !== null
   });
 
+  // Sucursal con Mercado Pago obligatorio: no existe el botón "Transferencia" (la regla la decide la
+  // configuración de la sucursal en el servidor, nunca el nombre de la sucursal).
+  const manualTransferOffered = isManualTransferOffered({ mercadoPagoEnabled: mpKnownEnabled, manualTransferAllowed: mpManualTransferAllowed });
+  const paymentButtons = filterPaymentMethodButtons(PAYMENT_METHOD_BUTTONS, manualTransferOffered);
+  const paymentColumns = paymentButtons.length + (mpAvailability.visible ? 1 : 0);
+
+  // Si la política llega con una Transferencia manual ya elegida, se deselecciona (no se cobra así).
+  useEffect(() => {
+    if (!manualTransferOffered && paymentMethod === "TRANSFER" && paymentProvider === null) setPaymentMethod(null);
+  }, [manualTransferOffered, paymentMethod, paymentProvider]);
+
   // Cualquier reseteo del medio de pago (venta confirmada, ticket cancelado, cambio de operador...)
   // también limpia el proveedor: un ticket nuevo nunca arranca "Mercado Pago".
   useEffect(() => {
@@ -1389,6 +1409,7 @@ export default function App() {
   useEffect(() => {
     if (!desktop) return;
     setMpKnownEnabled(readMercadoPagoEnabled(mpDeviceId, mpBranchId));
+    setMpManualTransferAllowed(readManualTransferAllowed(mpDeviceId, mpBranchId));
     setMpLookupError(null);
   }, [desktop, mpDeviceId, mpBranchId]);
 
@@ -1402,8 +1423,13 @@ export default function App() {
       if (cancelled) return;
       if (result.status === "ok") {
         setMpKnownEnabled(result.enabled);
+        setMpManualTransferAllowed(result.manualTransferAllowed);
         setMpLookupError(null);
-        if (mpBranchId) writeMercadoPagoEnabled(mpDeviceId, mpBranchId, result.enabled);
+        if (mpBranchId) {
+          writeMercadoPagoEnabled(mpDeviceId, mpBranchId, result.enabled, result.manualTransferAllowed);
+          // También en SQLite: la venta local se rechaza ahí mismo (sin Internet) si la transferencia manual está prohibida.
+          void localDatabase.setManualTransferPolicy(mpBranchId, result.manualTransferAllowed).catch(() => undefined);
+        }
       } else {
         setMpLookupError(`[${result.code}] ${result.message}`);
         if (import.meta.env.DEV) console.warn("[pos] mp_get_branch_config_failed", { code: result.code, message: result.message });
@@ -1427,6 +1453,52 @@ export default function App() {
     void localDatabase.setPaymentVerification(saleId, status).then(() => refreshPendingMp()).catch(() => undefined);
   }, [refreshPendingMp]);
   const closeMercadoPagoPanel = useCallback(() => { setMpPanelSale(null); }, []);
+  const mpPanelSaleRef = useRef(mpPanelSale);
+  mpPanelSaleRef.current = mpPanelSale;
+
+  // El cobro terminó. Se avisa en pantalla y, si no hubo acreditación, se sincroniza para que el stock
+  // restituido por el servidor (anulación de la venta) se refleje en la caja.
+  const handleMercadoPagoSettled = useCallback((saleId: string, outcome: "PAID" | "NOT_PAID" | "NEEDS_ATTENTION", title: string) => {
+    const short = saleId.slice(0, 8);
+    if (outcome === "PAID") setNotice(`Venta ${short}: pago de Mercado Pago confirmado`);
+    else if (outcome === "NOT_PAID") setNotice(`${title}. La venta ${short} quedó anulada: no se cobró y su stock se restituyó.`);
+    else setNotice(`Venta ${short}: revisá el cobro de Mercado Pago (${title}) y avisá al administrador.`);
+    void refreshPendingMp();
+    if (outcome !== "PAID") {
+      void loadBranchStock();
+      void runSync();
+    }
+  }, [loadBranchStock, refreshPendingMp, runSync]);
+
+  // Cobros que quedaron pendientes con la caja cerrada o sin Internet: se le pregunta al servidor
+  // (que consulta a Mercado Pago) y se refleja el resultado, así uno que venció o se canceló sale de
+  // "MP pendientes" y su venta queda anulada igual que si lo hubiera informado el webhook.
+  useEffect(() => {
+    if (!desktop || !mpDeviceId || !hasOnlineSession || !online) return;
+    let cancelled = false;
+    const sweep = async () => {
+      if (mpPanelSaleRef.current) return;
+      try {
+        const summary = await reconcilePendingMercadoPago({
+          list: () => localDatabase.pendingProviderPayments(25, true),
+          fetchStatus: (saleId) => fetchMercadoPagoStatus(mpDeviceId, saleId),
+          cancelUnpaid: (saleId) => cancelMercadoPagoOrder(mpDeviceId, saleId),
+          mirror: (saleId, status) => localDatabase.setPaymentVerification(saleId, status),
+          nowMs: Date.now(),
+          abandonedAfterMs: MP_ABANDONED_AFTER_MS
+        });
+        if (!cancelled && summary.resolved > 0) {
+          await refreshPendingMp();
+          void loadBranchStock();
+        }
+      } catch {
+        // Mejor esfuerzo: se reintenta en el próximo ciclo.
+      }
+    };
+    void sweep();
+    const timer = window.setInterval(() => { void sweep(); }, MP_RECONCILE_INTERVAL_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [desktop, mpDeviceId, hasOnlineSession, online, refreshPendingMp, loadBranchStock]);
 
   async function completeSale() {
     // Guard defensivo: no confiar sólo en el disabled del botón. Sin método de
@@ -1436,6 +1508,11 @@ export default function App() {
     if (!branchId || ticket.length === 0 || saleInFlight.current) return;
     const method = paymentMethod;
     const provider = paymentProvider;
+    if (method === "TRANSFER" && provider === null && !manualTransferOffered) {
+      setPaymentMethod(null);
+      setError("Esta sucursal no admite transferencia manual: cobrá con Mercado Pago.");
+      return;
+    }
     // Mercado Pago necesita Internet y sesión real para generar el cobro: se rechaza ANTES de
     // registrar la venta, nunca se deja una venta "declarada MP" sin forma de cobrarse.
     if (provider === "MERCADOPAGO" && !mpAvailability.usable) {
@@ -1926,8 +2003,8 @@ export default function App() {
             <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
             <div className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
               <span id="payment-method-label">Método de pago</span>
-              <div className={`pos-payment-buttons grid ${mpAvailability.visible ? "grid-cols-2" : "grid-cols-3"} gap-2`} role="group" aria-labelledby="payment-method-label">
-                {PAYMENT_METHOD_BUTTONS.map((option) => {
+              <div className={`pos-payment-buttons grid ${paymentColumns === 4 ? "grid-cols-2" : "grid-cols-3"} gap-2`} role="group" aria-labelledby="payment-method-label">
+                {paymentButtons.map((option) => {
                   const active = paymentMethod === option.value && !(option.value === "TRANSFER" && paymentProvider);
                   return (
                     <button
@@ -2133,7 +2210,7 @@ export default function App() {
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p></div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
       ) : null}
@@ -2145,6 +2222,7 @@ export default function App() {
           sessionOffline={user.offline}
           onClose={closeMercadoPagoPanel}
           onVerification={mirrorMercadoPagoVerification}
+          onSettled={handleMercadoPagoSettled}
         />
       ) : null}
 
