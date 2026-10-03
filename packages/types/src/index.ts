@@ -121,6 +121,9 @@ export interface TicketLine {
   manualUnitPriceCents?: bigint | null;
   /** `subtotalCents` menos lo que habría costado a precio normal; negativo = rebaja. 0 si no es manual. */
   manualAdjustmentCents?: bigint;
+  /** Estado local de la UI (nunca se envía): la línea `WEIGHT` se vende como pack. Sobrevive al precio manual (que anula
+   * `promotionMode`) para que "Usar precio normal" lo recupere sin tocarlo. */
+  sellAsPack?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------

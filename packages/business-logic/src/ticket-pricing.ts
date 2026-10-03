@@ -56,7 +56,8 @@ export type DiscountPercentParse =
 
 /**
  * Texto libre del input "Descuento %" -> basis points. Vacío = 0 (sin descuento). Acepta coma o punto
- * decimal y hasta 2 decimales (12,5 -> 1250 bps; 7,25 -> 725 bps); 0..100. Mientras se tipea, "5." o "5,"
+ * decimal y hasta 2 decimales (12,5 -> 1250 bps; 7,25 -> 725 bps); 0 <= % < 100 (100% dejaría el total en $0, que
+ * el modelo no admite). Mientras se tipea, "5." o "5,"
  * son válidos (equivalen a 5). No usa floats.
  */
 export function parseDiscountPercent(raw: string): DiscountPercentParse {
@@ -68,7 +69,7 @@ export function parseDiscountPercent(raw: string): DiscountPercentParse {
   const fraction = match[2] ?? "";
   if (fraction.length > 2) return { ok: false, message: "Usá hasta 2 decimales." };
   const bps = BigInt(match[1] ?? "0") * 100n + BigInt(fraction.padEnd(2, "0") || "0");
-  if (bps > MAX_TICKET_DISCOUNT_BPS) return { ok: false, message: "El descuento no puede superar el 100%." };
+  if (bps >= MAX_TICKET_DISCOUNT_BPS) return { ok: false, message: "El descuento tiene que ser menor a 100%." };
   return { ok: true, bps };
 }
 

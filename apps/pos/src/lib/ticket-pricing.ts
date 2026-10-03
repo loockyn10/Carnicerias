@@ -116,9 +116,9 @@ export function buildWeightTicketLine(
   product: LineProduct, weightGrams: number, id: string, sellAsPack: boolean, pack: DiscountRule | null,
   discounts: DiscountRule[], branchId: string, paymentMethod: PaymentMethod, cashDiscountBps: bigint
 ): TicketLine {
-  return lineFromComputed(product, id, { weightGrams }, computeWeightLine(
-    product.pricePerKgCents, weightGrams, sellAsPack, pack, discounts, product.productId, branchId, paymentMethod, cashDiscountBps
-  ));
+  const computed = computeWeightLine(product.pricePerKgCents, weightGrams, sellAsPack, pack, discounts, product.productId, branchId, paymentMethod, cashDiscountBps);
+  const line = lineFromComputed(product, id, { weightGrams }, computed);
+  return computed.promotionMode === "PACK_FIXED_TOTAL" ? { ...line, sellAsPack: true } : line;
 }
 
 export interface PricingContext {
@@ -207,9 +207,9 @@ export function restoreNormalPrice(line: TicketLine, context: PricingContext): T
   if (line.quantityUnits != null) {
     return buildUnitTicketLine(product, line.quantityUnits, line.id, findPackRule(context.discounts, line.productId, context.branchId), context.paymentMethod, context.cashDiscountBps);
   }
-  // El toggle "Vender como pack" de una línea por peso no sobrevive al precio manual: se vuelve a la
-  // línea normal (umbral si corresponde) y el operador puede editar la línea para elegir el pack de nuevo.
-  return buildWeightTicketLine(product, line.weightGrams, line.id, false, null, context.discounts, context.branchId, context.paymentMethod, context.cashDiscountBps);
+  // Sólo se quita el override de precio: "Vender como pack" (line.sellAsPack, que el precio manual no toca) queda como estaba.
+  const sellAsPack = line.sellAsPack === true;
+  return buildWeightTicketLine(product, line.weightGrams, line.id, sellAsPack, sellAsPack ? findPackRule(context.discounts, line.productId, context.branchId) : null, context.discounts, context.branchId, context.paymentMethod, context.cashDiscountBps);
 }
 
 /**

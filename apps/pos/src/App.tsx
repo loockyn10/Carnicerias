@@ -1060,7 +1060,7 @@ export default function App() {
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
     setQuantityInput(line?.quantityUnits ?? 1);
-    setSellAsPack(line?.promotionMode === "PACK_FIXED_TOTAL");
+    setSellAsPack(line?.sellAsPack ?? line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
   }
 
@@ -1555,7 +1555,7 @@ export default function App() {
     // (chequeo directo de null, no sólo el mensaje, para que TS angoste el tipo)
     if (!paymentMethod) { setError(validatePaymentMethodForSale(paymentMethod) ?? "Seleccioná un método de pago."); return; }
     if (!branchId || ticket.length === 0 || saleInFlight.current) return;
-    if (ticketDiscountInvalid) { setError("Corregí el porcentaje de descuento (entre 0 y 100)."); return; }
+    if (ticketDiscountInvalid) { setError("Corregí el porcentaje de descuento (0 a menos de 100)."); return; }
     if (ticketTotal <= 0n) { setError("El total a cobrar no puede ser $0: bajá el descuento."); return; }
     const method = paymentMethod;
     const provider = paymentProvider;

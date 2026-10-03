@@ -86,7 +86,7 @@ Orden de pricing completo de una venta de Central (el orden de arriba no cambia 
 2. **línea con precio manual:** el precio que fijó el operador (por kg o por unidad) × cantidad → subtotal de línea. **Sin** promoción, pack ni recargo; no cambia con el medio de pago;
 3. **ticket:** suma de los subtotales de línea → **descuento general** (`round_half_up(subtotal × bps / 10.000)`) → **total cobrado**.
 
-El precio manual no modifica `product_prices` ni afecta ventas futuras. El descuento general es un porcentaje libre (0–100, hasta 2 decimales); se conserva al cambiar el medio de pago y se recalcula sobre el nuevo subtotal. Un total de $0 no se cobra. `sales.total_cents`, el pago, rendiciones, Mercado Pago y el ticket de WhatsApp usan el total final. Rentabilidad usa el ingreso real: la parte del descuento general atribuida a cada línea (`sale_items.ticket_discount_cents`, mayor resto) se resta de su subtotal.
+El precio manual no modifica `product_prices` ni afecta ventas futuras. El descuento general es un porcentaje libre (`0 <= % < 100`, hasta 2 decimales); se conserva al cambiar el medio de pago y se recalcula sobre el nuevo subtotal. Un total de $0 no existe (100 % se rechaza). `sales.total_cents`, el pago, rendiciones, Mercado Pago y el ticket de WhatsApp usan el total final. Rentabilidad usa el ingreso real: la parte del descuento general atribuida a cada línea (`sale_items.ticket_discount_cents`, mayor resto) se resta de su subtotal.
 
 ## Promociones
 

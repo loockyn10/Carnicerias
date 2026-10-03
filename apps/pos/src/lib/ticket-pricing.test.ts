@@ -153,6 +153,55 @@ describe("precio manual por línea (D-061)", () => {
   });
 });
 
+describe("Usar precio normal conserva 'Vender como pack' (D-061)", () => {
+  const vacioPack: DiscountRule = {
+    id: "pack-vacio", productId: "vacio", branchId: null, promotionMode: "PACK_FIXED_TOTAL", minimumGrams: null, discountType: null,
+    discountValue: null, packQuantityGrams: 2_000, packQuantityUnits: null, packPriceCents: "1800000"
+  };
+  const packLine = (method: PricingContext["paymentMethod"] = "CASH") =>
+    buildWeightTicketLine(vacio, 2_050, "w", true, vacioPack, [vacioPack], BRANCH, method, SURCHARGE_BPS);
+
+  it("una línea vendida como pack recuerda el estado aunque el precio manual anule la promoción", () => {
+    const pack = packLine();
+    expect(pack).toMatchObject({ promotionMode: "PACK_FIXED_TOTAL", sellAsPack: true, subtotalCents: 1_800_000n });
+    const manual = applyManualPrice(pack, 1_300_000n);
+    expect(manual).toMatchObject({ promotionMode: null, discountRuleId: null, sellAsPack: true, manualPriceApplied: true });
+  });
+
+  it("restaurar el precio normal vuelve exactamente a la línea pack, en efectivo y con tarjeta", () => {
+    const manual = applyManualPrice(packLine(), 1_300_000n);
+    const cash = restoreNormalPrice(manual, context("CASH", [vacioPack]));
+    expect(cash).toMatchObject({ promotionMode: "PACK_FIXED_TOTAL", discountRuleId: "pack-vacio", sellAsPack: true, subtotalCents: 1_800_000n, weightGrams: 2_050 });
+    expect(cash.manualPriceApplied).toBeUndefined();
+    expect(cash).toEqual(packLine());
+    const card = restoreNormalPrice(manual, context("DEBIT", [vacioPack]));
+    expect(card).toMatchObject({ promotionMode: "PACK_FIXED_TOTAL", sellAsPack: true, subtotalCents: 1_980_000n });
+    expect(card).toEqual(packLine("DEBIT"));
+  });
+
+  it("restaurar NO activa el pack en una línea que no se vendía como pack", () => {
+    const plain = buildWeightTicketLine(vacio, 2_050, "w", false, null, [vacioPack], BRANCH, "CASH", SURCHARGE_BPS);
+    expect(plain.sellAsPack).toBeUndefined();
+    const restored = restoreNormalPrice(applyManualPrice(plain, 1_300_000n), context("CASH", [vacioPack]));
+    expect(restored.promotionMode).toBeNull();
+    expect(restored.sellAsPack).toBeUndefined();
+    expect(restored.subtotalCents).toBe(plain.subtotalCents);
+  });
+
+  it("editar el peso de una línea manual-pack conserva el estado del pack y el precio manual", () => {
+    const manual = applyManualPrice(packLine(), 1_300_000n);
+    const edited = carryManualPrice(manual, buildWeightTicketLine(vacio, 2_500, "w", true, vacioPack, [vacioPack], BRANCH, "CASH", SURCHARGE_BPS));
+    expect(edited).toMatchObject({ manualPriceApplied: true, sellAsPack: true, promotionMode: null, subtotalCents: 3_250_000n });
+    expect(restoreNormalPrice(edited, context("CASH", [vacioPack]))).toMatchObject({ promotionMode: "PACK_FIXED_TOTAL", sellAsPack: true, subtotalCents: 1_800_000n });
+  });
+
+  it("si el pack ya no existe al restaurar, la línea vuelve al precio normal sin pack", () => {
+    const restored = restoreNormalPrice(applyManualPrice(packLine(), 1_300_000n), context("CASH", []));
+    expect(restored.promotionMode).toBeNull();
+    expect(restored.sellAsPack).toBeUndefined();
+  });
+});
+
 describe("descuento general del ticket (D-061)", () => {
   function ticketOf(method: PricingContext["paymentMethod"]): TicketLine[] {
     return [
@@ -203,7 +252,11 @@ describe("descuento general del ticket (D-061)", () => {
     expect(summary).toEqual({ ...calculateTicketDiscount(123_457n, 725n), hasManualPrice: false });
   });
 
-  it("100% deja el total en $0 y la UI no deja confirmar (ver isSaleConfirmable)", () => {
-    expect(summarizeTicket(ticketOf("CASH"), bps("100")).totalCents).toBe(0n);
+  it("100% no se acepta (el modelo no admite ventas de $0) y 99,99% sí, con decimales", () => {
+    expect(parseDiscountPercent("100")).toEqual({ ok: false, message: "El descuento tiene que ser menor a 100%." });
+    expect(parseDiscountPercent("100,00").ok).toBe(false);
+    const summary = summarizeTicket(ticketOf("CASH"), bps("99,99"));
+    expect(summary.totalCents).toBe(240n);
+    expect(summary.discountCents + summary.totalCents).toBe(2_400_000n);
   });
 });

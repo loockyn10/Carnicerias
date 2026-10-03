@@ -90,9 +90,14 @@ describe("parseDiscountPercent", () => {
     expect(parseDiscountPercent("5,")).toEqual({ ok: true, bps: 500n });
   });
 
-  it("permite de 0 a 100 y rechaza el resto", () => {
-    expect(parseDiscountPercent("100")).toEqual({ ok: true, bps: 10_000n });
-    expect(parseDiscountPercent("100,00")).toEqual({ ok: true, bps: 10_000n });
+  it("permite 0 <= % < 100 (con decimales) y rechaza el resto, incluido 100%", () => {
+    expect(parseDiscountPercent("99")).toEqual({ ok: true, bps: 9_900n });
+    expect(parseDiscountPercent("99,99")).toEqual({ ok: true, bps: 9_999n });
+    expect(parseDiscountPercent("99.5")).toEqual({ ok: true, bps: 9_950n });
+    // 100% dejaría el total en $0, que el modelo no admite: se rechaza con un mensaje claro.
+    expect(parseDiscountPercent("100")).toEqual({ ok: false, message: "El descuento tiene que ser menor a 100%." });
+    expect(parseDiscountPercent("100,00").ok).toBe(false);
+    expect(parseDiscountPercent("100.0").ok).toBe(false);
     expect(parseDiscountPercent("100,01").ok).toBe(false);
     expect(parseDiscountPercent("101").ok).toBe(false);
     expect(parseDiscountPercent("999").ok).toBe(false);
@@ -111,7 +116,7 @@ describe("formatDiscountPercent", () => {
     expect(formatDiscountPercent(1_250n)).toBe("12,5");
     expect(formatDiscountPercent(725n)).toBe("7,25");
     expect(formatDiscountPercent(5n)).toBe("0,05");
-    expect(formatDiscountPercent(10_000n)).toBe("100");
+    expect(formatDiscountPercent(9_999n)).toBe("99,99");
     expect(formatDiscountPercent(0n)).toBe("0");
   });
 });

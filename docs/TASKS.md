@@ -11,7 +11,7 @@ Implementado 2026-10-02 (D-061, `CURRENT_STATE.md`), **sin aplicar**. Orden obli
 3. Donde haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `flexible_pricing_central.test.sql` (101) contra Supabase real.
 4. **Confirmar que `organizations.production_branch_id` apunta a Central**: sin eso el POS no ofrece nada de esto (fail-closed) y el servidor lo rechazaría.
 5. Smoke físico en Central: ticket nuevo arranca en Efectivo y vuelve a Efectivo tras vender/cancelar; Tarjeta recarga sólo las líneas normales; "Editar precio" en una línea `UNIT` y una `WEIGHT` (con balanza), "Usar precio normal", editar peso/cantidad conservando el precio; descuento 5 / 12,5 / 0; combinación manual + descuento + Tarjeta; cobrar online y **sin Internet** (cerrar y reabrir el POS antes de reconectar) y ver en Admin → Ventas el detalle y en Rendiciones/Rentabilidad el total final; Mercado Pago con descuento (el QR cobra el total final); ticket de WhatsApp de una venta con descuento. En Avenida: sin "Editar precio" ni "Descuento" y arranca sin medio elegido.
-6. Confirmar las decisiones no pedidas explícitamente (lista en D-061): precio manual mayor al normal permitido, `complete_discounted_sale` sin soporte (POS web de desarrollo), 100 % se puede tipear pero no se cobra.
+6. Confirmar las decisiones no pedidas explícitamente (lista en D-061): precio manual mayor al normal permitido, `complete_discounted_sale` sin soporte (POS web de desarrollo), el descuento acepta `0 <= % < 100`.
 
 ## P0 — Ticket por WhatsApp (QR del cliente): secrets, deploy y prueba con el número de prueba (acción del usuario)
 
