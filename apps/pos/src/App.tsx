@@ -5,9 +5,9 @@ import {
   formatWeight,
   parseWeightToGrams,
   priceForWeight,
-  calculateSalePricing,
-  calculateWeightPackSalePricing,
-  calculateUnitPackSalePricing,
+  calculateManualLinePricing,
+  formatDiscountPercent,
+  parseDiscountPercent,
   advanceWeightStability,
   initialWeightStabilityState,
   sumMoney,
@@ -21,7 +21,13 @@ import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, parti
 import { CategoryPicker } from "./CategoryPicker";
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
-import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
+import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
+import {
+  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, repriceTicketLine, restoreNormalPrice,
+  summarizeTicket, type DiscountRule
+} from "./lib/ticket-pricing";
+import { sanitizeDiscountInput } from "./lib/manual-price";
+import { ManualPriceModal } from "./ManualPriceModal";
 import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
@@ -37,6 +43,10 @@ import { isManualTransferOffered, isSessionDegraded, resolveMercadoPagoAvailabil
 import { readManualTransferAllowed, readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./lib/mercadopago-capability";
 import { reconcilePendingMercadoPago } from "./lib/mercadopago-reconcile";
 import { describeLocalPayment } from "./lib/mercadopago-state";
+import { PostSaleBar } from "./PostSaleBar";
+import { WhatsAppQrModal } from "./WhatsAppQrModal";
+import { requestWhatsAppClaim } from "./lib/whatsapp-claim";
+import { canOfferTicket, resolveWhatsAppAvailability } from "./lib/whatsapp-ticket-state";
 
 interface AuthUser {
   id: string;
@@ -72,18 +82,6 @@ interface CatalogProduct {
   pricePerKgCents: bigint;
   /** Scanner codes of the product, from the synced catalog (SQLite offline). */
   barcodes: string[];
-}
-interface DiscountRule {
-  id: string;
-  productId: string;
-  branchId: string | null;
-  promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL";
-  minimumGrams: number | null;
-  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
-  discountValue: string | null;
-  packQuantityGrams: number | null;
-  packQuantityUnits: number | null;
-  packPriceCents: string | null;
 }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
@@ -123,81 +121,6 @@ function discountBadgeLabel(rule: DiscountRule): string | null {
   if (rule.discountType == null || rule.discountValue == null || rule.minimumGrams == null) return null;
   const value = rule.discountType === "PERCENTAGE" ? `${String(Number(rule.discountValue) / 100)}% OFF` : `${formatCurrency(BigInt(rule.discountValue))}/kg`;
   return `${value} desde ${formatWeight(rule.minimumGrams)}`;
-}
-
-interface ComputedLine {
-  pricing: ReturnType<typeof calculateSalePricing>;
-  discountRuleId: string | null;
-  discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
-  discountValue: bigint | null;
-  promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
-}
-
-/** WEIGHT pricing: an explicit pack (sellAsPack, WEIGHT never auto-detects a pack — the real
- * weighed grams never land exactly on the nominal pack amount) takes priority; otherwise the
- * usual threshold lookup by weighed grams, unchanged from before packs existed. */
-function computeWeightLine(
-  listPriceCents: bigint, weightGrams: number, sellAsPack: boolean, pack: DiscountRule | null,
-  discounts: DiscountRule[], productId: string, branchId: string, paymentMethod: PaymentMethod, cashDiscountBps: bigint
-): ComputedLine {
-  if (sellAsPack && pack?.packPriceCents != null) {
-    const pricing = calculateWeightPackSalePricing({
-      listPriceCents, weightGrams, paymentMethod, cashDiscountBps, packPriceCents: BigInt(pack.packPriceCents)
-    });
-    return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL" };
-  }
-  const applicableRules = discounts.filter((rule) => rule.promotionMode === "THRESHOLD" && rule.productId === productId && rule.minimumGrams != null)
-    .sort((left, right) => (right.minimumGrams ?? 0) - (left.minimumGrams ?? 0) || Number(right.branchId === branchId) - Number(left.branchId === branchId));
-  const rule = applicableRules.find((candidate) => (candidate.minimumGrams ?? Infinity) <= weightGrams);
-  const promotion = rule?.discountType && rule.discountValue != null ? { id: rule.id, discountType: rule.discountType, discountValue: BigInt(rule.discountValue) } : null;
-  const pricing = calculateSalePricing({ listPriceCents, quantity: weightGrams, quantityDivisor: 1_000, paymentMethod, cashDiscountBps, promotion });
-  return {
-    pricing, discountRuleId: rule?.id ?? null, discountType: rule?.discountType ?? null,
-    discountValue: rule?.discountValue != null ? BigInt(rule.discountValue) : null, promotionMode: null
-  };
-}
-
-/** UNIT pricing: no balanza, no THRESHOLD (WEIGHT-only by design) — a pack applies automatically
- * on exact multiples of its quantity (no manual toggle, unlike WEIGHT: unit counts are exact, no
- * scale variance to worry about), with any remainder at the normal cash price. */
-function computeUnitLine(
-  listPriceCents: bigint, quantityUnits: number, pack: DiscountRule | null, paymentMethod: PaymentMethod, cashDiscountBps: bigint
-): ComputedLine {
-  const wholePacks = pack?.packQuantityUnits ? Math.floor(quantityUnits / pack.packQuantityUnits) : 0;
-  if (pack?.packQuantityUnits != null && pack.packPriceCents != null && wholePacks >= 1) {
-    const pricing = calculateUnitPackSalePricing({
-      listPriceCents, quantityUnits, paymentMethod, cashDiscountBps,
-      pack: { id: pack.id, packQuantityUnits: pack.packQuantityUnits, packPriceCents: BigInt(pack.packPriceCents) }
-    });
-    return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL" };
-  }
-  const pricing = calculateSalePricing({ listPriceCents, quantity: quantityUnits, quantityDivisor: 1, paymentMethod, cashDiscountBps, promotion: null });
-  return { pricing, discountRuleId: null, discountType: null, discountValue: null, promotionMode: null };
-}
-
-/** The single active PACK_FIXED_TOTAL of a product for this branch (or global), if any. */
-function findPackRule(discounts: DiscountRule[], productId: string, branchId: string): DiscountRule | null {
-  return discounts.find((rule) => rule.productId === productId && rule.promotionMode === "PACK_FIXED_TOTAL"
-    && (rule.branchId === branchId || rule.branchId === null)) ?? null;
-}
-
-/** A UNIT ticket line for `quantityUnits` of `product`. Shared by the manual quantity dialog and
- * the barcode scan so both price (packs, card surcharge) exactly the same way. */
-function buildUnitTicketLine(
-  product: CatalogProduct, quantityUnits: number, id: string, pack: DiscountRule | null,
-  paymentMethod: PaymentMethod, cashDiscountBps: bigint
-): TicketLine {
-  const computed = computeUnitLine(product.pricePerKgCents, quantityUnits, pack, paymentMethod, cashDiscountBps);
-  return {
-    id, productId: product.productId, productName: product.productName,
-    weightGrams: 0, quantityUnits, pricePerKgCents: computed.pricing.finalPriceCents,
-    originalPricePerKgCents: product.pricePerKgCents, discountRuleId: computed.discountRuleId,
-    discountType: computed.discountType, discountValue: computed.discountValue, promotionMode: computed.promotionMode,
-    discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
-    cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
-    promotionDiscountCents: computed.pricing.promotionDiscountCents,
-    subtotalCents: computed.pricing.subtotalCents
-  };
 }
 
 function formatShiftTime(timestamp: string): string {
@@ -401,6 +324,10 @@ export default function App() {
   const [quantityInput, setQuantityInput] = useState(1);
   const [sellAsPack, setSellAsPack] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
+  // Pricing flexible de Central (D-061): descuento general del ticket (texto libre del input, en %) y la línea
+  // cuyo precio manual se está editando. Ninguno de los dos existe fuera del POS de Central.
+  const [ticketDiscountInput, setTicketDiscountInput] = useState("");
+  const [manualPriceLineId, setManualPriceLineId] = useState<string | null>(null);
   // Mercado Pago (D-054): se declara como proveedor sobre TRANSFER (mismo precio, sin recargo). El
   // botón sólo existe si el backend dice que esta sucursal lo tiene habilitado.
   const [paymentProvider, setPaymentProvider] = useState<"MERCADOPAGO" | null>(null);
@@ -412,6 +339,10 @@ export default function App() {
   const [reconnectOpen, setReconnectOpen] = useState(false);
   const [mpPanelSale, setMpPanelSale] = useState<{ saleId: string; totalCents: bigint } | null>(null);
   const [pendingMp, setPendingMp] = useState<PendingProviderPayment[]>([]);
+  // Ticket digital por WhatsApp (D-060, iniciado por el cliente): la venta recién completada (barra NO modal) y la
+  // venta cuyo QR se está mostrando (modal). El teléfono nunca se pide ni se escribe en el POS.
+  const [postSale, setPostSale] = useState<{ saleId: string; totalCents: string | null } | null>(null);
+  const [whatsappSaleId, setWhatsappSaleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDiagnostics, setErrorDiagnostics] = useState<string | null>(null);
@@ -420,6 +351,7 @@ export default function App() {
   // from `error`/`notice` so a scan never clobbers (or is clobbered by) a sale/sync message.
   const [scanFeedback, setScanFeedback] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const ticketRef = useRef<TicketLine[]>([]);
+  const centralPosRef = useRef(false);
   const [localRuntime, setLocalRuntime] = useState<LocalRuntime | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
@@ -550,8 +482,7 @@ export default function App() {
       setBranches([]);
       setBranchId("");
       setCatalog([]);
-      setTicket([]);
-      setPaymentMethod(null);
+      clearTicket();
       return;
     }
 
@@ -728,6 +659,27 @@ export default function App() {
   useEffect(() => {
     setCentralPos(desktop && readQuickProductCreate(localRuntime?.branchId ?? null));
   }, [desktop, localRuntime?.branchId, localRuntime?.lastSuccessfulSyncAt]);
+  // El precio manual y el descuento general existen sólo en Central: se le informa a SQLite (que valida la
+  // venta aunque no haya Internet) la misma capacidad que decide la UI, y el servidor la vuelve a verificar al sincronizar.
+  useEffect(() => {
+    if (!desktop || !localRuntime?.branchId) return;
+    void localDatabase.setFlexiblePricingBranch(localRuntime.branchId, centralPos).catch(() => undefined);
+  }, [desktop, localRuntime?.branchId, centralPos]);
+  centralPosRef.current = centralPos;
+  // Central: cada ticket arranca (y vuelve después de vender/cancelar/resetear) en Efectivo, nunca sin medio elegido.
+  useEffect(() => {
+    if (centralPos && paymentMethod === null) setPaymentMethod("CASH");
+  }, [centralPos, paymentMethod]);
+  // Si la capacidad desaparece con un ticket abierto (Admin reconfiguró la sucursal productiva), sus precios
+  // manuales y su descuento general no pueden cobrarse: la línea vuelve al precio normal.
+  useEffect(() => {
+    if (centralPos) return;
+    setTicketDiscountInput("");
+    setManualPriceLineId(null);
+    setTicket((current) => current.some((line) => line.manualPriceApplied)
+      ? current.map((line) => line.manualPriceApplied ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId }) : line)
+      : current);
+  }, [centralPos]);
   // Se recalcula con cada sync (lastSuccessfulSyncAt cambia en cada pull; el snapshot de stock ya
   // quedó aplicado antes de que runSync publique el runtime) y tras cada venta (explícito abajo).
   useEffect(() => { void loadBranchStock(); }, [loadBranchStock, localRuntime?.lastSuccessfulSyncAt, localRuntime?.catalogCursor]);
@@ -1052,10 +1004,17 @@ export default function App() {
   const visibleOutOfStock = outOfStockProducts.slice(0, Math.max(0, gridLimit - visibleAvailable.length));
   const hiddenCount = (availableProducts.length - visibleAvailable.length) + (showOutOfStock ? outOfStockProducts.length - visibleOutOfStock.length : 0);
 
-  const ticketTotal = useMemo(
-    () => sumMoney(ticket.map((line) => line.subtotalCents)),
-    [ticket]
-  );
+  // Descuento general (D-061): % libre en el input -> basis points. Un valor inválido (>100) no descuenta y
+  // bloquea el cobro hasta corregirlo; fuera de Central no existe.
+  const ticketDiscountParse = useMemo(() => parseDiscountPercent(ticketDiscountInput), [ticketDiscountInput]);
+  const ticketDiscountBps = centralPos && ticketDiscountParse.ok ? ticketDiscountParse.bps : 0n;
+  const ticketDiscountInvalid = centralPos && !ticketDiscountParse.ok;
+  const ticketSummary = useMemo(() => summarizeTicket(ticket, ticketDiscountBps), [ticket, ticketDiscountBps]);
+  // Lo que realmente se cobra (y se manda a Mercado Pago): suma de líneas menos el descuento general.
+  const ticketTotal = ticketSummary.totalCents;
+  // El descuento general pertenece al ticket en curso: si se vacía (se eliminó la última línea) vuelve a 0.
+  useEffect(() => { if (ticket.length === 0) setTicketDiscountInput(""); }, [ticket.length]);
+  const ticketManualAdjustment = useMemo(() => sumMoney(ticket.map((line) => line.manualAdjustmentCents ?? 0n)), [ticket]);
   const ticketWeight = useMemo(
     () => ticket.reduce((total, line) => total + line.weightGrams, 0),
     [ticket]
@@ -1069,48 +1028,11 @@ export default function App() {
   const ticketPromotionDiscount = useMemo(() => sumMoney(ticket.map((line) => line.promotionDiscountCents ?? 0n)), [ticket]);
 
   useEffect(() => {
-    // Recalcular importes sólo tiene sentido una vez que hay método elegido;
-    // mientras paymentMethod sea null los importes no se muestran igual.
+    // Recalcular importes sólo tiene sentido una vez que hay método elegido; una línea con precio manual
+    // no se recalcula nunca (repriceTicketLine): su precio es la decisión final del operador.
     if (!paymentMethod) return;
     const method = paymentMethod;
-    setTicket((current) => current.map((line) => {
-      const listPriceCents = line.originalPricePerKgCents ?? line.pricePerKgCents;
-      let pricing: ReturnType<typeof calculateSalePricing>;
-      if (line.quantityUnits != null) {
-        // Línea UNIT: si tenía un pack, hay que recalcularlo contra el rule actual —
-        // computeUnitLine siempre recalcula desde pack.packPriceCents (el precio fijo real del
-        // pack), nunca desde line.subtotalCents, porque ese subtotal puede venir ya recargado por
-        // tarjeta de un cálculo anterior con otro método de pago (D-044: el recargo se aplica al
-        // total comercial completo, packs incluidos, sin excepción).
-        const pack = line.discountRuleId ? discounts.find((rule) => rule.id === line.discountRuleId) ?? null : null;
-        pricing = computeUnitLine(listPriceCents, line.quantityUnits, pack, method, BigInt(cashDiscountBps)).pricing;
-      } else if (line.promotionMode === "PACK_FIXED_TOTAL" && line.discountRuleId) {
-        // Línea pack WEIGHT: no escala con el peso — recalcularla como threshold perdería el
-        // pack al cambiar el método de pago. El recargo por tarjeta SÍ se aplica sobre el total
-        // del pack (D-044, sin excepción), así que subtotalCents de la línea puede ya venir
-        // recargado de un cálculo anterior con otro método de pago — nunca se reutiliza
-        // directamente como packPriceCents (eso compondría el recargo). Se busca el precio de
-        // pack real y fijo en la regla vigente, igual que ya hace la rama UNIT de abajo.
-        const pack = discounts.find((rule) => rule.id === line.discountRuleId && rule.promotionMode === "PACK_FIXED_TOTAL");
-        if (!pack?.packPriceCents) return line;
-        pricing = calculateWeightPackSalePricing({
-          listPriceCents, weightGrams: line.weightGrams, paymentMethod: method,
-          cashDiscountBps: BigInt(cashDiscountBps), packPriceCents: BigInt(pack.packPriceCents)
-        });
-      } else {
-        pricing = calculateSalePricing({
-          listPriceCents, quantity: line.weightGrams, quantityDivisor: 1_000, paymentMethod: method,
-          cashDiscountBps: BigInt(cashDiscountBps),
-          promotion: line.discountType && line.discountValue != null && line.discountRuleId
-            ? { id: line.discountRuleId, discountType: line.discountType, discountValue: line.discountValue }
-            : null
-        });
-      }
-      return { ...line, pricePerKgCents: pricing.finalPriceCents, cashDiscountBps: pricing.cashDiscountBps,
-        cashDiscountCents: pricing.cashDiscountCents, cardSurchargeCents: pricing.cardSurchargeCents,
-        promotionDiscountCents: pricing.promotionDiscountCents,
-        discountCents: pricing.discountCents, subtotalCents: pricing.subtotalCents };
-    }));
+    setTicket((current) => current.map((line) => repriceTicketLine(line, { paymentMethod: method, discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId })));
   }, [cashDiscountBps, paymentMethod]);
 
   // Producto sin precio: NUNCA se agrega a $0. Con conexión se abre el modal para fijar el precio; sin
@@ -1214,16 +1136,13 @@ export default function App() {
       } else {
         const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
         const pack = sellAsPack ? packRuleForSelectedProduct : null;
-        const computed = computeWeightLine(selectedProduct.pricePerKgCents, grams, sellAsPack, pack, discounts, selectedProduct.productId, branchId, method, BigInt(cashDiscountBps));
-        line = {
-          id: editingLineId ?? crypto.randomUUID(), productId: selectedProduct.productId, productName: selectedProduct.productName,
-          weightGrams: grams, pricePerKgCents: computed.pricing.finalPriceCents, originalPricePerKgCents: selectedProduct.pricePerKgCents,
-          discountRuleId: computed.discountRuleId, discountType: computed.discountType, discountValue: computed.discountValue,
-          promotionMode: computed.promotionMode, discountCents: computed.pricing.discountCents, cashDiscountBps: computed.pricing.cashDiscountBps,
-          cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
-          promotionDiscountCents: computed.pricing.promotionDiscountCents,
-          subtotalCents: computed.pricing.subtotalCents
-        };
+        line = buildWeightTicketLine(selectedProduct, grams, editingLineId ?? crypto.randomUUID(), sellAsPack, pack, discounts, branchId, method, BigInt(cashDiscountBps));
+      }
+      // Editar el peso/cantidad de una línea con precio manual conserva ese precio sobre la nueva cantidad.
+      try {
+        line = carryManualPrice(editingLineId ? ticket.find((candidate) => candidate.id === editingLineId) : undefined, line);
+      } catch {
+        throw new Error("Con esa cantidad el precio manual deja la línea en $0.");
       }
 
       setTicket((current) =>
@@ -1246,6 +1165,24 @@ export default function App() {
     commitSelectedProductLine();
   }
 
+  // ---- Precio manual por línea (D-061, sólo Central) -------------------------------------------------------
+  const manualPriceLine = manualPriceLineId ? ticket.find((line) => line.id === manualPriceLineId) ?? null : null;
+  function applyManualPriceToLine(lineId: string, priceCents: bigint) {
+    try {
+      setTicket((current) => current.map((line) => line.id === lineId ? applyManualPrice(line, priceCents) : line));
+      setManualPriceLineId(null);
+      setError(null);
+    } catch {
+      setError("Con ese precio la línea queda en $0.");
+    }
+  }
+  function restoreLineToNormalPrice(lineId: string) {
+    setTicket((current) => current.map((line) => line.id === lineId
+      ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId })
+      : line));
+    setManualPriceLineId(null);
+  }
+
   // ---- Barcode scanner (USB/HID keyboard wedge) ----------------------------------------------
   // Resolves against the branch catalog already loaded from SQLite (only products enabled in this
   // branch are in it) and the synced stock snapshot: no Supabase call per scan, works offline.
@@ -1258,7 +1195,8 @@ export default function App() {
     const current = ticketRef.current;
     const existing = current.find((line) => line.productId === product.productId && line.quantityUnits != null);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    const line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps));
+    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps));
+    try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
     ticketRef.current = next;
     setTicket(next);
@@ -1422,7 +1360,7 @@ export default function App() {
   const scanHandlerRef = useRef(handleScan);
   scanHandlerRef.current = handleScan;
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
-    && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && !loading;
+    && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && whatsappSaleId === null && !loading;
 
   useEffect(() => {
     if (!scannerEnabled) return;
@@ -1457,6 +1395,10 @@ export default function App() {
   // Hay Internet pero la sesión técnica no se pudo restaurar: la caja vende con la autorización en
   // caché, pero NO sincroniza ni puede consultar a Mercado Pago (ver lib/mercadopago-availability.ts).
   const sessionDegraded = isSessionDegraded({ desktop, sessionOffline: user?.offline ?? false, browserOnline: online });
+  // El envío del ticket por WhatsApp es una acción explícita ONLINE (nunca entra a la outbox offline).
+  const whatsappAvailability = resolveWhatsAppAvailability({
+    desktop, hasDevice: mpDeviceId !== null, hasOperator: Boolean(operator?.operatorToken), hasOnlineSession, online
+  });
   const mpAvailability = resolveMercadoPagoAvailability({
     desktop, hasDevice: mpDeviceId !== null, hasUser: user !== null, sessionOffline: user?.offline ?? false,
     browserOnline: online, knownEnabled: mpKnownEnabled, lookupFailed: mpLookupError !== null
@@ -1470,8 +1412,8 @@ export default function App() {
 
   // Si la política llega con una Transferencia manual ya elegida, se deselecciona (no se cobra así).
   useEffect(() => {
-    if (!manualTransferOffered && paymentMethod === "TRANSFER" && paymentProvider === null) setPaymentMethod(null);
-  }, [manualTransferOffered, paymentMethod, paymentProvider]);
+    if (!manualTransferOffered && paymentMethod === "TRANSFER" && paymentProvider === null) setPaymentMethod(initialPaymentMethodFor(centralPos));
+  }, [manualTransferOffered, paymentMethod, paymentProvider, centralPos]);
 
   // Cualquier reseteo del medio de pago (venta confirmada, ticket cancelado, cambio de operador...)
   // también limpia el proveedor: un ticket nuevo nunca arranca "Mercado Pago".
@@ -1513,6 +1455,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [desktop, mpDeviceId, mpBranchId, hasOnlineSession, online]);
 
+  // Vender sigue siendo rápido: en cuanto se carga el próximo producto, la barra de "Venta completada" se va sola.
+  useEffect(() => { if (ticket.length > 0) setPostSale(null); }, [ticket.length]);
+
+  const requestClaimForSale = useCallback(async (saleId: string) => {
+    if (!localRuntime?.deviceId || !operator?.operatorToken) {
+      return { kind: "error", message: "Seleccioná un empleado autorizado.", canRetry: false } as const;
+    }
+    // La venta nace en la SQLite local: se intenta sincronizarla primero (mejor esfuerzo, acotado) para que
+    // el servidor, que valida la venta y arma el ticket, ya la tenga.
+    if (navigator.onLine) {
+      await Promise.race([syncRunnerRef.current(), new Promise<void>((resolve) => { window.setTimeout(resolve, 8_000); })]).catch(() => undefined);
+    }
+    return requestWhatsAppClaim(
+      { deviceId: localRuntime.deviceId, operatorProfileId: operator.profileId, operatorToken: operator.operatorToken },
+      saleId
+    );
+  }, [localRuntime?.deviceId, operator]);
+
   const refreshPendingMp = useCallback(async () => {
     if (!desktop) return;
     try {
@@ -1535,7 +1495,12 @@ export default function App() {
   // restituido por el servidor (anulación de la venta) se refleje en la caja.
   const handleMercadoPagoSettled = useCallback((saleId: string, outcome: "PAID" | "NOT_PAID" | "NEEDS_ATTENTION", title: string) => {
     const short = saleId.slice(0, 8);
-    if (outcome === "PAID") setNotice(`Venta ${short}: pago de Mercado Pago confirmado`);
+    if (outcome === "PAID") {
+      setNotice(`Venta ${short}: pago de Mercado Pago confirmado`);
+      // Recién con el cobro confirmado por el backend se ofrece el ticket definitivo.
+      const panel = mpPanelSaleRef.current;
+      setPostSale({ saleId, totalCents: panel?.saleId === saleId ? panel.totalCents.toString() : null });
+    }
     else if (outcome === "NOT_PAID") setNotice(`${title}. La venta ${short} quedó anulada: no se cobró y su stock se restituyó.`);
     else setNotice(`Venta ${short}: revisá el cobro de Mercado Pago (${title}) y avisá al administrador.`);
     void refreshPendingMp();
@@ -1575,12 +1540,23 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [desktop, mpDeviceId, hasOnlineSession, online, refreshPendingMp, loadBranchStock]);
 
+  /** Ticket nuevo: sin líneas, sin descuento general y con el medio de pago inicial de la sucursal (Efectivo en Central). */
+  function clearTicket() {
+    setTicket([]);
+    setPaymentProvider(null);
+    setPaymentMethod(initialPaymentMethodFor(centralPosRef.current));
+    setTicketDiscountInput("");
+    setManualPriceLineId(null);
+  }
+
   async function completeSale() {
     // Guard defensivo: no confiar sólo en el disabled del botón. Sin método de
     // pago elegido, no se completa la venta bajo ninguna circunstancia.
     // (chequeo directo de null, no sólo el mensaje, para que TS angoste el tipo)
     if (!paymentMethod) { setError(validatePaymentMethodForSale(paymentMethod) ?? "Seleccioná un método de pago."); return; }
     if (!branchId || ticket.length === 0 || saleInFlight.current) return;
+    if (ticketDiscountInvalid) { setError("Corregí el porcentaje de descuento (entre 0 y 100)."); return; }
+    if (ticketTotal <= 0n) { setError("El total a cobrar no puede ser $0: bajá el descuento."); return; }
     const method = paymentMethod;
     const provider = paymentProvider;
     if (method === "TRANSFER" && provider === null && !manualTransferOffered) {
@@ -1614,11 +1590,11 @@ export default function App() {
           deviceId: localRuntime.deviceId,
           ticket,
           paymentMethod: method,
-          ...(provider ? { paymentProvider: provider } : {})
+          ...(provider ? { paymentProvider: provider } : {}),
+          ...(ticketDiscountBps > 0n ? { ticketDiscount: { bps: ticketDiscountBps, cents: ticketSummary.discountCents } } : {})
         });
         const receipt = await localDatabase.confirmSale(sale);
-        setTicket([]);
-        setPaymentMethod(null);
+        clearTicket();
         if (provider === "MERCADOPAGO") setMpPanelSale({ saleId: receipt.saleId, totalCents: BigInt(receipt.totalCents) });
         const runtime = await localDatabase.runtime();
         setLocalRuntime(runtime);
@@ -1632,6 +1608,7 @@ export default function App() {
           ? `Venta ${receipt.saleId.slice(0, 8)} registrada: falta confirmar el pago de Mercado Pago`
           : `Venta ${receipt.saleId.slice(0, 8)} confirmada localmente por ${formatCurrency(BigInt(receipt.totalCents))}`);
         void loadRecentSales().catch(() => undefined);
+        if (provider !== "MERCADOPAGO") setPostSale({ saleId: receipt.saleId, totalCents: receipt.totalCents });
         void runSync();
       } catch (saleError) {
         setError(saleError instanceof Error ? saleError.message : `La venta local no pudo completarse: ${String(saleError)}`);
@@ -1676,8 +1653,8 @@ export default function App() {
     }
 
     setNotice(`Venta ${completedSale.sale_id.slice(0, 8)} confirmada por ${formatCurrency(BigInt(completedSale.total_cents))}`);
-    setTicket([]);
-    setPaymentMethod(null);
+    setPostSale({ saleId: completedSale.sale_id, totalCents: String(completedSale.total_cents) });
+    clearTicket();
     void loadBranchStock();
     void loadRecentSales().catch(() => undefined);
   }
@@ -1739,8 +1716,7 @@ export default function App() {
       setClockInRequired(false);
       setOperator(null);
       setShift(null);
-      setTicket([]);
-      setPaymentMethod(null);
+      clearTicket();
       setLocalRuntime(await localDatabase.runtime());
       if (result.clockOutCreated) {
         setNotice("Salida registrada");
@@ -1932,8 +1908,7 @@ export default function App() {
               value={branchId}
               onChange={(event) => {
                 if (ticket.length && !window.confirm("Cambiar de sucursal cancelará el ticket actual. ¿Continuar?")) return;
-                setTicket([]);
-                setPaymentMethod(null);
+                clearTicket();
                 setBranchId(event.target.value);
               }}
             >
@@ -1980,6 +1955,15 @@ export default function App() {
         </div>
       ) : null}
       {notice ? <div className="pos-toast" role="status">✓ {notice}</div> : null}
+      {postSale ? (
+        <PostSaleBar
+          saleLabel={postSale.saleId.slice(0, 8)}
+          totalLabel={postSale.totalCents ? formatCurrency(BigInt(postSale.totalCents)) : null}
+          availability={whatsappAvailability}
+          onNewSale={() => setPostSale(null)}
+          onSendTicket={() => setWhatsappSaleId(postSale.saleId)}
+        />
+      ) : null}
       {scanFeedback ? <div className={`pos-toast ${scanFeedback.tone === "warn" ? "pos-toast-warn" : ""}`} role="status">{scanFeedback.tone === "ok" ? "✓ " : "⚠ "}{scanFeedback.text}</div> : null}
 
       <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
@@ -2055,11 +2039,23 @@ export default function App() {
                       <h3 className="font-black">{line.productName}</h3>
                       {shouldDisplayTicketAmounts(paymentMethod) ? (
                         <>
-                          <p className="mt-1 text-sm text-stone-400">
-                            {line.quantityUnits != null
-                              ? `${String(line.quantityUnits)} u × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
-                              : `${formatWeight(line.weightGrams)} × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg`}
-                          </p>
+                          {line.manualPriceApplied ? (
+                            <>
+                              <p className="mt-1 text-sm text-stone-400" data-testid="manual-price-line">
+                                {line.quantityUnits != null ? `${String(line.quantityUnits)} u × ` : `${formatWeight(line.weightGrams)} × `}
+                                <span className="text-stone-500 line-through">{formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}</span>
+                                {" → "}
+                                <strong className="text-amber-300">{formatCurrency(line.pricePerKgCents)}</strong>/{line.quantityUnits != null ? "u" : "kg"}
+                              </p>
+                              <p className="mt-1 text-xs font-bold text-amber-300">Precio manual</p>
+                            </>
+                          ) : (
+                            <p className="mt-1 text-sm text-stone-400">
+                              {line.quantityUnits != null
+                                ? `${String(line.quantityUnits)} u × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
+                                : `${formatWeight(line.weightGrams)} × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg`}
+                            </p>
+                          )}
                           {line.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 text-xs font-bold text-amber-300">Promo pack</p> : null}
                           {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
                         </>
@@ -2071,6 +2067,7 @@ export default function App() {
                   </div>
                   <div className="mt-3 flex gap-3 text-sm font-bold">
                     <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>{line.quantityUnits != null ? "Modificar cantidad" : "Modificar peso"}</button>
+                    {centralPos && shouldDisplayTicketAmounts(paymentMethod) ? <button className="text-sky-300" onClick={() => setManualPriceLineId(line.id)}>Editar precio</button> : null}
                     <button className="text-red-400" onClick={() => setTicket((current) => current.filter((candidate) => candidate.id !== line.id))}>Eliminar</button>
                   </div>
                 </article>
@@ -2117,12 +2114,36 @@ export default function App() {
                 {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
                 {ticketCardSurcharge > 0n ? <div className="mt-1 flex justify-between text-sm text-amber-400"><span>Recargo tarjeta ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>+{formatCurrency(ticketCardSurcharge)}</span></div> : null}
                 {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
+                {ticketManualAdjustment !== 0n ? <div className={`mt-1 flex justify-between text-sm ${ticketManualAdjustment < 0n ? "text-emerald-400" : "text-amber-400"}`}><span>Ajuste manual</span><span>{ticketManualAdjustment < 0n ? "-" : "+"}{formatCurrency(ticketManualAdjustment < 0n ? -ticketManualAdjustment : ticketManualAdjustment)}</span></div> : null}
+                {centralPos ? (
+                  <>
+                    {ticketDiscountBps > 0n ? <div className="mt-1 flex justify-between text-sm text-stone-300" data-testid="ticket-subtotal"><span>Subtotal</span><span>{formatCurrency(ticketSummary.subtotalCents)}</span></div> : null}
+                    <div className="mt-2 flex items-center justify-between gap-3 text-sm text-stone-300">
+                      <label className="font-bold" htmlFor="ticket-discount-input">Descuento</label>
+                      <span className="flex items-center gap-1">
+                        <input
+                          aria-label="Descuento sobre el total, en porcentaje"
+                          className={`w-20 rounded-lg border bg-stone-950 px-2 py-1 text-right font-black outline-none focus:border-rose-500 ${ticketDiscountInvalid ? "border-red-500" : "border-stone-600"}`}
+                          disabled={ticket.length === 0}
+                          id="ticket-discount-input"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={ticketDiscountInput}
+                          onChange={(event) => setTicketDiscountInput((previous) => sanitizeDiscountInput(event.target.value, previous))}
+                        />
+                        <span className="font-bold">%</span>
+                      </span>
+                    </div>
+                    {!ticketDiscountParse.ok ? <p className="mt-1 text-right text-xs font-bold text-red-400" role="alert">{ticketDiscountParse.message}</p> : null}
+                    {ticketDiscountBps > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400" data-testid="ticket-discount-amount"><span>Importe descuento ({formatDiscountPercent(ticketDiscountBps)}%)</span><span>-{formatCurrency(ticketSummary.discountCents)}</span></div> : null}
+                  </>
+                ) : null}
                 <div className="mt-2 flex items-end justify-between"><span className="text-lg font-bold">TOTAL</span><strong className="text-4xl font-black text-rose-400">{formatCurrency(ticketTotal)}</strong></div>
               </>
             ) : null}
             <button
               className="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!isSaleConfirmable({ paymentMethod, ticketLength: ticket.length, loading, deviceNeedsBinding }) || (paymentProvider === "MERCADOPAGO" && !mpAvailability.usable)}
+              disabled={!isSaleConfirmable({ paymentMethod, ticketLength: ticket.length, loading, deviceNeedsBinding, totalCents: ticketTotal }) || ticketDiscountInvalid || (paymentProvider === "MERCADOPAGO" && !mpAvailability.usable)}
               onClick={() => void completeSale()}
             >
               {loading ? "Procesando…" : paymentProvider === "MERCADOPAGO" ? "Confirmar y cobrar con Mercado Pago" : "Confirmar venta"}
@@ -2161,6 +2182,25 @@ export default function App() {
         </div>
       ) : null}
 
+      {manualPriceLine ? (
+        <ManualPriceModal
+          productName={manualPriceLine.productName}
+          unitLabel={manualPriceLine.quantityUnits != null ? "u" : "kg"}
+          quantityLabel={manualPriceLine.quantityUnits != null ? `${String(manualPriceLine.quantityUnits)} u` : formatWeight(manualPriceLine.weightGrams)}
+          normalPriceCents={manualPriceLine.originalPricePerKgCents ?? manualPriceLine.pricePerKgCents}
+          currentManualPriceCents={manualPriceLine.manualPriceApplied ? manualPriceLine.manualUnitPriceCents ?? null : null}
+          preview={(priceCents) => {
+            try {
+              const manual = applyManualPrice(manualPriceLine, priceCents);
+              return { subtotalCents: manual.subtotalCents, adjustmentCents: manual.manualAdjustmentCents ?? 0n };
+            } catch { return null; }
+          }}
+          onApply={(priceCents) => applyManualPriceToLine(manualPriceLine.id, priceCents)}
+          onRestore={() => restoreLineToNormalPrice(manualPriceLine.id)}
+          onCancel={() => setManualPriceLineId(null)}
+        />
+      ) : null}
+
       {cancelTicketModalOpen ? (
         <div
           className="pos-modal-backdrop fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4"
@@ -2177,8 +2217,7 @@ export default function App() {
               <button
                 className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500"
                 onClick={() => {
-                  setTicket([]);
-                  setPaymentMethod(null);
+                  clearTicket();
                   setCancelTicketModalOpen(false);
                 }}
               >
@@ -2289,7 +2328,7 @@ export default function App() {
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
       ) : null}
@@ -2302,6 +2341,16 @@ export default function App() {
           onClose={closeMercadoPagoPanel}
           onVerification={mirrorMercadoPagoVerification}
           onSettled={handleMercadoPagoSettled}
+        />
+      ) : null}
+
+      {whatsappSaleId !== null && whatsappAvailability.visible ? (
+        <WhatsAppQrModal
+          key={whatsappSaleId}
+          saleLabel={whatsappSaleId.slice(0, 8)}
+          sessionOffline={user.offline}
+          requestClaim={() => requestClaimForSale(whatsappSaleId)}
+          onClose={() => setWhatsappSaleId(null)}
         />
       ) : null}
 
@@ -2410,6 +2459,18 @@ export default function App() {
             {shouldDisplayTicketAmounts(paymentMethod) ? (
               <div className="mt-5 rounded-2xl bg-stone-950 p-4">
                 {(() => { if (!paymentMethod) return null; try {
+                  // Editando una línea con precio manual: se previsualiza con ese precio (sin promoción ni recargo).
+                  const editedLine = editingLineId ? ticket.find((candidate) => candidate.id === editingLineId) : undefined;
+                  if (editedLine?.manualPriceApplied && editedLine.manualUnitPriceCents != null) {
+                    const manual = calculateManualLinePricing({
+                      listPriceCents: selectedProduct.pricePerKgCents, manualUnitPriceCents: editedLine.manualUnitPriceCents,
+                      quantity: selectedProduct.unitType === "WEIGHT" ? parseWeightToGrams(weightInput) : quantityInput,
+                      quantityDivisor: selectedProduct.unitType === "WEIGHT" ? 1_000 : 1
+                    });
+                    return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(manual.listSubtotalCents)}</p>
+                      <p className="mt-1 font-bold text-amber-300">Precio manual: {formatCurrency(manual.manualUnitPriceCents)} / {selectedProduct.unitType === "WEIGHT" ? "kg" : "u"}</p>
+                      <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(manual.subtotalCents)}</strong></>;
+                  }
                   const computed = selectedProduct.unitType === "WEIGHT"
                     ? computeWeightLine(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), sellAsPack, packRuleForSelectedProduct, discounts, selectedProduct.productId, branchId, paymentMethod, BigInt(cashDiscountBps))
                     : computeUnitLine(selectedProduct.pricePerKgCents, quantityInput, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps));

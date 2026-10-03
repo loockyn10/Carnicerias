@@ -9,6 +9,16 @@ import type { PaymentMethod } from "@carnicerias/types";
 export const INITIAL_PAYMENT_METHOD: PaymentMethod | null = null;
 
 /**
+ * Medio de pago con el que arranca un ticket nuevo (y al que vuelve después de vender/cancelar/resetear).
+ * En el POS de Central (la sucursal productiva que decide el servidor, nunca el nombre) es Efectivo: el
+ * mostrador vende casi todo en efectivo y los precios se ven desde el primer producto. En el resto de las
+ * sucursales no cambia: sin medio elegido hasta que la empleada lo toque (INITIAL_PAYMENT_METHOD).
+ */
+export function initialPaymentMethodFor(centralPos: boolean): PaymentMethod | null {
+  return centralPos ? "CASH" : INITIAL_PAYMENT_METHOD;
+}
+
+/**
  * Los importes monetarios (precio/kg, subtotal, descuentos, promoción, TOTAL)
  * sólo se muestran una vez elegido el método de pago — ni en el footer del
  * ticket ni en el modal de agregar/modificar peso, para que la empleada no
@@ -23,8 +33,11 @@ export function isSaleConfirmable(input: {
   ticketLength: number;
   loading: boolean;
   deviceNeedsBinding: boolean;
+  /** Total a cobrar ya con el descuento general. Un ticket que queda en $0 (descuento 100%) no se cobra. */
+  totalCents?: bigint;
 }): boolean {
-  return input.paymentMethod !== null && input.ticketLength > 0 && !input.loading && !input.deviceNeedsBinding;
+  return input.paymentMethod !== null && input.ticketLength > 0 && !input.loading && !input.deviceNeedsBinding
+    && (input.totalCents === undefined || input.totalCents > 0n);
 }
 
 /**

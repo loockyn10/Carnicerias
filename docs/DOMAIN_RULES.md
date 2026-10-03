@@ -76,6 +76,18 @@ Ejemplo (tarjeta):
 
 Ejemplo (efectivo/transferencia): lista $14.444,44 → sin ajuste → -5% promoción → $13.722,22.
 
+## Precio manual y descuento general (POS de Central, D-061)
+
+Sólo en el POS de la sucursal productiva (la misma "Central" de D-058, decidida por el servidor, nunca por nombre). Cada ticket de Central arranca en `CASH`.
+
+Orden de pricing completo de una venta de Central (el orden de arriba no cambia para las líneas normales):
+
+1. **línea normal:** lista → promoción/pack → recargo por tarjeta (sólo DEBIT/CREDIT) → subtotal de línea;
+2. **línea con precio manual:** el precio que fijó el operador (por kg o por unidad) × cantidad → subtotal de línea. **Sin** promoción, pack ni recargo; no cambia con el medio de pago;
+3. **ticket:** suma de los subtotales de línea → **descuento general** (`round_half_up(subtotal × bps / 10.000)`) → **total cobrado**.
+
+El precio manual no modifica `product_prices` ni afecta ventas futuras. El descuento general es un porcentaje libre (0–100, hasta 2 decimales); se conserva al cambiar el medio de pago y se recalcula sobre el nuevo subtotal. Un total de $0 no se cobra. `sales.total_cents`, el pago, rendiciones, Mercado Pago y el ticket de WhatsApp usan el total final. Rentabilidad usa el ingreso real: la parte del descuento general atribuida a cada línea (`sale_items.ticket_discount_cents`, mayor resto) se resta de su subtotal.
+
 ## Promociones
 
 Dos modalidades (`promotion_mode`), ver D-039:
@@ -97,6 +109,7 @@ Reglas de `PACK_FIXED_TOTAL`:
 Una venta debe preservar los datos relevantes del momento:
 
 - precio/lista aplicable;
+- precio manual cobrado, ajuste manual y descuento general (porcentaje e importe) cuando existan (D-061);
 - descuentos;
 - promoción;
 - costo histórico;
@@ -215,7 +228,7 @@ Terminología:
 
 Por producto/período:
 
-- revenue = importe final real de venta;
+- revenue = importe final real de venta (con precio manual y con la parte del descuento general atribuida a la línea, D-061);
 - cost = costo snapshot de mercadería;
 - gross profit = revenue - cost;
 - rentabilidad sobre costo = gross profit / cost;

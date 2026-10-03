@@ -2,6 +2,28 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Pricing flexible en Central: aplicar, instalar y probar (acción del usuario)
+
+Implementado 2026-10-02 (D-061, `CURRENT_STATE.md`), **sin aplicar**. Orden obligatorio:
+
+1. `supabase db push` (aplica `202610020058`; antes van `056`/`057` si todavía no estaban). **Antes** de instalar el POS nuevo: un POS nuevo con precio manual o descuento contra un servidor sin `058` deja la venta en `FAILED` en la outbox (el total no cierra); un POS viejo contra el servidor nuevo no cambia. Después `pnpm exec supabase gen types typescript --linked` y comparar con la edición manual de `database.types.ts`.
+2. `pnpm build:pos:desktop` e instalar el POS nuevo en Central (Avenida/Janssen no cambian, pero conviene actualizarlos con el mismo instalador). `git push` para el Admin (Ventas muestra el detalle).
+3. Donde haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `flexible_pricing_central.test.sql` (101) contra Supabase real.
+4. **Confirmar que `organizations.production_branch_id` apunta a Central**: sin eso el POS no ofrece nada de esto (fail-closed) y el servidor lo rechazaría.
+5. Smoke físico en Central: ticket nuevo arranca en Efectivo y vuelve a Efectivo tras vender/cancelar; Tarjeta recarga sólo las líneas normales; "Editar precio" en una línea `UNIT` y una `WEIGHT` (con balanza), "Usar precio normal", editar peso/cantidad conservando el precio; descuento 5 / 12,5 / 0; combinación manual + descuento + Tarjeta; cobrar online y **sin Internet** (cerrar y reabrir el POS antes de reconectar) y ver en Admin → Ventas el detalle y en Rendiciones/Rentabilidad el total final; Mercado Pago con descuento (el QR cobra el total final); ticket de WhatsApp de una venta con descuento. En Avenida: sin "Editar precio" ni "Descuento" y arranca sin medio elegido.
+6. Confirmar las decisiones no pedidas explícitamente (lista en D-061): precio manual mayor al normal permitido, `complete_discounted_sale` sin soporte (POS web de desarrollo), 100 % se puede tipear pero no se cobra.
+
+## P0 — Ticket por WhatsApp (QR del cliente): secrets, deploy y prueba con el número de prueba (acción del usuario)
+
+Implementado 2026-10-02 (D-059/D-060, `docs/WHATSAPP.md`), **sin desplegar y sin credenciales**. Orden:
+
+1. Meta: anotar el número de prueba (visible), su Phone number ID, el token y el **App Secret**. **No hace falta crear ninguna plantilla** para este flujo.
+2. `supabase db push` (aplica `202610020056` y `202610020057`), `supabase secrets set …` (lista en `docs/WHATSAPP.md`, incluye `WHATSAPP_BUSINESS_PHONE_E164`), `supabase functions deploy whatsapp-create-claim` y `whatsapp-webhook` con `--no-verify-jwt`, y registrar el webhook `https://<PROJECT_REF>.supabase.co/functions/v1/whatsapp-webhook` suscripto a `messages` (imprescindible).
+3. `pnpm exec supabase gen types typescript --linked` para reemplazar la edición manual de `database.types.ts`; `pnpm build:pos:desktop` e instalar el POS nuevo.
+4. Probar con el número de prueba (pasos en `docs/WHATSAPP.md`); recién después conectar el número real de Fran.
+5. Donde haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `whatsapp_ticket_deliveries.test.sql` (67) y `whatsapp_ticket_claims.test.sql` (58) contra Supabase real.
+- Mejoras identificadas (no urgentes): que el POS muestre "ticket entregado" (sondeo del claim), pantalla Admin de envíos, PDF, número por sucursal, barra post-venta también cuando el cobro Mercado Pago se confirma por el barrido de reconciliación.
+
 ## P0 — Desplegar proveedores + importación real SimplyGest + Central sin stock (acción del usuario)
 
 Implementado 2026-10-02 (ver `CURRENT_STATE.md` "Proveedores + importación real…", D-056/D-057/D-058). **No se importó ningún dato real.** Orden obligatorio:

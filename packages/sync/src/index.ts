@@ -43,6 +43,12 @@ export interface OfflineSaleItemPayload {
   costCentsSnapshot?: string | null;
   profitMarkupBpsSnapshot?: string | null;
   subtotalCents: string;
+  /** Precio manual del POS de Central (D-061). Las tres claves existen sólo en una línea manual; el
+   * resto de los payloads no cambia. `pricePerKgCents` de esa línea ES el precio manual (sin promoción,
+   * recargo ni ajuste por medio de pago) y `originalPricePerKgCents` el precio normal del catálogo. */
+  manualPriceApplied?: true;
+  manualUnitPriceCents?: string;
+  manualAdjustmentCents?: string;
 }
 
 /** Proveedor que debe verificar el cobro. Hoy sólo Mercado Pago, siempre sobre method TRANSFER
@@ -74,10 +80,17 @@ export interface OfflineSalePayload {
   operatorToken?: string;
   deviceId: string;
   status: "COMPLETED";
+  /** Total realmente cobrado (= suma de líneas menos `ticketDiscountCents`). */
   totalCents: string;
   totalWeightGrams: string;
   createdAt: string;
   completedAt: string;
+  /** Descuento general del ticket (D-061). Las tres claves existen sólo si hay descuento: una venta
+   * sin descuento mantiene exactamente su payload anterior. */
+  ticketDiscountBps?: string;
+  ticketDiscountCents?: string;
+  /** Suma de las líneas antes del descuento general. */
+  subtotalCents?: string;
   items: OfflineSaleItemPayload[];
   payment: OfflinePaymentPayload;
   stockMovements: OfflineStockMovementPayload[];
@@ -93,6 +106,9 @@ export interface CreateOfflineSaleInput {
   paymentMethod: PaymentMethod;
   /** Sólo "MERCADOPAGO" y sólo con paymentMethod "TRANSFER" (si no, createOfflineSale lanza). */
   paymentProvider?: PaymentProvider;
+  /** Descuento general del ticket en basis points y su importe, calculados por el POS con
+   * `calculateTicketDiscount` (business-logic). Backend y SQLite los recalculan y los rechazan si no coinciden. */
+  ticketDiscount?: { bps: bigint; cents: bigint };
   now?: Date;
   createId?: () => string;
 }
@@ -215,9 +231,24 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     promotionDiscountCents: (line.promotionDiscountCents ?? (line.discountCents ?? 0n) - (line.cashDiscountCents ?? 0n)).toString(),
     costCentsSnapshot: line.costCentsSnapshot?.toString() ?? null,
     profitMarkupBpsSnapshot: line.profitMarkupBpsSnapshot?.toString() ?? null,
-    subtotalCents: line.subtotalCents.toString()
+    subtotalCents: line.subtotalCents.toString(),
+    ...(line.manualPriceApplied
+      ? {
+          manualPriceApplied: true as const,
+          manualUnitPriceCents: (line.manualUnitPriceCents ?? line.pricePerKgCents).toString(),
+          manualAdjustmentCents: (line.manualAdjustmentCents ?? 0n).toString()
+        }
+      : {})
   }));
-  const totalCents = input.ticket.reduce((total, line) => total + line.subtotalCents, 0n);
+  const itemsSubtotalCents = input.ticket.reduce((total, line) => total + line.subtotalCents, 0n);
+  const ticketDiscountCents = input.ticketDiscount?.cents ?? 0n;
+  const ticketDiscountBps = input.ticketDiscount?.bps ?? 0n;
+  if (ticketDiscountCents < 0n || ticketDiscountBps < 0n || ticketDiscountBps > 10_000n || ticketDiscountCents > itemsSubtotalCents
+      || (ticketDiscountBps === 0n && ticketDiscountCents !== 0n)) {
+    throw new Error("The ticket discount is invalid");
+  }
+  const totalCents = itemsSubtotalCents - ticketDiscountCents;
+  if (totalCents <= 0n) throw new Error("A sale total must be greater than zero");
   const totalWeightGrams = input.ticket.reduce((total, line) => total + BigInt(line.weightGrams), 0n);
 
   return {
@@ -234,6 +265,13 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     totalWeightGrams: totalWeightGrams.toString(),
     createdAt: timestamp,
     completedAt: timestamp,
+    ...(ticketDiscountBps > 0n
+      ? {
+          ticketDiscountBps: ticketDiscountBps.toString(),
+          ticketDiscountCents: ticketDiscountCents.toString(),
+          subtotalCents: itemsSubtotalCents.toString()
+        }
+      : {}),
     items,
     payment: {
       id: createId(),

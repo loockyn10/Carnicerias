@@ -112,6 +112,15 @@ export interface TicketLine {
   costCentsSnapshot?: bigint | null;
   profitMarkupBpsSnapshot?: bigint | null;
   subtotalCents: bigint;
+  /** POS de Central (D-061): el operador fijó el precio de ESTA línea de ESTA venta. Cuando es true,
+   * `pricePerKgCents` es ese precio manual (por kg o por unidad), `originalPricePerKgCents` sigue siendo
+   * el precio normal del catálogo (nunca se modifica `product_prices`) y la línea no recibe promoción,
+   * recargo por tarjeta ni ningún ajuste por medio de pago. Ausente/false = línea normal. */
+  manualPriceApplied?: boolean;
+  /** Precio manual por kg/unidad (igual a `pricePerKgCents` cuando `manualPriceApplied`). */
+  manualUnitPriceCents?: bigint | null;
+  /** `subtotalCents` menos lo que habría costado a precio normal; negativo = rebaja. 0 si no es manual. */
+  manualAdjustmentCents?: bigint;
 }
 
 // ---------------------------------------------------------------------------------------------

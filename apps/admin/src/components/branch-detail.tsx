@@ -63,7 +63,7 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const restockProductsResult = restockProductIds.length ? await supabase.from("products").select("id, name").in("id", restockProductIds) : { data: [], error: null };
   const restockProductNames = new Map((restockProductsResult.data ?? []).map((row) => [row.id, row.name]));
   const saleIds = (weekSalesResult.data ?? []).map((sale) => sale.id);
-  const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, product_id, product_name_snapshot, weight_grams, quantity_units, subtotal_cents, discount_cents").in("sale_id", saleIds) : { data: [], error: null };
+  const itemsResult = saleIds.length ? await supabase.from("sale_items").select("sale_id, product_id, product_name_snapshot, weight_grams, quantity_units, subtotal_cents, discount_cents, ticket_discount_cents").in("sale_id", saleIds) : { data: [], error: null };
   if (itemsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el detalle comercial: {itemsResult.error.message}</main>;
 
   const dashboard = dashboardResult.data as unknown as DashboardData;
@@ -83,7 +83,7 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     out: branchSummary?.out_of_stock_count ?? 0, low: branchSummary?.low_stock_count ?? 0,
     normal: Math.max(0, (branchSummary?.product_count ?? 0) - (branchSummary?.out_of_stock_count ?? 0) - (branchSummary?.low_stock_count ?? 0))
   };
-  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number | null; quantity_units: number | null; subtotal_cents: number; discount_cents: number }[];
+  const items = itemsResult.data as unknown as { sale_id: string; product_id: string; product_name_snapshot: string; weight_grams: number | null; quantity_units: number | null; subtotal_cents: number; discount_cents: number; ticket_discount_cents: number }[];
   const productTotals = new Map<string, { name: string; grams: number; cents: number }>();
   // Units/grams sold per product in the week (a UNIT item counts its units, a WEIGHT item its grams): the daily rate of the stock tab.
   const soldQuantityByProduct = new Map<string, number>();
@@ -91,10 +91,10 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   // UNIT product's "grams" here stays 0 rather than crashing; it just isn't reflected in this
   // particular weight tally (kept out of scope: this is a small informational widget, not the
   // rentabilidad/analytics ranking, which already ranks purely by revenue/cost cents).
-  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams ?? 0; total.cents += item.subtotal_cents; productTotals.set(item.product_id, total); soldQuantityByProduct.set(item.product_id, (soldQuantityByProduct.get(item.product_id) ?? 0) + (item.weight_grams ?? item.quantity_units ?? 0)); }
+  for (const item of items) { const total = productTotals.get(item.product_id) ?? { name: item.product_name_snapshot, grams: 0, cents: 0 }; total.grams += item.weight_grams ?? 0; total.cents += item.subtotal_cents - item.ticket_discount_cents; productTotals.set(item.product_id, total); soldQuantityByProduct.set(item.product_id, (soldQuantityByProduct.get(item.product_id) ?? 0) + (item.weight_grams ?? item.quantity_units ?? 0)); }
   const topProducts = [...productTotals.values()].sort((a, b) => b.cents - a.cents).slice(0, 5);
   const todaySales = new Set((weekSalesResult.data ?? []).filter((sale) => (sale.completed_at ?? "") >= localDayStart(context.timezone)).map((sale) => sale.id));
-  const todayDiscounts = items.filter((item) => todaySales.has(item.sale_id)).reduce((sum, item) => sum + item.discount_cents, 0);
+  const todayDiscounts = items.filter((item) => todaySales.has(item.sale_id)).reduce((sum, item) => sum + item.discount_cents + item.ticket_discount_cents, 0);
   const restocks = (restocksResult.data ?? []).map((movement) => ({ ...movement, productName: restockProductNames.get(movement.product_id) ?? "Producto" }));
   const recentSales = recentSalesResult.data ?? [];
   const recentWaste = wasteResult.data ?? [];

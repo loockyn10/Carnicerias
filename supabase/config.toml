@@ -58,3 +58,17 @@ verify_jwt = false
 
 [functions.mp-admin-setup]
 verify_jwt = false
+
+# WhatsApp (D-059): ticket digital. verify_jwt = false por el mismo motivo que Mercado Pago (el gateway sólo
+# valida JWT legacy). whatsapp-send-ticket reenvía el JWT del POS a la RPC (dispositivo + operador + venta);
+# whatsapp-webhook se autentica con la firma X-Hub-Signature-256 (HMAC con el App Secret) y con el token de
+# verificación en el GET de alta.
+[functions.whatsapp-send-ticket]
+verify_jwt = false
+
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+# Ticket iniciado por el cliente (D-060): el POS pide el QR con el JWT del dispositivo + token de operador.
+[functions.whatsapp-create-claim]
+verify_jwt = false

@@ -147,6 +147,66 @@ describe("offline sale envelope", () => {
   });
 });
 
+describe("flexible pricing in the offline envelope (D-061)", () => {
+  const base = { organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device", createId: () => crypto.randomUUID() };
+  // Coca Cola de $12.000 vendida a $10.000 (precio manual) y un asado normal de $14.000.
+  const manualUnit = {
+    id: "manual", productId: "coca", productName: "Coca Cola 2.25 L", weightGrams: 0, quantityUnits: 1,
+    originalPricePerKgCents: 1_200_000n, pricePerKgCents: 1_000_000n, discountCents: 0n, cashDiscountBps: 0n, cashDiscountCents: 0n,
+    cardSurchargeCents: 0n, promotionDiscountCents: 0n, subtotalCents: 1_000_000n,
+    manualPriceApplied: true, manualUnitPriceCents: 1_000_000n, manualAdjustmentCents: -200_000n
+  };
+  const normalWeight = { id: "normal", productId: "asado", productName: "Asado", weightGrams: 1_000, pricePerKgCents: 1_400_000n, originalPricePerKgCents: 1_400_000n, subtotalCents: 1_400_000n };
+
+  it("a manual line keeps its original price, manual price and adjustment as an auditable snapshot", () => {
+    const payload = createOfflineSale({ ...base, paymentMethod: "CASH", ticket: [manualUnit] });
+    expect(payload.items[0]).toMatchObject({
+      manualPriceApplied: true, manualUnitPriceCents: "1000000", manualAdjustmentCents: "-200000",
+      originalPricePerKgCents: "1200000", pricePerKgCents: "1000000", promotionDiscountCents: "0", cardSurchargeCents: "0", subtotalCents: "1000000"
+    });
+    expect(payload.totalCents).toBe("1000000");
+  });
+
+  it("a sale without manual lines or discount keeps exactly its previous payload shape", () => {
+    const payload = createOfflineSale({ ...base, paymentMethod: "CASH", ticket: [normalWeight] });
+    expect(payload.items[0]).not.toHaveProperty("manualPriceApplied");
+    expect(payload.items[0]).not.toHaveProperty("manualUnitPriceCents");
+    expect(payload).not.toHaveProperty("ticketDiscountBps");
+    expect(payload).not.toHaveProperty("ticketDiscountCents");
+    expect(payload).not.toHaveProperty("subtotalCents");
+  });
+
+  it("the ticket discount is frozen next to the real total and the payment amount (5% of $24.000)", () => {
+    const payload = createOfflineSale({
+      ...base, paymentMethod: "CASH", ticketDiscount: { bps: 500n, cents: 120_000n },
+      ticket: [{ ...manualUnit, subtotalCents: 1_000_000n }, { ...normalWeight, subtotalCents: 1_400_000n }]
+    });
+    expect(payload).toMatchObject({ subtotalCents: "2400000", ticketDiscountBps: "500", ticketDiscountCents: "120000", totalCents: "2280000" });
+    expect(payload.payment.amountCents).toBe("2280000");
+  });
+
+  it("a 0% discount adds no keys, and a percentage that rounds to zero cents still records the percentage", () => {
+    const none = createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 0n, cents: 0n }, ticket: [normalWeight] });
+    expect(none).not.toHaveProperty("ticketDiscountBps");
+    const tiny = createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 500n, cents: 0n }, ticket: [{ ...normalWeight, weightGrams: 1, pricePerKgCents: 9_000n, subtotalCents: 9n }] });
+    expect(tiny).toMatchObject({ ticketDiscountBps: "500", ticketDiscountCents: "0", totalCents: "9" });
+  });
+
+  it("refuses an inconsistent discount or a ticket left at $0", () => {
+    expect(() => createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 500n, cents: 2_000_000n }, ticket: [normalWeight] })).toThrow("discount is invalid");
+    expect(() => createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 10_001n, cents: 1n }, ticket: [normalWeight] })).toThrow("discount is invalid");
+    expect(() => createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 0n, cents: 5n }, ticket: [normalWeight] })).toThrow("discount is invalid");
+    expect(() => createOfflineSale({ ...base, paymentMethod: "CASH", ticketDiscount: { bps: 10_000n, cents: 1_400_000n }, ticket: [normalWeight] })).toThrow("greater than zero");
+  });
+
+  it("the manual snapshot survives a JSON round trip through the outbox (offline then sync)", () => {
+    const payload = createOfflineSale({ ...base, paymentMethod: "DEBIT", ticketDiscount: { bps: 1_250n, cents: 300_000n }, ticket: [manualUnit, { ...normalWeight, cardSurchargeCents: 0n }] });
+    const restored = JSON.parse(JSON.stringify(payload)) as typeof payload;
+    expect(restored.items[0]).toMatchObject({ manualPriceApplied: true, manualUnitPriceCents: "1000000", originalPricePerKgCents: "1200000" });
+    expect(restored).toMatchObject({ ticketDiscountBps: "1250", ticketDiscountCents: "300000", subtotalCents: "2400000", totalCents: "2100000" });
+  });
+});
+
 describe("outbox retry", () => {
   it("uses capped exponential backoff", () => {
     expect(retryDelayMs(1)).toBe(2_000);

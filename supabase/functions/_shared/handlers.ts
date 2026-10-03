@@ -35,7 +35,7 @@ const MP_TIMEOUT_MS = 10_000;
 /** No se vuelve a consultar a MP por una orden revisada hace menos de esto (poll del POS). */
 const REFRESH_MIN_INTERVAL_MS = 8_000;
 
-const CORS_HEADERS: Record<string, string> = {
+export const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS"
@@ -45,23 +45,23 @@ export function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
 }
 
-function failure(status: number, code: string, message: string, extra?: Record<string, unknown>): Response {
+export function failure(status: number, code: string, message: string, extra?: Record<string, unknown>): Response {
   return jsonResponse(status, { ok: false, code, message, ...extra });
 }
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 
-function asObject(value: unknown): JsonObject | null {
+export function asObject(value: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
 }
 
-function bearer(req: Request): string | null {
+export function bearer(req: Request): string | null {
   const header = req.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(header);
   return match?.[1] ?? null;
 }
 
-async function readJson(req: Request): Promise<JsonObject | null> {
+export async function readJson(req: Request): Promise<JsonObject | null> {
   try {
     return asObject(await req.json());
   } catch {
@@ -73,7 +73,7 @@ async function readJson(req: Request): Promise<JsonObject | null> {
 // Supabase (PostgREST RPC). Usuario = JWT del POS (RLS/permisos aplican); servicio = service_role.
 // ---------------------------------------------------------------------------
 
-interface RpcResult {
+export interface RpcResult {
   ok: boolean;
   status: number;
   data: unknown;
@@ -81,7 +81,7 @@ interface RpcResult {
   errorMessage: string | null;
 }
 
-async function rpc(deps: HandlerDeps, fn: string, args: JsonObject, auth: { jwt: string } | { service: true }): Promise<RpcResult> {
+export async function rpc(deps: HandlerDeps, fn: string, args: JsonObject, auth: { jwt: string } | { service: true }): Promise<RpcResult> {
   const url = deps.env("SUPABASE_URL");
   const anon = deps.env("SUPABASE_ANON_KEY");
   const serviceKey = deps.env("SUPABASE_SERVICE_ROLE_KEY");

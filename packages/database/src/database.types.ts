@@ -2485,6 +2485,9 @@ export type Database = {
           discount_value: number | null
           final_price_per_kg_cents: number
           id: string
+          manual_adjustment_cents: number
+          manual_price_applied: boolean
+          manual_unit_price_cents: number | null
           organization_id: string
           original_price_per_kg_cents: number
           price_per_kg_cents: number
@@ -2496,6 +2499,7 @@ export type Database = {
           quantity_units: number | null
           sale_id: string
           subtotal_cents: number
+          ticket_discount_cents: number
           weight_grams: number | null
         }
         Insert: {
@@ -2513,6 +2517,9 @@ export type Database = {
           discount_value?: number | null
           final_price_per_kg_cents: number
           id?: string
+          manual_adjustment_cents?: number
+          manual_price_applied?: boolean
+          manual_unit_price_cents?: number | null
           organization_id: string
           original_price_per_kg_cents: number
           price_per_kg_cents: number
@@ -2524,6 +2531,7 @@ export type Database = {
           quantity_units?: number | null
           sale_id: string
           subtotal_cents: number
+          ticket_discount_cents?: number
           weight_grams?: number | null
         }
         Update: {
@@ -2541,6 +2549,9 @@ export type Database = {
           discount_value?: number | null
           final_price_per_kg_cents?: number
           id?: string
+          manual_adjustment_cents?: number
+          manual_price_applied?: boolean
+          manual_unit_price_cents?: number | null
           organization_id?: string
           original_price_per_kg_cents?: number
           price_per_kg_cents?: number
@@ -2552,6 +2563,7 @@ export type Database = {
           quantity_units?: number | null
           sale_id?: string
           subtotal_cents?: number
+          ticket_discount_cents?: number
           weight_grams?: number | null
         }
         Relationships: [
@@ -2593,6 +2605,8 @@ export type Database = {
           profile_id: string
           status: Database["public"]["Enums"]["sale_status"]
           sync_event_id: string | null
+          ticket_discount_bps: number
+          ticket_discount_cents: number
           total_cents: number
           total_weight_grams: number
         }
@@ -2610,6 +2624,8 @@ export type Database = {
           profile_id: string
           status?: Database["public"]["Enums"]["sale_status"]
           sync_event_id?: string | null
+          ticket_discount_bps?: number
+          ticket_discount_cents?: number
           total_cents?: number
           total_weight_grams?: number
         }
@@ -2627,6 +2643,8 @@ export type Database = {
           profile_id?: string
           status?: Database["public"]["Enums"]["sale_status"]
           sync_event_id?: string | null
+          ticket_discount_bps?: number
+          ticket_discount_cents?: number
           total_cents?: number
           total_weight_grams?: number
         }
@@ -3167,6 +3185,227 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      ticket_deliveries: {
+        Row: {
+          branch_id: string
+          channel: string
+          claim_id: string | null
+          created_at: string
+          delivered_at: string | null
+          device_id: string | null
+          failed_at: string | null
+          id: string
+          organization_id: string
+          provider_error_code: string | null
+          provider_error_message: string | null
+          provider_message_id: string | null
+          read_at: string | null
+          recipient_phone: string
+          recipient_phone_masked: string | null
+          requested_by: string | null
+          sale_id: string
+          sent_at: string | null
+          status: string
+          template_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          branch_id: string
+          channel?: string
+          claim_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          device_id?: string | null
+          failed_at?: string | null
+          id?: string
+          organization_id: string
+          provider_error_code?: string | null
+          provider_error_message?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          recipient_phone: string
+          recipient_phone_masked?: string | null
+          requested_by?: string | null
+          sale_id: string
+          sent_at?: string | null
+          status?: string
+          template_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          branch_id?: string
+          channel?: string
+          claim_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          device_id?: string | null
+          failed_at?: string | null
+          id?: string
+          organization_id?: string
+          provider_error_code?: string | null
+          provider_error_message?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          recipient_phone?: string
+          recipient_phone_masked?: string | null
+          requested_by?: string | null
+          sale_id?: string
+          sent_at?: string | null
+          status?: string
+          template_name?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ticket_deliveries_claim_id_fkey"
+            columns: ["claim_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_ticket_claims"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ticket_deliveries_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "pos_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ticket_deliveries_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ticket_deliveries_sale_id_organization_id_branch_id_fkey"
+            columns: ["sale_id", "organization_id", "branch_id"]
+            isOneToOne: false
+            referencedRelation: "sales"
+            referencedColumns: ["id", "organization_id", "branch_id"]
+          },
+        ]
+      }
+      ticket_delivery_events: {
+        Row: {
+          dedupe_key: string
+          delivery_count: number
+          delivery_id: string | null
+          error_code: string | null
+          error_message: string | null
+          event_at: string | null
+          event_status: string
+          id: string
+          last_received_at: string
+          provider_message_id: string
+          received_at: string
+          result: string
+        }
+        Insert: {
+          dedupe_key: string
+          delivery_count?: number
+          delivery_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          event_at?: string | null
+          event_status: string
+          id?: string
+          last_received_at?: string
+          provider_message_id: string
+          received_at?: string
+          result: string
+        }
+        Update: {
+          dedupe_key?: string
+          delivery_count?: number
+          delivery_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          event_at?: string | null
+          event_status?: string
+          id?: string
+          last_received_at?: string
+          provider_message_id?: string
+          received_at?: string
+          result?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ticket_delivery_events_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: false
+            referencedRelation: "ticket_deliveries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_ticket_claims: {
+        Row: {
+          branch_id: string
+          created_at: string
+          created_by: string | null
+          device_id: string | null
+          expires_at: string
+          id: string
+          organization_id: string
+          redeemed_at: string | null
+          redeemed_message_id: string | null
+          redeemed_phone: string | null
+          sale_id: string
+          token_hash: string
+        }
+        Insert: {
+          branch_id: string
+          created_at?: string
+          created_by?: string | null
+          device_id?: string | null
+          expires_at: string
+          id?: string
+          organization_id: string
+          redeemed_at?: string | null
+          redeemed_message_id?: string | null
+          redeemed_phone?: string | null
+          sale_id: string
+          token_hash: string
+        }
+        Update: {
+          branch_id?: string
+          created_at?: string
+          created_by?: string | null
+          device_id?: string | null
+          expires_at?: string
+          id?: string
+          organization_id?: string
+          redeemed_at?: string | null
+          redeemed_message_id?: string | null
+          redeemed_phone?: string | null
+          sale_id?: string
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_ticket_claims_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_ticket_claims_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "pos_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_ticket_claims_sale_id_organization_id_branch_id_fkey"
+            columns: ["sale_id", "organization_id", "branch_id"]
+            isOneToOne: false
+            referencedRelation: "sales"
+            referencedColumns: ["id", "organization_id", "branch_id"]
           },
         ]
       }
@@ -4144,6 +4383,56 @@ export type Database = {
       void_settlement: {
         Args: { p_reason: string; p_settlement_id: string }
         Returns: undefined
+      }
+      wa_apply_status_event: {
+        Args: {
+          p_dedupe_key: string
+          p_error_code: string
+          p_error_message: string
+          p_event_at: string
+          p_provider_message_id: string
+          p_status: string
+        }
+        Returns: Json
+      }
+      wa_create_claim: {
+        Args: {
+          p_device_id: string
+          p_operator_profile_id: string
+          p_operator_token: string
+          p_sale_id: string
+        }
+        Returns: Json
+      }
+      wa_prepare_ticket: {
+        Args: {
+          p_device_id: string
+          p_operator_profile_id: string
+          p_operator_token: string
+          p_phone: string
+          p_resend?: boolean
+          p_sale_id: string
+        }
+        Returns: Json
+      }
+      wa_record_send_result: {
+        Args: {
+          p_delivery_id: string
+          p_error_code: string
+          p_error_message: string
+          p_provider_message_id: string
+          p_template_name?: string
+        }
+        Returns: Json
+      }
+      wa_redeem_claim: {
+        Args: {
+          p_from: string
+          p_message_id: string
+          p_received_at?: string
+          p_token: string
+        }
+        Returns: Json
       }
     }
     Enums: {

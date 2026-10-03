@@ -146,6 +146,8 @@ export const localDatabase = {
   pendingProviderPayments: (limit = 10, includeStale = false) => desktopOnly<PendingProviderPayment[]>("get_pending_provider_payments", { limit, includeStale }),
   /** Recuerda en SQLite si la transferencia manual está prohibida en la sucursal del dispositivo. */
   setManualTransferPolicy: (branchId: string, allowed: boolean) => desktopVoid("set_manual_transfer_policy", { branchId, allowed }),
+  /** Recuerda en SQLite si este POS es el de Central (único donde valen el precio manual y el descuento general, D-061). */
+  setFlexiblePricingBranch: (branchId: string, enabled: boolean) => desktopVoid("set_flexible_pricing_branch", { branchId, enabled }),
   setPaymentVerification: (saleId: string, status: string) => desktopOnly<boolean>("set_local_payment_verification", { saleId, status }),
   dueOutbox: (currentTime: string) =>
     desktopOnly<OutboxRecord[]>("get_due_outbox", { currentTime }),

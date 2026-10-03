@@ -17,6 +17,11 @@ export {
 } from "./pricing";
 export type { QuantityDiscount, SalePricing, UnitPackPromotion } from "./pricing";
 export {
+  allocateTicketDiscount, calculateManualLinePricing, calculateTicketDiscount, formatDiscountPercent,
+  MAX_TICKET_DISCOUNT_BPS, parseDiscountPercent
+} from "./ticket-pricing";
+export type { DiscountPercentParse, ManualLinePricing, TicketDiscount } from "./ticket-pricing";
+export {
   advanceWeightStability,
   initialWeightStabilityState,
   isScaleReadingFresh,
@@ -95,3 +100,17 @@ export type {
 } from "./mercadopago";
 export { describeSalePayment, paymentMethodLabel, SALE_STATUS_LABELS } from "./sale-payment-state";
 export type { SalePaymentInput, SalePaymentTone, SalePaymentView } from "./sale-payment-state";
+export {
+  buildTemplateParameters, buildTicketModel, evaluateTicketEligibility, formatKilograms, formatMoney, maskPhone,
+  normalizePhone, parseTicketSource, renderTicketLine, renderTicketText, sanitizeTemplateParameter,
+  MAX_ITEMS_PARAMETER_LENGTH, TICKET_TEMPLATE_PARAMETER_COUNT
+} from "./whatsapp-ticket";
+export type {
+  PhoneErrorCode, PhoneResult, TicketEligibility, TicketEligibilityCode, TicketLine, TicketModel, TicketSource,
+  TicketSourceItem, TicketSourcePayment
+} from "./whatsapp-ticket";
+export {
+  buildClaimLink, buildClaimMessage, CLAIM_KEYWORD, CLAIM_REPLY_TEXT, claimReplyText, normalizeBusinessPhone, parseClaimMessage
+} from "./whatsapp-claim";
+export type { ClaimMessage, ClaimReplyKind } from "./whatsapp-claim";
+export { renderWhatsAppMessage, MAX_WHATSAPP_MESSAGE_LENGTH } from "./whatsapp-ticket";

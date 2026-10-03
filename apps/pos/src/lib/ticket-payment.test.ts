@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./ticket-payment";
+import { filterPaymentMethodButtons, INITIAL_PAYMENT_METHOD, initialPaymentMethodFor, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./ticket-payment";
 
 describe("INITIAL_PAYMENT_METHOD", () => {
   it("ticket nuevo arranca sin método seleccionado (no CASH por defecto)", () => {
     expect(INITIAL_PAYMENT_METHOD).toBeNull();
+  });
+});
+
+describe("initialPaymentMethodFor (D-061)", () => {
+  it("Central (sucursal productiva) arranca cada ticket en Efectivo y los importes se ven desde el inicio", () => {
+    expect(initialPaymentMethodFor(true)).toBe("CASH");
+    expect(shouldDisplayTicketAmounts(initialPaymentMethodFor(true))).toBe(true);
+  });
+
+  it("Avenida/Janssen no cambian: sin método elegido hasta que la empleada lo toque", () => {
+    expect(initialPaymentMethodFor(false)).toBeNull();
+    expect(initialPaymentMethodFor(false)).toBe(INITIAL_PAYMENT_METHOD);
+    expect(shouldDisplayTicketAmounts(initialPaymentMethodFor(false))).toBe(false);
   });
 });
 
@@ -43,6 +56,11 @@ describe("isSaleConfirmable", () => {
 
   it("sigue deshabilitado si el dispositivo necesita vincularse", () => {
     expect(isSaleConfirmable({ ...base, deviceNeedsBinding: true, paymentMethod: "CASH" })).toBe(false);
+  });
+
+  it("un total a cobrar de $0 (descuento general del 100%) no se confirma; uno positivo sí", () => {
+    expect(isSaleConfirmable({ ...base, paymentMethod: "CASH", totalCents: 0n })).toBe(false);
+    expect(isSaleConfirmable({ ...base, paymentMethod: "CASH", totalCents: 2_280_000n })).toBe(true);
   });
 });
 
