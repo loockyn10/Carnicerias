@@ -73,6 +73,10 @@ export interface PosCatalogProduct {
   unitType: UnitType;
   pricePerKgCents: bigint;
   originalPricePerKgCents?: bigint;
+  /** Unidades por pack (sólo UNIT; null = sin pack). */
+  packSizeUnits?: number | null;
+  /** Id de la versión vigente del pack (`product_pack_versions`); sin él no se ofrece Pack. */
+  packConfigId?: string | null;
 }
 
 export interface TicketLine {
@@ -124,6 +128,30 @@ export interface TicketLine {
   /** Estado local de la UI (nunca se envía): la línea `WEIGHT` se vende como pack. Sobrevive al precio manual (que anula
    * `promotionMode`) para que "Usar precio normal" lo recupere sin tocarlo. */
   sellAsPack?: boolean;
+  /**
+   * Pack de un producto `UNIT` (`products.pack_size_units`, no es una promoción): la línea se cargó como `packCount`
+   * packs de `packSizeUnitsSnapshot` unidades. `quantityUnits` son SIEMPRE las unidades reales (packCount × tamaño):
+   * stock, precio y venta trabajan con unidades reales. Estos dos campos son la memoria del modo Pack de la línea (sobreviven al
+   * precio manual para que "Usar precio normal" y "Modificar cantidad" la recuperen); lo que se cobra y se envía es
+   * `soldAsPack`.
+   */
+  packCount?: number;
+  packSizeUnitsSnapshot?: number;
+  /** Versión del pack (`product_pack_versions`) con la que se armó la línea: el servidor valida la venta contra ella. */
+  packConfigId?: string;
+  /** El descuento de Pack (20 %) está aplicado a esta línea ahora. False/ausente si la línea es normal o tiene precio manual. */
+  soldAsPack?: boolean;
+  packDiscountBps?: number;
+  packDiscountCents?: bigint;
+  /**
+   * Promoción global de la sucursal aplicada a esta línea UNIT ("cada N unidades, X %"): `branchPromotionDiscountedUnits`
+   * unidades (grupos completos del mismo producto) recibieron el descuento. Snapshot de la regla: la venta no vuelve a leerla.
+   */
+  branchPromotionId?: string;
+  branchPromotionEveryUnits?: number;
+  branchPromotionDiscountBps?: number;
+  branchPromotionDiscountedUnits?: number;
+  branchPromotionDiscountCents?: bigint;
 }
 
 // ---------------------------------------------------------------------------------------------

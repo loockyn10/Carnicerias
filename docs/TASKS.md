@@ -2,6 +2,18 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Pack UNIT (20 %), promoción por sucursal y purga de importados sin stock: aplicar, instalar y probar (acción del usuario)
+
+Implementado 2026-10-03 (D-062/D-063, `CURRENT_STATE.md`), **sin aplicar y sin ejecutar la purga**. Orden obligatorio:
+
+1. `supabase db push` (aplica `202610030059` y `202610030060`; antes van `056`–`058` si todavía no estaban). **Antes** de desplegar el Admin y de instalar el POS nuevo: el Admin nuevo lee columnas nuevas y un POS nuevo con una línea Pack/promoción contra un servidor sin `060` deja la venta en `FAILED` en la outbox; un POS viejo contra el servidor nuevo no cambia. Después `pnpm exec supabase gen types typescript --linked` y comparar con la edición manual de `database.types.ts`.
+2. `git push` (Vercel despliega el Admin) y `pnpm build:pos:desktop` → instalar el POS nuevo en Central (y, con el mismo instalador, Avenida/Janssen).
+3. Configurar: Admin → Productos → Administrar la leche → "Unidades por pack" = 8; Admin → Productos → Promociones → "Promoción por sucursal" → Central: cada 3, 15 %. Esperar un sync (o reiniciar el POS).
+4. Smoke físico en Central: escanear leche (agrega 1 u normal) → "Modificar cantidad" → aparece "Pack · 8 unidades · 20% OFF" → 1 pack = 8 u, $6.400 si cuesta $1.000; 2 packs = 16 u; grilla con Pack antes de agregar; 3 u sueltas = 15 % off, 8 u sueltas = 6 con 15 % + 2 normales, 2 leches + 1 coca sin promoción; precio manual anula pack/promo; tarjeta recarga después; descuento general después; cobrar online y **sin Internet** (cerrar y reabrir antes de reconectar) y ver el detalle en Admin → Ventas, el ticket de WhatsApp, Rendiciones y Rentabilidad; el stock baja 8/16 unidades; un producto sin pack no muestra la opción; Avenida/Janssen sin promoción no cambian. **Cambio de pack con ventas pendientes:** con el POS de Central sin Internet, vender 1 pack de 8 (queda en la outbox); en el Admin pasar la leche a 12; reconectar → la venta sincroniza (`SYNCED`) con "1 pack × 8 u", y una venta nueva después del sync usa 12.
+5. Donde haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `import_product_purge.test.sql` (64) y `unit_packs_and_branch_promotions.test.sql` (150) contra Supabase real.
+6. **Purga (sólo cuando se decida y con la exportación original de SimplyGest con `CANTIDAD`):** (a) backup de la base (Supabase → Database → Backups, o `supabase db dump --linked -f backup.sql`); (b) ensayar todo en un proyecto descartable; (c) `pnpm --filter @carnicerias/admin purge:simplygest -- preview --file <exportación> --quantity-column CANTIDAD` (con `PURGE_ADMIN_EMAIL`/`PURGE_ADMIN_PASSWORD` y las variables de Supabase), revisar el CSV (candidatos, bloqueados y motivos); (d) `… apply --file <exportación> --confirm-count <N del preview> --yes-delete-permanently`; (e) comprobar en un POS de Central que los productos borrados desaparecen tras el sync y que los bloqueados siguen; (f) **no** reimportar el archivo completo (volvería a crearlos).
+7. Confirmar las decisiones no pedidas explícitamente (listas en D-062 y D-063): p. ej. una línea Pack armada con una versión que el catálogo reemplazó antes de cobrar se rechaza en el POS y hay que volver a agregarla; un producto habilitado en otra sucursal queda bloqueado; las promociones por producto se borran con el producto.
+
 ## P0 — Pricing flexible en Central: aplicar, instalar y probar (acción del usuario)
 
 Implementado 2026-10-02 (D-061, `CURRENT_STATE.md`), **sin aplicar**. Orden obligatorio:

@@ -17,6 +17,8 @@ interface ProductManageModalProps {
     barcodes: string[]; branchIds: string[];
     /** Proveedor principal actual (null = sin proveedor). */
     primarySupplierId: string | null;
+    /** Unidades por pack (sólo productos por unidad; null = sin pack). */
+    packSizeUnits: number | null;
   };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
@@ -100,6 +102,16 @@ export function ProductManageModal({ product, price, promotion, categories, bran
             </select>
             {product.hasUnitTypeHistory ? <span className="text-xs text-stone-500">No se puede cambiar: este producto ya tiene ventas, movimientos de stock, producción o promociones asociadas.</span> : null}
           </label>
+          {/* Un <select> deshabilitado no viaja en el formulario: la forma de venta se manda igual para que el servidor sepa si es por unidad. */}
+          {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
+          <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
+          {unitType === "UNIT" ? (
+            <label className="grid gap-1 text-sm font-medium" data-testid="pack-size-field">
+              Unidades por pack
+              <input className={input} defaultValue={product.packSizeUnits ?? ""} inputMode="numeric" max="10000" min="2" name="pack_size_units" placeholder="Sin pack" step="1" type="number" />
+              <span className="text-xs text-stone-500">Opcional. Ejemplo: leche, 8. En el POS, «Pack» carga esa cantidad de unidades reales y les aplica 20% OFF. No es una promoción ni tiene precio propio; vacío = sin pack.</span>
+            </label>
+          ) : null}
           <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>

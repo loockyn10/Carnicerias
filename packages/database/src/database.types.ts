@@ -354,6 +354,80 @@ export type Database = {
           },
         ]
       }
+      branch_promotions: {
+        Row: {
+          active: boolean
+          branch_id: string
+          created_at: string
+          created_by: string | null
+          discount_bps: number
+          every_units: number
+          id: string
+          organization_id: string
+          scope: string
+          updated_at: string
+          valid_from: string
+          valid_until: string | null
+        }
+        Insert: {
+          active?: boolean
+          branch_id: string
+          created_at?: string
+          created_by?: string | null
+          discount_bps: number
+          every_units: number
+          id?: string
+          organization_id: string
+          scope?: string
+          updated_at?: string
+          valid_from?: string
+          valid_until?: string | null
+        }
+        Update: {
+          active?: boolean
+          branch_id?: string
+          created_at?: string
+          created_by?: string | null
+          discount_bps?: number
+          every_units?: number
+          id?: string
+          organization_id?: string
+          scope?: string
+          updated_at?: string
+          valid_from?: string
+          valid_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "branch_promotions_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_promotions_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_promotions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "branch_promotions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       branches: {
         Row: {
           active: boolean
@@ -1803,6 +1877,64 @@ export type Database = {
           },
         ]
       }
+      product_pack_versions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          discount_bps: number
+          id: string
+          organization_id: string
+          pack_size_units: number
+          product_id: string
+          valid_from: string
+          valid_to: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          discount_bps: number
+          id?: string
+          organization_id: string
+          pack_size_units: number
+          product_id: string
+          valid_from?: string
+          valid_to?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          discount_bps?: number
+          id?: string
+          organization_id?: string
+          pack_size_units?: number
+          product_id?: string
+          valid_from?: string
+          valid_to?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_pack_versions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_pack_versions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_pack_versions_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       product_prices: {
         Row: {
           branch_id: string | null
@@ -2321,6 +2453,7 @@ export type Database = {
           inventory_role: Database["public"]["Enums"]["product_inventory_role"]
           name: string
           organization_id: string
+          pack_size_units: number | null
           sku: string | null
           slug: string
           unit_type: Database["public"]["Enums"]["unit_type"]
@@ -2335,6 +2468,7 @@ export type Database = {
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
           name: string
           organization_id: string
+          pack_size_units?: number | null
           sku?: string | null
           slug: string
           unit_type?: Database["public"]["Enums"]["unit_type"]
@@ -2349,6 +2483,7 @@ export type Database = {
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
           name?: string
           organization_id?: string
+          pack_size_units?: number | null
           sku?: string | null
           slug?: string
           unit_type?: Database["public"]["Enums"]["unit_type"]
@@ -2472,6 +2607,11 @@ export type Database = {
       sale_items: {
         Row: {
           branch_id: string
+          branch_promotion_discount_bps: number | null
+          branch_promotion_discount_cents: number
+          branch_promotion_discounted_units: number | null
+          branch_promotion_every_units: number | null
+          branch_promotion_id: string | null
           card_surcharge_cents: number
           cash_discount_bps: number
           cash_discount_cents: number
@@ -2490,6 +2630,11 @@ export type Database = {
           manual_unit_price_cents: number | null
           organization_id: string
           original_price_per_kg_cents: number
+          pack_config_id: string | null
+          pack_count: number | null
+          pack_discount_bps: number | null
+          pack_discount_cents: number
+          pack_size_units_snapshot: number | null
           price_per_kg_cents: number
           product_id: string
           product_name_snapshot: string
@@ -2498,12 +2643,18 @@ export type Database = {
           promotion_mode: Database["public"]["Enums"]["promotion_mode"] | null
           quantity_units: number | null
           sale_id: string
+          sold_as_pack: boolean
           subtotal_cents: number
           ticket_discount_cents: number
           weight_grams: number | null
         }
         Insert: {
           branch_id: string
+          branch_promotion_discount_bps?: number | null
+          branch_promotion_discount_cents?: number
+          branch_promotion_discounted_units?: number | null
+          branch_promotion_every_units?: number | null
+          branch_promotion_id?: string | null
           card_surcharge_cents?: number
           cash_discount_bps?: number
           cash_discount_cents?: number
@@ -2522,6 +2673,11 @@ export type Database = {
           manual_unit_price_cents?: number | null
           organization_id: string
           original_price_per_kg_cents: number
+          pack_config_id?: string | null
+          pack_count?: number | null
+          pack_discount_bps?: number | null
+          pack_discount_cents?: number
+          pack_size_units_snapshot?: number | null
           price_per_kg_cents: number
           product_id: string
           product_name_snapshot: string
@@ -2530,12 +2686,18 @@ export type Database = {
           promotion_mode?: Database["public"]["Enums"]["promotion_mode"] | null
           quantity_units?: number | null
           sale_id: string
+          sold_as_pack?: boolean
           subtotal_cents: number
           ticket_discount_cents?: number
           weight_grams?: number | null
         }
         Update: {
           branch_id?: string
+          branch_promotion_discount_bps?: number | null
+          branch_promotion_discount_cents?: number
+          branch_promotion_discounted_units?: number | null
+          branch_promotion_every_units?: number | null
+          branch_promotion_id?: string | null
           card_surcharge_cents?: number
           cash_discount_bps?: number
           cash_discount_cents?: number
@@ -2554,6 +2716,11 @@ export type Database = {
           manual_unit_price_cents?: number | null
           organization_id?: string
           original_price_per_kg_cents?: number
+          pack_config_id?: string | null
+          pack_count?: number | null
+          pack_discount_bps?: number | null
+          pack_discount_cents?: number
+          pack_size_units_snapshot?: number | null
           price_per_kg_cents?: number
           product_id?: string
           product_name_snapshot?: string
@@ -2562,16 +2729,31 @@ export type Database = {
           promotion_mode?: Database["public"]["Enums"]["promotion_mode"] | null
           quantity_units?: number | null
           sale_id?: string
+          sold_as_pack?: boolean
           subtotal_cents?: number
           ticket_discount_cents?: number
           weight_grams?: number | null
         }
         Relationships: [
           {
+            foreignKeyName: "sale_items_branch_promotion_id_fkey"
+            columns: ["branch_promotion_id"]
+            isOneToOne: false
+            referencedRelation: "branch_promotions"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "sale_items_discount_rule_id_fkey"
             columns: ["discount_rule_id"]
             isOneToOne: false
             referencedRelation: "product_weight_discounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sale_items_pack_config_id_fkey"
+            columns: ["pack_config_id"]
+            isOneToOne: false
+            referencedRelation: "product_pack_versions"
             referencedColumns: ["id"]
           },
           {
@@ -3981,12 +4163,24 @@ export type Database = {
         Returns: number
       }
       preview_import_batch: { Args: { p_batch_id: string }; Returns: Json }
+      preview_import_product_purge: {
+        Args: { p_candidates: Json; p_source_system: string }
+        Returns: Json
+      }
       publish_restock_announcement: {
         Args: { p_message: string; p_restock_event_id: string; p_title: string }
         Returns: string
       }
       pull_pos_state: {
         Args: { p_after_sequence?: number; p_device_id: string }
+        Returns: Json
+      }
+      purge_import_products: {
+        Args: {
+          p_candidates: Json
+          p_expected_delete_count: number
+          p_source_system: string
+        }
         Returns: Json
       }
       record_employee_time_event: {
@@ -4085,6 +4279,15 @@ export type Database = {
           p_branch_id: string
           p_code: string
           p_name: string
+        }
+        Returns: string
+      }
+      save_branch_promotion: {
+        Args: {
+          p_active?: boolean
+          p_branch_id: string
+          p_discount_bps: number
+          p_every_units: number
         }
         Returns: string
       }
@@ -4280,6 +4483,10 @@ export type Database = {
       }
       set_product_inventory_role: {
         Args: { p_inventory_role: string; p_product_id: string }
+        Returns: undefined
+      }
+      set_product_pack_size: {
+        Args: { p_pack_size_units: number; p_product_id: string }
         Returns: undefined
       }
       set_product_price: {

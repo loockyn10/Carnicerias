@@ -11,7 +11,10 @@ import {
   advanceWeightStability,
   initialWeightStabilityState,
   sumMoney,
+  PACK_DISCOUNT_BPS,
+  type BranchUnitPromotion,
   type ScaleKind,
+  type UnitPackSale,
   type WeightStabilityState
 } from "@carnicerias/business-logic";
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
@@ -23,18 +26,19 @@ import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
-  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, repriceTicketLine, restoreNormalPrice,
-  summarizeTicket, type DiscountRule
+  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, describeUnitLine, findMergeableUnitLine, findPackRule,
+  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule
 } from "./lib/ticket-pricing";
 import { sanitizeDiscountInput } from "./lib/manual-price";
 import { ManualPriceModal } from "./ManualPriceModal";
-import { isDesktopRuntime, localDatabase, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
 import { isPriceMissing, NO_PRICE_OFFLINE_MESSAGE, parseSetPriceResult, resolveProductRequest } from "./lib/product-price";
 import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 import { QuickProductModal } from "./QuickProductModal";
+import { UnitQuantityFields } from "./UnitQuantityFields";
 import { ProductPriceModal } from "./ProductPriceModal";
 import { MercadoPagoPanel } from "./MercadoPagoPanel";
 import { resolveStartupUser } from "./lib/startup-session";
@@ -82,6 +86,10 @@ interface CatalogProduct {
   pricePerKgCents: bigint;
   /** Scanner codes of the product, from the synced catalog (SQLite offline). */
   barcodes: string[];
+  /** Unidades por pack (sólo UNIT; null = sin pack). Habilita "Pack · N unidades · 20% OFF" al cargar la cantidad. */
+  packSizeUnits: number | null;
+  /** Id de la versión vigente del pack (la que respalda la venta en el servidor); sin él no se ofrece Pack. */
+  packConfigId: string | null;
 }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
@@ -106,6 +114,12 @@ const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
 // Marks a failure already reported via reportStageError (message + diagnostics already set),
 // so an outer catch around a staged sequence doesn't overwrite it with a less specific message.
 class HandledStageError extends Error {}
+
+/** La promoción global de la sucursal (a lo sumo una vigente) tal como la necesita el motor de precios. */
+function toBranchPromotion(rows: readonly LocalBranchPromotion[] | undefined): BranchUnitPromotion | null {
+  const row = rows?.[0];
+  return row ? { id: row.id, everyUnits: row.everyUnits, discountBps: row.discountBps } : null;
+}
 
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
@@ -323,6 +337,10 @@ export default function App() {
   const [weightInput, setWeightInput] = useState("");
   const [quantityInput, setQuantityInput] = useState(1);
   const [sellAsPack, setSellAsPack] = useState(false);
+  // Producto UNIT con pack: la cantidad del modal son PACKS (cada uno = pack_size_units unidades reales, 20 % OFF).
+  const [packMode, setPackMode] = useState(false);
+  // Promoción global de la sucursal ("cada N unidades, X %", sólo UNIT); viaja con el catálogo y se lee de SQLite.
+  const [branchPromotion, setBranchPromotion] = useState<BranchUnitPromotion | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   // Pricing flexible de Central (D-061): descuento general del ticket (texto libre del input, en %) y la línea
   // cuyo precio manual se está editando. Ninguno de los dos existe fuera del POS de Central.
@@ -589,7 +607,9 @@ export default function App() {
           productSku: row.productSku,
           unitType: row.unitType,
           pricePerKgCents: BigInt(row.pricePerKgCents),
-          barcodes: row.barcodes
+          barcodes: row.barcodes,
+          packSizeUnits: row.packSizeUnits ?? null,
+          packConfigId: row.packConfigId ?? null
         })));
         setCategoryDirectory(directory);
         return;
@@ -617,7 +637,10 @@ export default function App() {
             unitType: row.unit_type,
             pricePerKgCents: BigInt(row.price_per_kg_cents),
             // An older server (migration not pushed yet) has no barcodes column: scans just never match.
-            barcodes: (row.barcodes as string[] | undefined) ?? []
+            barcodes: (row.barcodes as string[] | undefined) ?? [],
+            // El POS web de desarrollo no ofrece Pack ni promociones de sucursal: sólo el POS de escritorio los recibe y los revalida.
+            packSizeUnits: null,
+            packConfigId: null
           }))
         );
         setCategoryDirectory(categoriesData.map((row) => ({ id: row.id, name: row.name, colorHex: row.color_hex, sortOrder: row.sort_order })));
@@ -677,7 +700,7 @@ export default function App() {
     setTicketDiscountInput("");
     setManualPriceLineId(null);
     setTicket((current) => current.some((line) => line.manualPriceApplied)
-      ? current.map((line) => line.manualPriceApplied ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId }) : line)
+      ? current.map((line) => line.manualPriceApplied ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion }) : line)
       : current);
   }, [centralPos]);
   // Se recalcula con cada sync (lastSuccessfulSyncAt cambia en cada pull; el snapshot de stock ya
@@ -694,7 +717,9 @@ export default function App() {
       if (desktop) {
         const config = await localDatabase.commercialConfig();
         setCashDiscountBps(config.cashDiscountBps); setDiscounts(config.discounts); setAnnouncements(config.announcements);
+        setBranchPromotion(toBranchPromotion(config.branchPromotions));
       } else {
+        setBranchPromotion(null);
         const { data, error: configError } = await supabase.rpc("get_pos_commercial_config", { p_branch_id: branchId });
         if (configError) throw configError;
         const config = data as unknown as { cashDiscountBps: number; discounts: DiscountRule[]; announcements: Announcement[] };
@@ -716,6 +741,7 @@ export default function App() {
         setCashDiscountBps(config.cashDiscountBps);
         setDiscounts(config.discounts);
         setAnnouncements(config.announcements);
+        setBranchPromotion(toBranchPromotion(config.branchPromotions));
         setOutboxSummary(await localDatabase.outboxSummary());
         setOperators(await localDatabase.operators());
         if (operator) await loadShift(operator);
@@ -1032,8 +1058,8 @@ export default function App() {
     // no se recalcula nunca (repriceTicketLine): su precio es la decisión final del operador.
     if (!paymentMethod) return;
     const method = paymentMethod;
-    setTicket((current) => current.map((line) => repriceTicketLine(line, { paymentMethod: method, discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId })));
-  }, [cashDiscountBps, paymentMethod]);
+    setTicket((current) => current.map((line) => repriceTicketLine(line, { paymentMethod: method, discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion })));
+  }, [cashDiscountBps, paymentMethod, branchPromotion]);
 
   // Producto sin precio: NUNCA se agrega a $0. Con conexión se abre el modal para fijar el precio; sin
   // conexión el mismo modal sólo avisa (no hay precio pendiente local ni venta a $0). Toda vía que agrega
@@ -1059,7 +1085,10 @@ export default function App() {
     setSelectedProduct(product);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
-    setQuantityInput(line?.quantityUnits ?? 1);
+    // Una línea cargada como Pack se vuelve a abrir en modo Pack (la cantidad son packs); una normal, en unidades.
+    const modal = unitModalState(line, packSizeOffered(product));
+    setPackMode(modal.packMode);
+    setQuantityInput(modal.quantity);
     setSellAsPack(line?.sellAsPack ?? line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
   }
@@ -1099,6 +1128,25 @@ export default function App() {
     return findPackRule(discounts, selectedProduct.productId, branchId);
   }, [discounts, selectedProduct, branchId]);
 
+  // La promoción global de la sucursal sólo existe en el POS de escritorio (la recibe del catálogo sincronizado).
+  const unitPromotion = desktop ? branchPromotion : null;
+
+  /**
+   * Cómo queda la línea UNIT que se está cargando en el modal: las unidades REALES (en modo Pack: packs × tamaño del pack),
+   * el Pack si corresponde y, si el producto ya está en el ticket en el mismo modo, la línea a la que se suma.
+   */
+  function unitLineRequest(product: CatalogProduct): { units: number; packSale: UnitPackSale | null; lineId: string; mergedLine: TicketLine | undefined } {
+    return resolveUnitLineRequest({
+      ticket: ticketRef.current, productId: product.productId, packSizeUnits: packSizeOffered(product),
+      packConfigId: product.packConfigId, packMode, quantity: quantityInput, editingLineId
+    });
+  }
+
+  /** El Pack que el producto ofrece en este POS: sólo el de escritorio y sólo con la versión del pack que respalda la venta en el servidor. */
+  function packSizeOffered(product: CatalogProduct): number | null {
+    return desktop && product.packConfigId != null ? product.packSizeUnits : null;
+  }
+
   /**
    * Builds and commits the ticket line for `selectedProduct`. `explicitWeightGrams`
    * lets the scale auto-confirm path hand over the already-settled weight
@@ -1130,9 +1178,17 @@ export default function App() {
       const isUnit = selectedProduct.unitType === "UNIT";
 
       let line: TicketLine;
+      let mergedLineId: string | null = null;
       if (isUnit) {
         if (!Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
-        line = buildUnitTicketLine(selectedProduct, quantityInput, editingLineId ?? crypto.randomUUID(), packRuleForSelectedProduct, method, BigInt(cashDiscountBps));
+        // Unidades REALES (en modo Pack: packs × tamaño) y, si el producto ya está en el ticket, se suma a esa línea: así
+        // "cada N unidades" cuenta todas las del mismo producto, vengan de la grilla o del scanner.
+        const request = unitLineRequest(selectedProduct);
+        mergedLineId = request.mergedLine?.id ?? null;
+        line = buildUnitTicketLine(
+          selectedProduct, request.units, request.lineId || crypto.randomUUID(), packRuleForSelectedProduct, method, BigInt(cashDiscountBps),
+          { branchPromotion: unitPromotion, packSale: request.packSale }
+        );
       } else {
         const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
         const pack = sellAsPack ? packRuleForSelectedProduct : null;
@@ -1145,9 +1201,10 @@ export default function App() {
         throw new Error("Con esa cantidad el precio manual deja la línea en $0.");
       }
 
+      const replacedLineId = editingLineId ?? mergedLineId;
       setTicket((current) =>
-        editingLineId
-          ? current.map((candidate) => (candidate.id === editingLineId ? line : candidate))
+        replacedLineId
+          ? current.map((candidate) => (candidate.id === replacedLineId ? line : candidate))
           : [...current, line]
       );
       setSelectedProduct(null);
@@ -1155,6 +1212,7 @@ export default function App() {
       setWeightInput("");
       setQuantityInput(1);
       setSellAsPack(false);
+      setPackMode(false);
     } catch (weightError) {
       setError(weightError instanceof Error ? weightError.message : "Cantidad inválida");
     }
@@ -1178,7 +1236,7 @@ export default function App() {
   }
   function restoreLineToNormalPrice(lineId: string) {
     setTicket((current) => current.map((line) => line.id === lineId
-      ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId })
+      ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion })
       : line));
     setManualPriceLineId(null);
   }
@@ -1193,9 +1251,10 @@ export default function App() {
     if (interceptMissingPrice(product)) return;
     // Read/write through a ref so two scans landing before React re-renders both count.
     const current = ticketRef.current;
-    const existing = current.find((line) => line.productId === product.productId && line.quantityUnits != null);
+    // Un escaneo agrega UNA unidad normal (nunca un Pack): a la línea normal del producto si ya existe, aunque tenga precio manual.
+    const existing = findMergeableUnitLine(current, product.productId, false, true);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps));
+    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotion: unitPromotion });
     try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
     ticketRef.current = next;
@@ -1224,7 +1283,7 @@ export default function App() {
   }
 
   function toCatalogProduct(row: QuickCatalogRow): CatalogProduct {
-    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents) };
+    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents), packSizeUnits: null, packConfigId: null };
   }
 
   // El POS sólo puede vender (confirm_local_sale) productos que ya están en su SQLite: tras el alta se
@@ -2052,10 +2111,11 @@ export default function App() {
                           ) : (
                             <p className="mt-1 text-sm text-stone-400">
                               {line.quantityUnits != null
-                                ? `${String(line.quantityUnits)} u × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
+                                ? `${describeUnitLine(line).quantityLabel} · ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
                                 : `${formatWeight(line.weightGrams)} × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg`}
                             </p>
                           )}
+                          {line.quantityUnits != null && !line.manualPriceApplied && describeUnitLine(line).badge ? <p className="mt-1 text-xs font-bold text-emerald-400" data-testid="unit-discount-badge">{describeUnitLine(line).badge}</p> : null}
                           {line.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 text-xs font-bold text-amber-300">Promo pack</p> : null}
                           {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
                         </>
@@ -2113,7 +2173,7 @@ export default function App() {
                 <div className="mt-2 flex justify-between text-sm text-stone-300"><span>Subtotal/lista</span><span>{formatCurrency(ticketListSubtotal)}</span></div>
                 {ticketCashDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Descuento por pago ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>-{formatCurrency(ticketCashDiscount)}</span></div> : null}
                 {ticketCardSurcharge > 0n ? <div className="mt-1 flex justify-between text-sm text-amber-400"><span>Recargo tarjeta ({(cashDiscountBps / 100).toLocaleString("es-AR")}%)</span><span>+{formatCurrency(ticketCardSurcharge)}</span></div> : null}
-                {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promo por cantidad</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
+                {ticketPromotionDiscount > 0n ? <div className="mt-1 flex justify-between text-sm text-emerald-400"><span>Promos y packs</span><span>-{formatCurrency(ticketPromotionDiscount)}</span></div> : null}
                 {ticketManualAdjustment !== 0n ? <div className={`mt-1 flex justify-between text-sm ${ticketManualAdjustment < 0n ? "text-emerald-400" : "text-amber-400"}`}><span>Ajuste manual</span><span>{ticketManualAdjustment < 0n ? "-" : "+"}{formatCurrency(ticketManualAdjustment < 0n ? -ticketManualAdjustment : ticketManualAdjustment)}</span></div> : null}
                 {centralPos ? (
                   <>
@@ -2418,37 +2478,13 @@ export default function App() {
               </>
             ) : (
               <>
-                {/* UNIT: cantidad entera con [-] [+] + input manual — nunca balanza ni gramos. */}
-                <label className="mt-6 grid gap-2 text-sm font-bold text-stone-300">
-                  Cantidad de unidades
-                  <div className="flex items-center gap-3">
-                    <button
-                      className="h-14 w-14 rounded-2xl border border-stone-600 bg-stone-950 text-2xl font-black hover:bg-stone-800 disabled:opacity-40"
-                      disabled={quantityInput <= 1}
-                      onClick={() => setQuantityInput((current) => Math.max(1, current - 1))}
-                      type="button"
-                    >
-                      −
-                    </button>
-                    <input
-                      autoFocus
-                      className="w-full rounded-2xl border border-stone-600 bg-stone-950 px-4 py-4 text-center text-4xl font-black outline-none focus:border-rose-500"
-                      inputMode="numeric"
-                      onChange={(event) => {
-                        const parsed = Number(event.target.value.replace(/[^0-9]/g, ""));
-                        setQuantityInput(Number.isFinite(parsed) && parsed > 0 ? parsed : 1);
-                      }}
-                      value={quantityInput}
-                    />
-                    <button
-                      className="h-14 w-14 rounded-2xl border border-stone-600 bg-stone-950 text-2xl font-black hover:bg-stone-800"
-                      onClick={() => setQuantityInput((current) => current + 1)}
-                      type="button"
-                    >
-                      +
-                    </button>
-                  </div>
-                </label>
+                <UnitQuantityFields
+                  quantity={quantityInput}
+                  onQuantityChange={setQuantityInput}
+                  packSizeUnits={packSizeOffered(selectedProduct)}
+                  packMode={packMode}
+                  onPackModeChange={setPackMode}
+                />
                 {packRuleForSelectedProduct?.packQuantityUnits != null && packRuleForSelectedProduct.packPriceCents != null ? (
                   <p className="mt-3 rounded-2xl border border-amber-500/60 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-200">
                     Pack: {packRuleForSelectedProduct.packQuantityUnits} u por {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))} — se aplica automáticamente en múltiplos exactos.
@@ -2473,12 +2509,20 @@ export default function App() {
                   }
                   const computed = selectedProduct.unitType === "WEIGHT"
                     ? computeWeightLine(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), sellAsPack, packRuleForSelectedProduct, discounts, selectedProduct.productId, branchId, paymentMethod, BigInt(cashDiscountBps))
-                    : computeUnitLine(selectedProduct.pricePerKgCents, quantityInput, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps));
+                    : (() => {
+                        const request = unitLineRequest(selectedProduct);
+                        return computeUnitLine(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps), { branchPromotion: unitPromotion, packSale: request.packSale });
+                      })();
                   const preview = computed.pricing;
+                  const unitRequest = selectedProduct.unitType === "UNIT" ? unitLineRequest(selectedProduct) : null;
+                  const unitPromoLabel = computed.unitDiscount?.kind === "PACK"
+                    ? "Pack " + String(PACK_DISCOUNT_BPS / 100) + "% OFF"
+                    : computed.unitDiscount ? "Promo cada " + String(unitPromotion?.everyUnits ?? 0) + " · " + String((unitPromotion?.discountBps ?? 0) / 100) + "%" : "Promo";
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}
-                      {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Promo: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
+                      {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">{unitPromoLabel}: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
+                      {unitRequest?.mergedLine ? <p className="mt-1 text-xs text-stone-500">Se suma a las {String(unitRequest.mergedLine.quantityUnits ?? 0)} u de este producto que ya están en el ticket.</p> : null}
                     </>}
                     {/* El recargo por tarjeta se aplica al total comercial completo, packs incluidos, sin excepción (D-044) — se muestra siempre que corresponda, no sólo fuera de un pack. */}
                     {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}

@@ -141,7 +141,7 @@ Datos operativos/históricos no deben desaparecer:
 
 - ventas: cancelar/revertir, no borrar;
 - empleados con historia: desactivar, no hard-delete;
-- productos con historia: desactivar;
+- productos con historia: desactivar (única excepción: la purga controlada, de una sola pasada y sin botón en el Admin, de productos importados cuyo stock original era <= 0 y que no tienen historia; ver D-062);
 - precios: conservar historial;
 - turnos: corregir con auditoría;
 - rendiciones: conservar snapshot histórico.

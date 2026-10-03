@@ -7,7 +7,8 @@
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "purge:simplygest": "node scripts/purge-simplygest/index.mts"
   },
   "dependencies": {
     "@carnicerias/business-logic": "workspace:*",

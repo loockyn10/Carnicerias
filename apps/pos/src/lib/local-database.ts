@@ -19,7 +19,9 @@ export interface LocalDiscountRow {
   packQuantityUnits: number | null;
   packPriceCents: string | null;
 }
-export interface LocalCommercialConfig { cashDiscountBps: number; discounts: LocalDiscountRow[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; }
+/** Promoción global de la sucursal del dispositivo ("cada N unidades, X %" para sus productos UNIT), ya guardada por el último pull. */
+export interface LocalBranchPromotion { id: string; everyUnits: number; discountBps: number }
+export interface LocalCommercialConfig { cashDiscountBps: number; discounts: LocalDiscountRow[]; announcements: { id: string; title: string; message: string; type: string; priority: number; branchId: string | null }[]; branchPromotions: LocalBranchPromotion[]; }
 
 export interface LocalRuntime {
   deviceId: string;
@@ -54,6 +56,10 @@ export interface LocalCatalogRow {
   pricePerKgCents: string;
   priceValidFrom: string;
   barcodes: string[];
+  /** Unidades por pack (sólo UNIT; null = sin pack): habilita la opción Pack al cargar la cantidad. */
+  packSizeUnits: number | null;
+  /** Id de la versión vigente del pack: viaja en cada línea vendida como Pack para que el servidor la valide. */
+  packConfigId: string | null;
 }
 
 /** The POS tab directory row — see get_local_categories / apply_catalog_pull in the Tauri

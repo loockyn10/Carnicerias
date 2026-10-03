@@ -104,6 +104,13 @@ Reglas de `PACK_FIXED_TOTAL`:
 - Un producto tiene como máximo una promoción `PACK_FIXED_TOTAL` activa por sucursal/global a la vez.
 - El POS de mostrador vende ambos: pack `WEIGHT` (toggle explícito "Vender como pack", peso real siempre registrado) y pack `UNIT` (automático por múltiplos exactos de la cantidad tipeada, sin toggle — no tiene sentido pesar ni elegir, sólo llegar o no al múltiplo).
 
+### Pack y promoción global por sucursal (productos UNIT, D-063)
+
+- **Pack** (`products.pack_size_units`, entero >= 2, sólo UNIT, NULL = sin pack; ej. leche: 8): unidad operativa de carga rápida, **no** una promoción, sin precio propio y distinto de `PACK_FIXED_TOTAL`. Vender "N packs" registra N × pack_size_units **unidades reales** (el stock descuenta 8/16/…; el pack no es una unidad de inventario) y **todas** reciben **20 % de descuento** (exactamente el 20 % del subtotal de lista de la línea): 1 pack de 8 × $1.000 → $6.400; 2 packs → 16 u → $12.800.
+- **Promoción de sucursal** (`branch_promotions`): "cada N unidades del **mismo** producto, X %" para todos los UNIT de una sucursal. Sólo grupos completos (cada 3 / 15 %: 1–2 u sin descuento, 3 → 3 con 15 %, 4 → 3 + 1 normal, 6 → 6, 8 → 6 + 2 normales); nunca suma productos distintos.
+- **Un solo descuento por línea, sin acumular.** Precedencia: precio manual > venta como Pack (20 %) > promoción específica del producto aplicable (`PACK_FIXED_TOTAL`) > promoción de sucursal. Un Pack de 8 recibe 20 % en las 8 unidades y **no** además el "cada 3"; las mismas 8 unidades vendidas sueltas reciben 3+3 al 15 % y 2 normales. Después: recargo de tarjeta (una vez sobre el total comercial de la línea, ya descontado) y por último el descuento general del ticket de Central (D-061).
+- El escaneo agrega 1 unidad normal (nunca un Pack); el Pack se elige en el modal de cantidad, al agregar o al modificar la línea. El tamaño del pack está versionado (`product_pack_versions`): cada venta guarda la versión con la que se hizo (`pack_config_id`) y el servidor la valida contra ESA versión, nunca contra el tamaño actual del producto. Cada venta guarda el snapshot (`sold_as_pack`, `pack_config_id`, `pack_size_units_snapshot`, `pack_count`, `pack_discount_bps/_cents`; `branch_promotion_*`): si el pack pasa de 8 a 12, una venta vieja sigue siendo "1 pack × 8 u, 20 %".
+
 ## Snapshots históricos
 
 Una venta debe preservar los datos relevantes del momento:
@@ -111,7 +118,7 @@ Una venta debe preservar los datos relevantes del momento:
 - precio/lista aplicable;
 - precio manual cobrado, ajuste manual y descuento general (porcentaje e importe) cuando existan (D-061);
 - descuentos;
-- promoción;
+- promoción (incluido el Pack de productos UNIT y la promoción de sucursal que se aplicó, con sus valores);
 - costo histórico;
 - cantidades;
 - importes finales.

@@ -641,3 +641,84 @@ export function chunkItems<T>(items: readonly T[], size: number): T[][] {
   for (let start = 0; start < items.length; start += size) chunks.push(items.slice(start, start + size));
   return chunks;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Limpieza de productos importados sin stock en el sistema de origen (purga controlada)
+// ---------------------------------------------------------------------------------------------
+
+/** What the original SimplyGest `CANTIDAD` of a row says (the ONLY source that decides a purge, never the Supabase ledger). */
+export type SourceQuantityVerdict =
+  | { kind: "NON_POSITIVE"; normalized: string }
+  | { kind: "POSITIVE" }
+  | { kind: "EMPTY" }
+  | { kind: "UNREADABLE" };
+
+/**
+ * Sign of a source quantity cell. `0`, `-0`, `0,000` and any negative number are NON_POSITIVE (purge candidates);
+ * anything > 0 is POSITIVE (never a candidate); an empty cell or text that is not a number is not evidence of
+ * "no stock" and is never a candidate either. The sign/zero test gives the same answer for the Argentine and the
+ * international number format, so no format needs to be guessed.
+ */
+export function classifySourceQuantity(cell: CellValue | undefined): SourceQuantityVerdict {
+  if (cell === null || cell === undefined) return { kind: "EMPTY" };
+  for (const format of ["AR", "INTL"] as const) {
+    const parsed = parseDecimal(cell, format);
+    if (parsed === "empty") return { kind: "EMPTY" };
+    if (parsed === "invalid") continue;
+    if (isZero(parsed)) return { kind: "NON_POSITIVE", normalized: "0" };
+    if (parsed.negative) {
+      const fraction = parsed.fraction.replace(/0+$/, "");
+      return { kind: "NON_POSITIVE", normalized: `-${parsed.integer.replace(/^0+(?=\d)/, "")}${fraction === "" ? "" : `.${fraction}`}` };
+    }
+    return { kind: "POSITIVE" };
+  }
+  return { kind: "UNREADABLE" };
+}
+
+export interface PurgeCandidate {
+  /** Row of the source file (for the operator's report). */
+  rowNumber: number;
+  /** The same external code the importer used (`external_entity_links.external_id`): SKU in capitals or `BC:<barcode>`. */
+  externalId: string;
+  /** Product name as written in the source file. */
+  name: string;
+  /** Original `CANTIDAD`, normalized (`0`, `-3`, `-1.5`); always <= 0. */
+  quantity: string;
+  /** The cell exactly as it came in the file. */
+  quantityText: string;
+}
+
+export interface PurgeCandidateBuild {
+  candidates: PurgeCandidate[];
+  totalRows: number;
+  /** Rows the importer itself rejected (no link exists for them), e.g. repeated code: only its FIRST row was ever imported. */
+  notImportedRows: number;
+  positiveRows: number;
+  emptyQuantityRows: number;
+  unreadableQuantityRows: number;
+}
+
+/**
+ * Purge candidates from a SimplyGest extraction: the rows that WERE importable (same rules and same "first row wins"
+ * deduplication as `mapCatalogRows`, so a repeated code can never make the purge look at the wrong occurrence) whose
+ * original quantity column (`mapping.stock`) is zero or negative. Identification is by external code, never by name.
+ */
+export function buildPurgeCandidates(table: ImportTable, mapping: CatalogColumnMapping, options: { numberFormat: NumberFormat }): PurgeCandidateBuild {
+  if (mapping.stock === null) throw new RangeError("Falta indicar la columna de cantidad (CANTIDAD) del archivo de origen.");
+  const mapped = mapCatalogRows(table, mapping, { numberFormat: options.numberFormat, importStock: false });
+  const cellsByRow = new Map(table.rows.map((row) => [row.rowNumber, row.cells]));
+  const result: PurgeCandidateBuild = { candidates: [], totalRows: mapped.totalRows, notImportedRows: 0, positiveRows: 0, emptyQuantityRows: 0, unreadableQuantityRows: 0 };
+  for (const row of mapped.rows) {
+    if (row.invalidReason !== null) { result.notImportedRows += 1; continue; }
+    const cell = cellsByRow.get(row.rowNumber)?.[mapping.stock];
+    const verdict = classifySourceQuantity(cell);
+    if (verdict.kind === "POSITIVE") { result.positiveRows += 1; continue; }
+    if (verdict.kind === "EMPTY") { result.emptyQuantityRows += 1; continue; }
+    if (verdict.kind === "UNREADABLE") { result.unreadableQuantityRows += 1; continue; }
+    result.candidates.push({
+      rowNumber: row.rowNumber, externalId: row.externalId, name: row.display.name,
+      quantity: verdict.normalized, quantityText: cellText(cell)
+    });
+  }
+  return result;
+}

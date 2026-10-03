@@ -283,6 +283,11 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
+  // p_pack_size_units null = "this product has no pack" (quita las unidades por pack).
+  set_product_pack_size: {
+    Args: { p_pack_size_units: number | null; p_product_id: string }
+    Returns: undefined
+  }
   // p_supplier_id null = "this product has no primary supplier".
   set_product_primary_supplier: {
     Args: { p_product_id: string; p_supplier_id: string | null }

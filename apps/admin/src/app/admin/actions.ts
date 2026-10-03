@@ -9,6 +9,7 @@ import { parsePesosToCents } from "../../lib/settlements";
 import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
+import { parseBranchPromotionForm, parsePackSizeUnits } from "../../lib/unit-promotions";
 import type { Database } from "@carnicerias/database";
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
@@ -137,12 +138,22 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
   try {
     const name = text(formData, "name");
     const productId = text(formData, "product_id");
+    // Unidades por pack (sólo productos por unidad; vacío = sin pack). Quitar el pack va ANTES de guardar el producto (si pasa a «por kg» no
+    // puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). No es una promoción ni toca precios.
+    const wantedPackSize = text(formData, "unit_type") === "UNIT" ? parsePackSizeUnits(text(formData, "pack_size_units")) : null;
+    const currentPackSize = parsePackSizeUnits(text(formData, "current_pack_size_units"));
+    if (wantedPackSize === null && currentPackSize !== null) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: null });
+    }
     await rpcOrThrow("save_product", {
       p_product_id: productId, p_category_id: text(formData, "category_id"),
       p_name: name, p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
       p_active: formData.get("active") === "on"
     });
+    if (wantedPackSize !== null && wantedPackSize !== currentPackSize) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPackSize });
+    }
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
     // Categoría principal + adicionales en una sola llamada transaccional: set_product_categories
     // agrega la principal si faltara en el set marcado, así el formulario no tiene que forzar el
@@ -341,6 +352,20 @@ export async function saveWeightDiscountFormAction(_: PromotionFormState, formDa
     return { successToken: crypto.randomUUID() };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo guardar la promoción" };
+  }
+}
+
+/** Promoción global de una sucursal ("cada N unidades del mismo producto, X %"): crea, edita o la desactiva. Editarla crea una versión nueva (las ventas conservan la que usaron). */
+export async function saveBranchPromotionFormAction(_: PromotionFormState, formData: FormData): Promise<PromotionFormState> {
+  try {
+    const input = parseBranchPromotionForm(formData);
+    await rpcOrThrow("save_branch_promotion", {
+      p_branch_id: input.branchId, p_every_units: input.everyUnits, p_discount_bps: input.discountBps, p_active: input.active
+    });
+    revalidatePath("/admin/promotions");
+    return { successToken: crypto.randomUUID() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo guardar la promoción de la sucursal" };
   }
 }
 

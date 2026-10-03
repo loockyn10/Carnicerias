@@ -1,3 +1,4 @@
+import { BranchPromotionsPanel, type BranchPromotionRow } from "../../../components/branch-promotions-panel";
 import { PromotionModal, type PromotionValue } from "../../../components/promotion-modal";
 import { PromotionsList, type PromotionRow } from "../../../components/promotions-list";
 import { SectionTabs } from "../../../components/section-tabs";
@@ -61,15 +62,17 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const value = (key: string) => typeof params[key] === "string" ? params[key] : "";
   const supabase = await createClient();
   const commercial = supabase as unknown as CommercialClient;
-  const [productsResult, branchesResult, categoriesResult, discountsResult] = await Promise.all([
+  const [productsResult, branchesResult, categoriesResult, discountsResult, branchPromotionsResult] = await Promise.all([
     fetchAllRows((from, to) => supabase.from("products").select("id, name, unit_type, active, category_id").eq("organization_id", context.organizationId).order("name").order("id").range(from, to)),
     supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"),
     supabase.from("categories").select("id, name").eq("organization_id", context.organizationId),
     commercial.from("product_weight_discounts")
       .select("id, product_id, branch_id, promotion_mode, minimum_grams, discount_type, discount_value, pack_quantity_grams, pack_quantity_units, pack_price_cents, active, valid_from, valid_until")
-      .eq("organization_id", context.organizationId).order("valid_from", { ascending: false })
+      .eq("organization_id", context.organizationId).order("valid_from", { ascending: false }),
+    // Promoción global vigente de cada sucursal ("cada N unidades del mismo producto, X %"): a lo sumo una por sucursal.
+    supabase.from("branch_promotions").select("branch_id, every_units, discount_bps").eq("organization_id", context.organizationId).eq("active", true)
   ]);
-  const error = [productsResult.error, branchesResult.error, categoriesResult.error, discountsResult.error].find(Boolean);
+  const error = [productsResult.error, branchesResult.error, categoriesResult.error, discountsResult.error, branchPromotionsResult.error].find(Boolean);
   const products = productsResult.data;
   // Un producto activo, sea WEIGHT o UNIT, es elegible: la modalidad "Desde cierta cantidad"
   // sigue restringida a WEIGHT (sin cambios) pero "Pack a precio total" ya soporta ambos tipos —
@@ -83,6 +86,11 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const productCategoryNames = new Map(products.map((product) => [product.id, categories.find((category) => category.id === product.category_id)?.name ?? ""]));
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
   const editedDiscount = discounts.find((discount) => discount.id === value("edit"));
+  const activeBranchPromotions = new Map((branchPromotionsResult.data ?? []).map((promotion) => [promotion.branch_id, promotion]));
+  const branchPromotionRows: BranchPromotionRow[] = branches.map((branch) => {
+    const promotion = activeBranchPromotions.get(branch.id);
+    return { branchId: branch.id, branchName: branch.name, promotion: promotion ? { everyUnits: promotion.every_units, discountBps: promotion.discount_bps } : null };
+  });
 
   const rows: PromotionRow[] = discounts.map((discount) => ({
     id: discount.id,
@@ -98,6 +106,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
     <SectionTabs tabs={PRODUCTOS_TABS} />
     {editedDiscount ? <PromotionModal branches={branches} initialOpen products={eligibleProducts} promotion={promotionValue(editedDiscount)} /> : null}
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
+    <BranchPromotionsPanel rows={branchPromotionRows} />
     <PromotionsList rows={rows} />
   </main>;
 }

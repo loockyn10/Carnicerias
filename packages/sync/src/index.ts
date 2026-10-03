@@ -49,6 +49,22 @@ export interface OfflineSaleItemPayload {
   manualPriceApplied?: true;
   manualUnitPriceCents?: string;
   manualAdjustmentCents?: string;
+  /** Pack de un producto UNIT: `quantityUnits` son las unidades REALES (packCount × packSizeUnitsSnapshot) y todas llevan
+   * `packDiscountBps` (20 %). Las cinco claves existen sólo en una línea vendida como pack; el resto de los payloads no
+   * cambia. El servidor y SQLite revalidan la aritmética; el tamaño del pack es un snapshot, nunca se relee del producto. */
+  soldAsPack?: true;
+  packCount?: number;
+  packSizeUnitsSnapshot?: number;
+  /** Versión del pack con la que se vendió: el servidor la valida (existe, es del producto, coincide con el snapshot). */
+  packConfigId?: string;
+  packDiscountBps?: number;
+  packDiscountCents?: string;
+  /** Promoción global de la sucursal ("cada N unidades, X %") aplicada a la línea: cinco claves de snapshot, sólo si aplicó. */
+  branchPromotionId?: string;
+  branchPromotionEveryUnits?: number;
+  branchPromotionDiscountBps?: number;
+  branchPromotionDiscountedUnits?: number;
+  branchPromotionDiscountCents?: string;
 }
 
 /** Proveedor que debe verificar el cobro. Hoy sólo Mercado Pago, siempre sobre method TRANSFER
@@ -162,6 +178,18 @@ export interface CatalogPullRow {
   /** Normalized barcodes of the product (scanner codes). Optional: a server that predates them
    * simply omits the key. Stored in SQLite so scans resolve locally/offline. */
   barcodes?: string[];
+  /** Unidades por pack (sólo UNIT; null/ausente = sin pack). Viaja con el producto por el cursor del catálogo. */
+  packSizeUnits?: number | null;
+  /** Id de la versión vigente del pack: viaja con el tamaño y se guarda en cada línea vendida como Pack. */
+  packConfigId?: string | null;
+}
+
+/** Promoción global de una sucursal para sus productos UNIT ("cada N unidades, X %"). Foto completa en cada pull. */
+export interface CatalogBranchPromotion {
+  id: string;
+  scope: "ALL_UNIT_PRODUCTS";
+  everyUnits: number;
+  discountBps: number;
 }
 
 /** The POS category tab directory: every active category with at least one product assignment
@@ -184,6 +212,8 @@ export interface CatalogPullPayload {
   branchActive: boolean;
   deviceStatus: "ACTIVE" | "DISABLED";
   categories: CatalogCategoryDirectoryEntry[];
+  /** Promociones globales activas de la sucursal del dispositivo (foto completa; ausente en un servidor anterior). */
+  branchPromotions?: CatalogBranchPromotion[];
   roleName: string;
   catalog: CatalogPullRow[];
   removedProductIds: string[];
@@ -237,6 +267,27 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
           manualPriceApplied: true as const,
           manualUnitPriceCents: (line.manualUnitPriceCents ?? line.pricePerKgCents).toString(),
           manualAdjustmentCents: (line.manualAdjustmentCents ?? 0n).toString()
+        }
+      : {}),
+    // Pack y promoción de sucursal: sólo cuando la línea realmente los lleva ahora (una línea con precio manual nunca).
+    ...(line.soldAsPack && !line.manualPriceApplied && line.quantityUnits != null
+      ? {
+          soldAsPack: true as const,
+          packCount: line.packCount ?? 0,
+          packSizeUnitsSnapshot: line.packSizeUnitsSnapshot ?? 0,
+          // Sin versión la línea no se omite: el servidor (y Rust) la rechazan, en vez de aceptar un pack sin respaldo.
+          ...(line.packConfigId ? { packConfigId: line.packConfigId } : {}),
+          packDiscountBps: line.packDiscountBps ?? 0,
+          packDiscountCents: (line.packDiscountCents ?? 0n).toString()
+        }
+      : {}),
+    ...(line.branchPromotionId && !line.soldAsPack && !line.manualPriceApplied && line.quantityUnits != null
+      ? {
+          branchPromotionId: line.branchPromotionId,
+          branchPromotionEveryUnits: line.branchPromotionEveryUnits ?? 0,
+          branchPromotionDiscountBps: line.branchPromotionDiscountBps ?? 0,
+          branchPromotionDiscountedUnits: line.branchPromotionDiscountedUnits ?? 0,
+          branchPromotionDiscountCents: (line.branchPromotionDiscountCents ?? 0n).toString()
         }
       : {})
   }));

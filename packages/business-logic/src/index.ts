@@ -69,6 +69,8 @@ export {
   detectCsvDelimiter,
   detectNumberFormat,
   detectTableNumberFormat,
+  buildPurgeCandidates,
+  classifySourceQuantity,
   mapCatalogRows,
   normalizeImportText,
   parseCsvRecords,
@@ -87,8 +89,16 @@ export type {
   ImportTable,
   ImportTableRow,
   MappedCatalogRow,
-  NumberFormat
+  NumberFormat,
+  PurgeCandidate,
+  PurgeCandidateBuild,
+  SourceQuantityVerdict
 } from "./catalog-import";
+export {
+  calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, isValidPackSizeUnits, MAX_PACK_SIZE_UNITS,
+  MIN_PACK_SIZE_UNITS, PACK_DISCOUNT_BPS, packRealUnits, promotedUnitsFor, unitDiscountCents
+} from "./unit-discounts";
+export type { BranchUnitPromotion, UnitDiscountKind, UnitDiscountPricing, UnitPackSale } from "./unit-discounts";
 export {
   describePaymentState,
   isNotAccreditedVerification,

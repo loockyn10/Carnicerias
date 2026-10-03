@@ -529,6 +529,18 @@ Efectivo por defecto, precio manual por línea y descuento general del ticket, s
 - **Validación:** `pnpm check` OK (business-logic 362, pos 216, admin 68, sync 18); `cargo test --lib` 93/93; `pnpm build:pos:desktop` OK. Postgres vía PGlite (sin Docker; 58 migraciones aplican) con shim pgTAP: `flexible_pricing_central.test.sql` 101/101 (verificado con 6 mutaciones), y sin regresión frente a la línea base 057 en `offline_sync`, `unit_sale_support`, `card_surcharge_pricing`, `mercadopago_*`, `profitability_analytics`, `settlements`, `whatsapp_*`, `online_pos`. **REQUIERE VERIFICACIÓN:** nada corrió contra Postgres/Supabase real ni con la balanza/escáner reales, y la UI de Central no se recorrió en la app de escritorio real (sólo tests unitarios/de render).
 - **Tipos:** `database.types.ts` editado a mano (columnas nuevas); reemplazar con `supabase gen types --linked` tras el `db push`.
 
+## Purga de importados sin stock, Pack UNIT (20 %) y promoción global por sucursal — implementado 2026-10-03 (D-062/D-063, sin aplicar a producción, purga NO ejecutada)
+
+Decisiones y reglas en `DECISIONS.md` D-062/D-063, `DOMAIN_RULES.md` ("Pack y promoción global por sucursal") e `IMPORTS.md` ("Purga de productos importados sin stock").
+
+- **Postgres `202610030059_import_product_purge.sql`:** `preview_import_product_purge` / `purge_import_products` (hard delete controlado, ver D-062) y `pull_pos_state` con los ids borrados en `removedProductIds`. **`202610030060_unit_packs_and_branch_promotions.sql`:** `products.pack_size_units` + `set_product_pack_size`; tabla `branch_promotions` + `save_branch_promotion`; snapshots de Pack/promoción en `sale_items`; `create or replace` de `app_private.sync_offline_sale_core` (cuerpo de `202610020058` + revalidación del Pack y de la promoción de sucursal), `pull_pos_state` (`packSizeUnits`, `branchPromotions`) y `app_private.wa_sale_ticket_json`. `complete_discounted_sale` no cambia.
+- **Versionado del pack (D-063):** tabla `product_pack_versions` (en la 060) + `sale_items.pack_config_id`; el POS recibe `packConfigId` con el tamaño. **SQLite `018`** (`pack_config_id` en `catalog_product_packs` y `local_sale_items`, ADD COLUMN nullable).
+- **SQLite `017`** (tablas `catalog_product_packs`, `catalog_branch_promotions` y columnas de snapshot en `local_sale_items`; sólo ADD COLUMN con default) + `insert_sale` (revalidación espejo, incluida la precedencia contra la promoción específica) + comandos/estructuras del catálogo y de la configuración comercial local.
+- **POS:** `UnitQuantityFields` (cantidad + "Pack · N unidades · 20% OFF", un solo componente para agregar y modificar), `ticket-pricing.ts` (precedencia, fusión de líneas, snapshot), ticket con "1 pack × 8 u = 8 unidades"; el escaneo agrega 1 unidad normal. **Admin:** "Unidades por pack" en el modal de producto, panel "Promoción por sucursal" en Productos → Promociones, detalle de Pack/promoción en Ventas, WhatsApp con el detalle por línea.
+- **Script de purga:** `apps/admin/scripts/purge-simplygest` (`preview`/`apply`). **No se ejecutó nada contra producción y la exportación original de SimplyGest con `CANTIDAD` no estaba disponible en el repo:** el CSV de importación (`simplygest_central_importar_con_proveedores.csv`, 2.729 filas) no trae esa columna, así que el número de candidatos **no se pudo calcular**; sale del primer `preview`.
+- **Validación:** `pnpm check` OK (business-logic 407, sync 18, admin 102, pos 269); `cargo test --lib` 111/111; `pnpm build:pos:desktop` OK. Postgres vía PGlite (sin Docker; 60 migraciones aplican) con shim pgTAP: `import_product_purge.test.sql` 64/64 y `unit_packs_and_branch_promotions.test.sql` 150/150 (verificados con mutaciones; las de la purga y del servidor/SQLite que sobrevivían se endurecieron), y sin regresión frente a la línea base 058 en los 31 archivos pgTAP (las mismas fallas del shim de antes: `initial_schema`, `manual_pricing`, `online_pos`, `operational_pilot`, `product_multi_category`, `production_batches`, `promotions_pack`, `shift_heartbeat_lease`, `stock_transfers`, `unit_sale_support`, `card_surcharge_pricing`). **REQUIERE VERIFICACIÓN:** nada corrió contra Postgres/Supabase real, ni la UI del modal en la app de escritorio real (sólo tests unitarios/de render), ni la purga contra datos reales.
+- **Tipos:** `database.types.ts` editado a mano (`branch_promotions`, columnas nuevas, 4 RPC; `set_product_pack_size` en `database.rpc-null-overrides.ts`); reemplazar con `supabase gen types --linked` tras el `db push`.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -591,6 +603,8 @@ Efectivo por defecto, precio manual por línea y descuento general del ticket, s
 56. `202610020056_whatsapp_ticket_deliveries.sql`
 57. `202610020057_whatsapp_ticket_claims.sql`
 58. `202610020058_flexible_pricing_central.sql`
+59. `202610030059_import_product_purge.sql`
+60. `202610030060_unit_packs_and_branch_promotions.sql`
 
 ### SQLite POS
 
@@ -610,12 +624,16 @@ Efectivo por defecto, precio manual por línea y descuento general del ticket, s
 14. `014_payment_verification.sql`
 15. `015_catalog_zero_price.sql`
 16. `016_flexible_pricing.sql`
+17. `017_unit_packs_and_branch_promotions.sql`
+18. `018_pack_config_versions.sql`
 
 ### Estado remoto
 
 `REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero no se ejecutó `migration list --linked` en ninguna sesión reciente. Evidencia indirecta (2026-09-24): una tarea de esta misma sesión detectó que `save_weight_discount` existe con dos overloads en un Supabase real inspeccionado por el usuario, lo que confirma que al menos parte de `202609230031` en adelante ya está aplicada en algún entorno — no asumir cuáles exactamente sin `supabase migration list --linked` autenticado.
 
 ## Validación actual
+
+- **Purga de importados / Pack UNIT / promoción por sucursal (D-062/D-063, 2026-10-03):** ver la sección propia más arriba (`pnpm check` OK, `cargo test --lib` 111/111, `pnpm build:pos:desktop`, pgTAP 64/64 y 150/150 vía PGlite).
 
 - **Pricing flexible de Central (D-061, 2026-10-02):** ver la sección propia más arriba (`pnpm check` OK, `cargo test --lib` 93/93, `pnpm build:pos:desktop`, pgTAP `flexible_pricing_central` 101/101 vía PGlite).
 - **Recargo por tarjeta / D-044 (2026-09-24, esta sesión)**: `pnpm check` (typecheck+lint+test) **OK en los 7 proyectos del monorepo** — `packages/business-logic` 62 tests (21 en `pricing.test.ts`, reescrito para la nueva regla), `packages/sync` 10 tests (2 nuevos: snapshot de recargo, default en 0), `apps/admin` 40 tests, `apps/pos` 32 tests. `pnpm --filter @carnicerias/pos build` y `pnpm --filter @carnicerias/admin build` OK. `cargo test` (`apps/pos/src-tauri`) corrió contra SQLite real — **35/35 tests OK** (los 31 previos + 4 nuevos: `card_surcharge_sale_persists_separated_snapshots`, `cash_sale_with_promotion_has_no_card_surcharge`, `cash_sale_cannot_carry_a_nonzero_surcharge_bps`, y la actualización de `unit_sale_migration_preserves_preexisting_local_sale_history` para la migración 10). Migración `202609240035_card_surcharge_pricing.sql` y el test pgTAP nuevo (`supabase/tests/card_surcharge_pricing.test.sql`, 24 aserciones) se revisaron manualmente línea por línea pero **no se ejecutaron contra Postgres real**: Docker Desktop no estuvo operativo en esta sesión. `database.types.ts` se actualizó a mano.

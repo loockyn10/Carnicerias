@@ -25,12 +25,16 @@ const PRODUCT_BARCODES_SCHEMA: &str = include_str!("../migrations/013_product_ba
 const PAYMENT_VERIFICATION_SCHEMA: &str = include_str!("../migrations/014_payment_verification.sql");
 const CATALOG_ZERO_PRICE_SCHEMA: &str = include_str!("../migrations/015_catalog_zero_price.sql");
 const FLEXIBLE_PRICING_SCHEMA: &str = include_str!("../migrations/016_flexible_pricing.sql");
+const UNIT_PACKS_PROMOTIONS_SCHEMA: &str = include_str!("../migrations/017_unit_packs_and_branch_promotions.sql");
+const PACK_CONFIG_SCHEMA: &str = include_str!("../migrations/018_pack_config_versions.sql");
 
 /// Un producto sin precio (precio 0, importado desde SimplyGest) nunca se vende: el POS pide el precio antes de agregarlo al ticket.
 const PRICE_REQUIRED: &str = "PRICE_REQUIRED: el producto no tiene precio; fijá el precio antes de venderlo.";
 
 /// Mensaje (y código estable) cuando se intenta registrar una Transferencia manual donde Mercado Pago es obligatorio.
 const FLEXIBLE_PRICING_NOT_ALLOWED: &str = "FLEXIBLE_PRICING_NOT_ALLOWED: el precio manual y el descuento general sólo están habilitados en el POS de Central.";
+/// Descuento fijo de toda venta como Pack (20 %): decisión comercial, igual a app_private.pack_discount_bps() y PACK_DISCOUNT_BPS.
+const PACK_DISCOUNT_BPS: i64 = 2_000;
 const MANUAL_TRANSFER_NOT_ALLOWED: &str = "MANUAL_TRANSFER_NOT_ALLOWED: la transferencia manual no está permitida en esta sucursal; cobrá con Mercado Pago.";
 
 struct DatabaseState(Mutex<Connection>);
@@ -74,6 +78,10 @@ struct LocalCatalogRow {
     price_valid_from: String,
     /// Normalized barcodes of the product (scanner codes), for LOCAL scan resolution.
     barcodes: Vec<String>,
+    /// Unidades por pack (sólo UNIT; None = sin pack). El POS ofrece "Pack" únicamente si existe.
+    pack_size_units: Option<i64>,
+    /// Id de la versión vigente del pack (product_pack_versions del servidor): va en cada línea vendida como Pack.
+    pack_config_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +147,19 @@ struct CatalogPullRow {
     price_valid_from: String,
     #[serde(default)]
     barcodes: Vec<String>,
+    #[serde(default)]
+    pack_size_units: Option<i64>,
+    #[serde(default)]
+    pack_config_id: Option<String>,
+}
+
+/// Promoción global de la sucursal del dispositivo ("cada N unidades, X %" para todos sus productos UNIT).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogBranchPromotion {
+    id: String,
+    every_units: i64,
+    discount_bps: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,6 +186,10 @@ struct CatalogPullPayload {
     removed_product_ids: Vec<String>,
     #[serde(default)]
     categories: Vec<CatalogDirectoryCategory>,
+    /// Foto completa de las promociones globales activas de la sucursal. None = un servidor anterior que no las envía:
+    /// no se toca lo guardado (no hay nada que reemplazar).
+    #[serde(default)]
+    branch_promotions: Option<Vec<CatalogBranchPromotion>>,
 }
 
 fn default_threshold_mode() -> String { "THRESHOLD".to_string() }
@@ -189,7 +214,10 @@ struct CommercialDiscount {
 struct LocalAnnouncement { id: String, title: String, message: String, r#type: String, priority: i64, branch_id: Option<String> }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalCommercialConfig { cash_discount_bps: i64, discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement> }
+struct LocalCommercialConfig { cash_discount_bps: i64, discounts: Vec<LocalDiscount>, announcements: Vec<LocalAnnouncement>, branch_promotions: Vec<LocalBranchPromotion> }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalBranchPromotion { id: String, every_units: i64, discount_bps: i64 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalDiscount {
@@ -242,6 +270,34 @@ struct OfflineSaleItem {
     manual_unit_price_cents: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manual_adjustment_cents: Option<String>,
+    /// Pack de un producto UNIT: `quantity_units` son las unidades REALES (pack_count × pack_size_units_snapshot) y todas
+    /// llevan `pack_discount_bps` (20 %). Las claves se omiten al serializar cuando la línea no es un pack: el payload
+    /// del outbox de una línea normal no cambia.
+    #[serde(default, skip_serializing_if = "is_false")]
+    sold_as_pack: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_size_units_snapshot: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_discount_bps: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_discount_cents: Option<String>,
+    /// Versión del pack (product_pack_versions) con la que se vendió la línea: el servidor valida la venta contra esa versión,
+    /// nunca contra el tamaño actual del producto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_config_id: Option<String>,
+    /// Promoción global de la sucursal aplicada a la línea (snapshot de la regla; sólo si aplicó).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_promotion_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_promotion_every_units: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_promotion_discount_bps: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_promotion_discounted_units: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_promotion_discount_cents: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -533,6 +589,26 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
+    // 017: pack de productos UNIT (20 %) y promoción global por sucursal. Tablas nuevas y ALTER TABLE ADD COLUMN con
+    // defaults: no reconstruye ninguna tabla y las ventas locales ya confirmadas quedan intactas.
+    let unit_packs_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 17)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !unit_packs_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(UNIT_PACKS_PROMOTIONS_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (17, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
+    // 018: versión (configuración histórica) del pack: el POS guarda el id de la versión vigente que le dio el servidor y cada
+    // línea vendida como Pack lo lleva. Sólo ALTER TABLE ADD COLUMN nullable: no reconstruye tablas y nada anterior cambia.
+    let pack_config_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 18)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !pack_config_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(PACK_CONFIG_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (18, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
     let timestamp = now();
     connection
         .execute(
@@ -710,6 +786,20 @@ fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<L
         barcodes_by_product.entry(product_id).or_default().push(barcode);
     }
 
+    // Pack de cada producto (si tiene): tamaño + id de la versión vigente, una sola consulta como las categorías y los barcodes.
+    // Un pack sin versión (fila anterior a la migración 18) no se ofrece: la venta no podría validarse en el servidor.
+    let mut pack_sizes: std::collections::HashMap<String, (i64, String)> = std::collections::HashMap::new();
+    let mut pack_statement = connection
+        .prepare("select product_id, pack_size_units, pack_config_id from catalog_product_packs where pack_config_id is not null")
+        .map_err(|error| error.to_string())?;
+    let pack_rows = pack_statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)))
+        .map_err(|error| error.to_string())?;
+    for triple in pack_rows {
+        let (product_id, size, config_id) = triple.map_err(|error| error.to_string())?;
+        pack_sizes.insert(product_id, (size, config_id));
+    }
+
     let mut statement = connection
         .prepare(
             "select p.organization_id, cp.branch_id, c.id, c.name, c.color_hex, c.sort_order,
@@ -730,6 +820,10 @@ fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<L
                 .cloned()
                 .unwrap_or_else(|| vec![principal_category_id.clone()]);
             let barcodes = barcodes_by_product.get(&product_id).cloned().unwrap_or_default();
+            let (pack_size_units, pack_config_id) = match pack_sizes.get(&product_id) {
+                Some((size, config_id)) => (Some(*size), Some(config_id.clone())),
+                None => (None, None),
+            };
             Ok(LocalCatalogRow {
                 organization_id: row.get(0)?,
                 branch_id: row.get(1)?,
@@ -746,6 +840,8 @@ fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<L
                 price_per_kg_cents: row.get::<_, i64>(10)?.to_string(),
                 price_valid_from: row.get(11)?,
                 barcodes,
+                pack_size_units,
+                pack_config_id,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -809,6 +905,27 @@ fn apply_catalog_pull_inner(
         transaction
             .execute("delete from catalog_product_barcodes where product_id = ?1", params![product_id])
             .map_err(|error| error.to_string())?;
+        // Tampoco debe ofrecer un Pack: se vuelve a enviar con el producto si vuelve al surtido.
+        transaction
+            .execute("delete from catalog_product_packs where product_id = ?1", params![product_id])
+            .map_err(|error| error.to_string())?;
+    }
+
+    // Promociones globales de la sucursal: foto completa, se reemplaza entera (como el directorio de categorías).
+    // Un servidor anterior que no las envía (None) no cambia lo guardado.
+    if let Some(promotions) = &pull.branch_promotions {
+        transaction.execute("delete from catalog_branch_promotions", []).map_err(|error| error.to_string())?;
+        for promotion in promotions {
+            if promotion.every_units < 2 || !(1..10_000).contains(&promotion.discount_bps) {
+                return Err("Invalid branch promotion".to_string());
+            }
+            transaction
+                .execute(
+                    "insert into catalog_branch_promotions(id, branch_id, scope, every_units, discount_bps) values (?1, ?2, 'ALL_UNIT_PRODUCTS', ?3, ?4)",
+                    params![promotion.id, pull.branch_id, promotion.every_units, promotion.discount_bps],
+                )
+                .map_err(|error| error.to_string())?;
+        }
     }
 
     // Category DIRECTORY (POS tab source): always a full current snapshot, independent of the
@@ -866,6 +983,22 @@ fn apply_catalog_pull_inner(
                     params![barcode, row.product_id],
                 )
                 .map_err(|error| error.to_string())?;
+        }
+
+        // Pack: valor único por producto (None = sin pack), reemplazado en cada pull que lo toca. Se guarda junto con el id de su
+        // versión; sin ese id (un servidor anterior) no se ofrece Pack, porque la venta no podría validarse en el servidor.
+        transaction
+            .execute("delete from catalog_product_packs where product_id = ?1", params![row.product_id])
+            .map_err(|error| error.to_string())?;
+        if let (Some(pack_size), Some(pack_config_id)) = (row.pack_size_units, row.pack_config_id.as_deref().filter(|id| !id.is_empty())) {
+            if row.unit_type == "UNIT" && pack_size >= 2 {
+                transaction
+                    .execute(
+                        "insert into catalog_product_packs(product_id, pack_size_units, pack_config_id) values (?1, ?2, ?3)",
+                        params![row.product_id, pack_size, pack_config_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
         }
 
         let category_ids = if row.category_ids.is_empty() { vec![row.category_id.clone()] } else { row.category_ids.clone() };
@@ -1032,7 +1165,10 @@ fn get_local_commercial_config(state: State<'_, DatabaseState>) -> Result<LocalC
     let mut notices = connection.prepare("select id,title,message,type,priority,branch_id from local_announcements order by priority desc").map_err(|e|e.to_string())?;
     let announcements = notices.query_map([], |r| Ok(LocalAnnouncement { id:r.get(0)?, title:r.get(1)?, message:r.get(2)?, r#type:r.get(3)?, priority:r.get(4)?, branch_id:r.get(5)? })).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     let cash_discount_bps = metadata(&connection, "cash_discount_bps")?.and_then(|value| value.parse().ok()).unwrap_or(0);
-    Ok(LocalCommercialConfig { cash_discount_bps, discounts, announcements })
+    // Promociones globales de ESTA sucursal (la del dispositivo), ya guardadas por el último pull: se leen sin red.
+    let mut promotions = connection.prepare("select id, every_units, discount_bps from catalog_branch_promotions where branch_id = (select branch_id from local_device where singleton = 1) order by id").map_err(|e| e.to_string())?;
+    let branch_promotions = promotions.query_map([], |r| Ok(LocalBranchPromotion { id: r.get(0)?, every_units: r.get(1)?, discount_bps: r.get(2)? })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    Ok(LocalCommercialConfig { cash_discount_bps, discounts, announcements, branch_promotions })
 }
 
 fn set_metadata(transaction: &Transaction<'_>, key: &str, value: &str, timestamp: &str) -> Result<(), String> {
@@ -1287,6 +1423,20 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         }
         let product_unit_type: &str;
 
+        // Pack / promoción de sucursal: sólo en líneas UNIT normales, nunca juntos, nunca con precio manual ni con una
+        // promoción específica del producto (un solo descuento por línea). El detalle se revalida en la rama UNIT.
+        let has_pack_fields = item.sold_as_pack || item.pack_count.is_some() || item.pack_size_units_snapshot.is_some() || item.pack_discount_bps.is_some() || item.pack_discount_cents.is_some() || item.pack_config_id.is_some();
+        let has_promotion_fields = item.branch_promotion_id.is_some() || item.branch_promotion_every_units.is_some() || item.branch_promotion_discount_bps.is_some()
+            || item.branch_promotion_discounted_units.is_some() || item.branch_promotion_discount_cents.is_some();
+        if has_pack_fields || has_promotion_fields {
+            if item.manual_price_applied || item.quantity_units.is_none() || item.weight_grams.is_some()
+                || item.promotion_mode.is_some() || item.discount_rule_id.is_some() || item.discount_type.is_some() || item.discount_value.is_some()
+                || (item.sold_as_pack && has_promotion_fields) || (!item.sold_as_pack && has_pack_fields)
+            {
+                return Err("Offline unit discount metadata is inconsistent".to_string());
+            }
+        }
+
         if item.manual_price_applied {
             // Precio manual (D-061): el precio fijado por el operador ES el precio final de la línea. No recibe
             // promoción, pack, recargo por tarjeta ni ajuste por medio de pago, así que no se recalcula contra
@@ -1412,7 +1562,75 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                     }
                     let list_subtotal = original_price.checked_mul(quantity_units).ok_or_else(|| "Sale amount overflow".to_string())?;
                     let cash_subtotal: i64;
-                    if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
+                    if item.sold_as_pack || item.branch_promotion_id.is_some() {
+                        // Un solo descuento sobre las unidades REALES de la línea, calculado una vez sobre el total de lista y
+                        // redondeado half-up (espeja calculateUnitPackLinePricing / calculateBranchPromotionLinePricing y
+                        // sync_offline_sale_core). Después, el recargo de tarjeta una sola vez sobre el total comercial de la línea.
+                        let half_up = |numerator: i64, denominator: i64| numerator.checked_add(denominator / 2).map(|value| value / denominator).ok_or_else(|| "Sale amount overflow".to_string());
+                        let unit_discount: i64;
+                        if item.sold_as_pack {
+                            let pack_count = item.pack_count.ok_or_else(|| "A pack line is missing its pack count".to_string())?;
+                            let pack_size = item.pack_size_units_snapshot.ok_or_else(|| "A pack line is missing its pack size".to_string())?;
+                            let pack_bps = item.pack_discount_bps.ok_or_else(|| "A pack line is missing its discount".to_string())?;
+                            let declared = item.pack_discount_cents.as_deref().ok_or_else(|| "A pack line is missing its discount amount".to_string()).and_then(|value| parse_i64(value, "packDiscountCents"))?;
+                            if pack_count < 1 || !(2..=10_000).contains(&pack_size) || pack_count.checked_mul(pack_size) != Some(quantity_units) || pack_bps != PACK_DISCOUNT_BPS {
+                                return Err("Offline pack line is inconsistent".to_string());
+                            }
+                            // El dispositivo sólo vende el pack (versión y tamaño) que su catálogo local conoce, el mismo que mostró la UI y
+                            // que el servidor reconocerá como versión de ESTE producto. Nada se relee del producto actual del servidor.
+                            let pack_config_id = item.pack_config_id.as_deref().filter(|id| !id.is_empty()).ok_or_else(|| "A pack line is missing its pack configuration".to_string())?;
+                            let local_pack: Option<(i64, Option<String>)> = transaction
+                                .query_row("select pack_size_units, pack_config_id from catalog_product_packs where product_id = ?1", params![item.product_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                                .optional()
+                                .map_err(|error| error.to_string())?;
+                            match local_pack {
+                                Some((local_size, _)) if local_size != pack_size => return Err("Offline pack size does not match the local catalog".to_string()),
+                                Some((_, Some(local_config))) if local_config == pack_config_id => {}
+                                _ => return Err("Offline pack configuration does not match the local catalog".to_string()),
+                            }
+                            unit_discount = half_up(list_subtotal.checked_mul(pack_bps).ok_or_else(|| "Sale amount overflow".to_string())?, 10_000)?;
+                            if declared != unit_discount { return Err("Offline pack discount does not match its percentage".to_string()); }
+                        } else {
+                            let promotion_id = item.branch_promotion_id.as_deref().ok_or_else(|| "Missing branch promotion id".to_string())?;
+                            let every = item.branch_promotion_every_units.ok_or_else(|| "A promotion line is missing its group size".to_string())?;
+                            let bps = item.branch_promotion_discount_bps.ok_or_else(|| "A promotion line is missing its percentage".to_string())?;
+                            let discounted_units = item.branch_promotion_discounted_units.ok_or_else(|| "A promotion line is missing its discounted units".to_string())?;
+                            let declared = item.branch_promotion_discount_cents.as_deref().ok_or_else(|| "A promotion line is missing its discount amount".to_string()).and_then(|value| parse_i64(value, "branchPromotionDiscountCents"))?;
+                            if every < 2 || !(1..10_000).contains(&bps) || discounted_units <= 0 || discounted_units != (quantity_units / every) * every {
+                                return Err("Offline branch promotion line is inconsistent".to_string());
+                            }
+                            let known: bool = transaction
+                                .query_row(
+                                    "select exists(select 1 from catalog_branch_promotions where id = ?1 and branch_id = ?2 and every_units = ?3 and discount_bps = ?4)",
+                                    params![promotion_id, sale.branch_id, every, bps], |row| row.get(0),
+                                )
+                                .map_err(|error| error.to_string())?;
+                            if !known { return Err("Offline branch promotion does not match a rule of this branch".to_string()); }
+                            // Precedencia: una promoción específica del producto aplicable (pack con al menos un pack completo) manda sobre la de sucursal.
+                            let specific_applies: bool = transaction
+                                .query_row(
+                                    "select exists(select 1 from local_weight_discounts where product_id = ?1 and promotion_mode = 'PACK_FIXED_TOTAL'
+                                       and (branch_id is null or branch_id = ?2) and pack_quantity_units is not null and pack_quantity_units <= ?3)",
+                                    params![item.product_id, sale.branch_id, quantity_units], |row| row.get(0),
+                                )
+                                .map_err(|error| error.to_string())?;
+                            if specific_applies { return Err("A specific product promotion takes precedence over the branch promotion".to_string()); }
+                            unit_discount = half_up(original_price.checked_mul(discounted_units).and_then(|value| value.checked_mul(bps)).ok_or_else(|| "Sale amount overflow".to_string())?, 10_000)?;
+                            if declared != unit_discount { return Err("Offline branch promotion discount does not match its percentage".to_string()); }
+                        }
+                        if promotion_discount_cents != unit_discount || discount_cents != unit_discount {
+                            return Err("Invalid local sale calculation".to_string());
+                        }
+                        cash_subtotal = list_subtotal - unit_discount;
+                        if cash_subtotal <= 0 { return Err("Offline unit discount leaves the line at zero".to_string()); }
+                        let expected_subtotal = if cash_discount_bps > 0 {
+                            half_up(cash_subtotal.checked_mul(10_000 + cash_discount_bps).ok_or_else(|| "Sale amount overflow".to_string())?, 10_000)?
+                        } else { cash_subtotal };
+                        let expected_price = half_up(subtotal, quantity_units)?;
+                        if subtotal != expected_subtotal || price != expected_price {
+                            return Err("Offline unit discount line is inconsistent".to_string());
+                        }
+                    } else if item.promotion_mode.as_deref() == Some("PACK_FIXED_TOTAL") {
                         let rule_id = item.discount_rule_id.as_deref().ok_or_else(|| "Missing pack promotion id".to_string())?;
                         let (pack_quantity, pack_price): (i64, i64) = transaction
                             .query_row(
@@ -1538,14 +1756,24 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         let profit_snapshot = item.profit_markup_bps_snapshot.as_deref().map(|value| parse_i64(value, "profitMarkupBpsSnapshot")).transpose()?;
         let manual_unit_price = item.manual_unit_price_cents.as_deref().map(|value| parse_i64(value, "manualUnitPriceCents")).transpose()?;
         let manual_adjustment = item.manual_adjustment_cents.as_deref().map(|value| parse_i64(value, "manualAdjustmentCents")).transpose()?.unwrap_or(0);
+        let pack_discount_cents = item.pack_discount_cents.as_deref().map(|value| parse_i64(value, "packDiscountCents")).transpose()?.unwrap_or(0);
+        let promotion_snapshot_cents = item.branch_promotion_discount_cents.as_deref().map(|value| parse_i64(value, "branchPromotionDiscountCents")).transpose()?.unwrap_or(0);
         transaction
             .execute(
                 "insert into local_sale_items(id, sale_id, product_id, product_name_snapshot, weight_grams, quantity_units,
                   price_per_kg_cents, original_price_per_kg_cents, discount_rule_id, discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, card_surcharge_cents, promotion_discount_cents, cost_cents_snapshot, profit_markup_bps_snapshot, subtotal_cents, promotion_mode, created_at,
-                  manual_price_applied, manual_unit_price_cents, manual_adjustment_cents) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                  manual_price_applied, manual_unit_price_cents, manual_adjustment_cents,
+                  sold_as_pack, pack_size_units_snapshot, pack_count, pack_discount_bps, pack_discount_cents,
+                  branch_promotion_id, branch_promotion_every_units, branch_promotion_discount_bps, branch_promotion_discounted_units, branch_promotion_discount_cents,
+                  pack_config_id)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
+                         ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
                 params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams, item.quantity_units,
                         parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, card_surcharge_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, item.promotion_mode, sale.created_at,
-                        i64::from(item.manual_price_applied), manual_unit_price, manual_adjustment],
+                        i64::from(item.manual_price_applied), manual_unit_price, manual_adjustment,
+                        i64::from(item.sold_as_pack), item.pack_size_units_snapshot, item.pack_count, item.pack_discount_bps, pack_discount_cents,
+                        item.branch_promotion_id, item.branch_promotion_every_units, item.branch_promotion_discount_bps, item.branch_promotion_discounted_units, promotion_snapshot_cents,
+                        item.pack_config_id],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -2016,7 +2244,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 16);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 18);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -2068,7 +2296,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 16);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 18);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -2739,6 +2967,8 @@ mod tests {
             price_per_kg_cents: "450000".into(),
             price_valid_from: "2026-09-30T00:00:00Z".into(),
             barcodes: barcodes.iter().map(|code| (*code).to_string()).collect(),
+            pack_size_units: None,
+            pack_config_id: None,
         }
     }
 
@@ -2755,6 +2985,7 @@ mod tests {
             catalog,
             removed_product_ids: removed.iter().map(|id| (*id).to_string()).collect(),
             categories: vec![CatalogDirectoryCategory { id: "cat".into(), name: "Almacen".into(), color_hex: None, sort_order: 0 }],
+            branch_promotions: None,
         }
     }
 
@@ -3524,5 +3755,386 @@ mod tests {
         try_insert(&mut connection, &parsed).unwrap();
         assert_eq!(connection.query_row("select manual_price_applied from local_sale_items", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(connection.query_row("select ticket_discount_bps from local_sales", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    // ---- Pack (20 %) y promoción global de sucursal en productos UNIT ---------------------------------
+    // "Hamburguesa" cuesta $800 (80_000 centavos NO: el fixture la guarda en 800 centavos) — todo el dinero va en centavos.
+
+    fn rounded(numerator: i64, denominator: i64) -> i64 { (numerator + denominator / 2) / denominator }
+
+    /// Línea UNIT con el descuento calculado de forma independiente de la implementación: `discounted_units` unidades al `bps`
+    /// sobre el total de lista (half-up, una sola vez) y, si es tarjeta, el recargo una sola vez sobre el total comercial.
+    fn discounted_unit(product: &str, list: i64, units: i64, discounted_units: i64, bps: i64, card_bps: i64) -> (OfflineSaleItem, i64, i64) {
+        let discount = rounded(list * discounted_units * bps, 10_000);
+        let cash = list * units - discount;
+        let subtotal = if card_bps > 0 { rounded(cash * (10_000 + card_bps), 10_000) } else { cash };
+        let mut item = flex_item(product, "UNIT", units, list, rounded(subtotal, units), subtotal);
+        item.discount_cents = Some(discount.to_string());
+        item.promotion_discount_cents = Some(discount.to_string());
+        item.cash_discount_bps = Some(card_bps.to_string());
+        item.card_surcharge_cents = Some((subtotal - cash).to_string());
+        (item, subtotal, discount)
+    }
+
+    fn pack_line(product: &str, list: i64, count: i64, size: i64, card_bps: i64) -> OfflineSaleItem {
+        let units = count * size;
+        let (mut item, _, discount) = discounted_unit(product, list, units, units, 2_000, card_bps);
+        item.sold_as_pack = true;
+        item.pack_count = Some(count);
+        item.pack_size_units_snapshot = Some(size);
+        item.pack_discount_bps = Some(2_000);
+        item.pack_discount_cents = Some(discount.to_string());
+        // La versión del pack que el catálogo local le dio al dispositivo para ese tamaño (fixture: "cfg-<tamaño>").
+        item.pack_config_id = Some(format!("cfg-{size}"));
+        item
+    }
+
+    fn promo_line(product: &str, list: i64, units: i64, every: i64, bps: i64, card_bps: i64, promotion_id: &str) -> OfflineSaleItem {
+        let discounted = (units / every) * every;
+        let (mut item, _, discount) = discounted_unit(product, list, units, discounted, bps, card_bps);
+        item.branch_promotion_id = Some(promotion_id.into());
+        item.branch_promotion_every_units = Some(every);
+        item.branch_promotion_discount_bps = Some(bps);
+        item.branch_promotion_discounted_units = Some(discounted);
+        item.branch_promotion_discount_cents = Some(discount.to_string());
+        item
+    }
+
+    /// Central con "Hamburguesa" ($800/u, pack de 8) y la promoción "cada 3 unidades, 15 %" de la sucursal.
+    fn pack_fixture() -> (Connection, String) {
+        let (connection, device_id) = flexible_fixture(false);
+        connection.execute("insert into catalog_product_packs(product_id, pack_size_units, pack_config_id) values('hamburguesa', 8, 'cfg-8')", []).unwrap();
+        connection.execute("insert into catalog_branch_promotions(id, branch_id, scope, every_units, discount_bps) values('promo-1', 'branch', 'ALL_UNIT_PRODUCTS', 3, 1500)", []).unwrap();
+        (connection, device_id)
+    }
+
+    fn unit_row(connection: &Connection, column: &str) -> i64 {
+        connection.query_row(&format!("select {column} from local_sale_items"), [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn migrations_017_and_018_add_pack_and_promotion_storage_with_safe_defaults() {
+        let (connection, _) = flexible_fixture(false);
+        for (table, column) in [
+            ("local_sale_items", "sold_as_pack"), ("local_sale_items", "pack_size_units_snapshot"), ("local_sale_items", "pack_count"),
+            ("local_sale_items", "pack_discount_bps"), ("local_sale_items", "pack_discount_cents"), ("local_sale_items", "branch_promotion_id"),
+            ("local_sale_items", "branch_promotion_every_units"), ("local_sale_items", "branch_promotion_discount_bps"),
+            ("local_sale_items", "branch_promotion_discounted_units"), ("local_sale_items", "branch_promotion_discount_cents"),
+            ("catalog_product_packs", "pack_size_units"), ("catalog_product_packs", "pack_config_id"), ("local_sale_items", "pack_config_id"),
+            ("catalog_branch_promotions", "every_units"),
+        ] {
+            assert_eq!(connection.query_row("select count(*) from pragma_table_info(?1) where name = ?2", params![table, column], |row| row.get::<_, i64>(0)).unwrap(), 1, "{table}.{column}");
+        }
+    }
+
+    #[test]
+    fn a_catalog_pull_stores_the_pack_size_and_the_local_catalog_returns_it() {
+        let mut connection = catalog_fixture();
+        let mut with_pack = catalog_row("leche", "Leche", "UNIT", &[]);
+        with_pack.pack_size_units = Some(8);
+        with_pack.pack_config_id = Some("cfg-8".into());
+        let without_pack = catalog_row("coca", "Coca", "UNIT", &[]);
+        apply_catalog_pull_inner(&mut connection, &pull(vec![with_pack, without_pack], &[]), "profile", "a@b.c").unwrap();
+        let rows = local_catalog_inner(&connection, "central").unwrap();
+        let leche = rows.iter().find(|row| row.product_id == "leche").unwrap();
+        assert_eq!((leche.pack_size_units, leche.pack_config_id.as_deref()), (Some(8), Some("cfg-8")));
+        let coca = rows.iter().find(|row| row.product_id == "coca").unwrap();
+        assert_eq!((coca.pack_size_units, coca.pack_config_id.as_deref()), (None, None));
+        // El pack cambia o se quita: el pull que toca al producto lo reemplaza, con el id de SU versión.
+        let mut changed = catalog_row("leche", "Leche", "UNIT", &[]);
+        changed.pack_size_units = Some(12);
+        changed.pack_config_id = Some("cfg-12".into());
+        apply_catalog_pull_inner(&mut connection, &pull(vec![changed], &[]), "profile", "a@b.c").unwrap();
+        let changed_row = local_catalog_inner(&connection, "central").unwrap().into_iter().find(|row| row.product_id == "leche").unwrap();
+        assert_eq!((changed_row.pack_size_units, changed_row.pack_config_id.as_deref()), (Some(12), Some("cfg-12")));
+        apply_catalog_pull_inner(&mut connection, &pull(vec![catalog_row("leche", "Leche", "UNIT", &[])], &[]), "profile", "a@b.c").unwrap();
+        assert_eq!(local_catalog_inner(&connection, "central").unwrap().iter().find(|row| row.product_id == "leche").unwrap().pack_size_units, None);
+    }
+
+    #[test]
+    fn a_pack_size_without_its_configuration_is_not_offered() {
+        // Un servidor anterior a la versión del pack manda el tamaño pero no el id: sin id la venta no podría validarse allá.
+        let mut connection = catalog_fixture();
+        let mut no_config = catalog_row("leche", "Leche", "UNIT", &[]);
+        no_config.pack_size_units = Some(8);
+        let mut empty_config = catalog_row("coca", "Coca", "UNIT", &[]);
+        empty_config.pack_size_units = Some(8);
+        empty_config.pack_config_id = Some(String::new());
+        apply_catalog_pull_inner(&mut connection, &pull(vec![no_config, empty_config], &[]), "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_product_packs"), 0);
+        assert!(local_catalog_inner(&connection, "central").unwrap().iter().all(|row| row.pack_size_units.is_none() && row.pack_config_id.is_none()));
+    }
+
+    #[test]
+    fn a_pack_size_is_only_stored_for_a_unit_product_and_leaves_with_the_product() {
+        let mut connection = catalog_fixture();
+        let mut weight = catalog_row("vacio", "Vacío", "WEIGHT", &[]);
+        weight.pack_size_units = Some(8);
+        weight.pack_config_id = Some("cfg-w".into());
+        let mut unit = catalog_row("leche", "Leche", "UNIT", &[]);
+        unit.pack_size_units = Some(8);
+        unit.pack_config_id = Some("cfg-8".into());
+        apply_catalog_pull_inner(&mut connection, &pull(vec![weight, unit], &[]), "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_product_packs"), 1);
+        apply_catalog_pull_inner(&mut connection, &pull(vec![], &["leche"]), "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_product_packs"), 0, "a product that left the assortment cannot offer a pack");
+    }
+
+    #[test]
+    fn a_pull_replaces_the_branch_promotions_and_an_older_server_leaves_them_alone() {
+        let mut connection = catalog_fixture();
+        let mut first = pull(vec![], &[]);
+        first.branch_promotions = Some(vec![CatalogBranchPromotion { id: "p1".into(), every_units: 3, discount_bps: 1500 }]);
+        apply_catalog_pull_inner(&mut connection, &first, "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_branch_promotions"), 1);
+        // Un servidor anterior (sin la clave) no cambia lo guardado.
+        apply_catalog_pull_inner(&mut connection, &pull(vec![], &[]), "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_branch_promotions"), 1);
+        // La foto completa reemplaza: otra regla, y después ninguna (promoción desactivada).
+        let mut second = pull(vec![], &[]);
+        second.branch_promotions = Some(vec![CatalogBranchPromotion { id: "p2".into(), every_units: 4, discount_bps: 2000 }]);
+        apply_catalog_pull_inner(&mut connection, &second, "profile", "a@b.c").unwrap();
+        assert_eq!(connection.query_row("select id || every_units || discount_bps from catalog_branch_promotions", [], |r| r.get::<_, String>(0)).unwrap(), "p242000");
+        let mut none = pull(vec![], &[]);
+        none.branch_promotions = Some(vec![]);
+        apply_catalog_pull_inner(&mut connection, &none, "profile", "a@b.c").unwrap();
+        assert_eq!(count(&connection, "catalog_branch_promotions"), 0);
+        // Una regla inválida del servidor no se guarda a medias.
+        let mut invalid = pull(vec![], &[]);
+        invalid.branch_promotions = Some(vec![CatalogBranchPromotion { id: "bad".into(), every_units: 1, discount_bps: 1500 }]);
+        assert!(apply_catalog_pull_inner(&mut connection, &invalid, "profile", "a@b.c").is_err());
+    }
+
+    #[test]
+    fn the_local_commercial_config_returns_only_this_devices_branch_promotion() {
+        let (connection, _) = pack_fixture();
+        connection.execute("insert into catalog_branch_promotions(id, branch_id, scope, every_units, discount_bps) values('other', 'another-branch', 'ALL_UNIT_PRODUCTS', 2, 500)", []).unwrap();
+        let mut statement = connection.prepare("select id from catalog_branch_promotions where branch_id = (select branch_id from local_device where singleton = 1)").unwrap();
+        let ids: Vec<String> = statement.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(ids, vec!["promo-1".to_string()]);
+    }
+
+    #[test]
+    fn one_pack_charges_20_percent_over_the_8_real_units_and_stores_the_snapshot() {
+        let (mut connection, device_id) = pack_fixture();
+        // 8 × $8,00 = $64,00 − 20 % = $51,20.
+        let sale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        assert_eq!(unit_row(&connection, "quantity_units"), 8);
+        assert_eq!(unit_row(&connection, "subtotal_cents"), 5_120);
+        assert_eq!(unit_row(&connection, "sold_as_pack"), 1);
+        assert_eq!(unit_row(&connection, "pack_size_units_snapshot"), 8);
+        assert_eq!(unit_row(&connection, "pack_count"), 1);
+        assert_eq!(unit_row(&connection, "pack_discount_bps"), 2_000);
+        assert_eq!(connection.query_row("select pack_config_id from local_sale_items", [], |r| r.get::<_, String>(0)).unwrap(), "cfg-8", "the line keeps the pack version it was sold with");
+        assert_eq!(unit_row(&connection, "pack_discount_cents"), 1_280);
+        assert_eq!(unit_row(&connection, "promotion_discount_cents"), 1_280);
+        assert_eq!(unit_row(&connection, "branch_promotion_discount_cents"), 0);
+        assert_eq!(connection.query_row("select quantity_grams from local_stock_movements", [], |r| r.get::<_, i64>(0)).unwrap(), -8, "stock discounts the 8 real units");
+        assert_eq!(connection.query_row("select total_cents from local_sales", [], |r| r.get::<_, i64>(0)).unwrap(), 5_120);
+    }
+
+    #[test]
+    fn two_packs_are_16_real_units_with_20_percent() {
+        let (mut connection, device_id) = pack_fixture();
+        let sale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 2, 8, 0)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        assert_eq!((unit_row(&connection, "quantity_units"), unit_row(&connection, "subtotal_cents"), unit_row(&connection, "pack_discount_cents")), (16, 10_240, 2_560));
+        assert_eq!(connection.query_row("select quantity_grams from local_stock_movements", [], |r| r.get::<_, i64>(0)).unwrap(), -16);
+    }
+
+    #[test]
+    fn a_pack_paid_with_card_surcharges_after_the_discount_and_a_ticket_discount_comes_last() {
+        let (mut connection, device_id) = pack_fixture();
+        // $51,20 + 10 % de tarjeta = $56,32 (recargo $5,12).
+        let sale = flex_payload(device_id, "DEBIT", vec![pack_line("hamburguesa", 800, 1, 8, 1_000)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        assert_eq!((unit_row(&connection, "subtotal_cents"), unit_row(&connection, "card_surcharge_cents")), (5_632, 512));
+        // Central: descuento general del 5 % sobre el pack en efectivo ($51,20 − $2,56 = $48,64).
+        let (mut central, central_device) = pack_fixture();
+        set_flexible_pricing_branch_inner(&mut central, "branch", true).unwrap();
+        try_insert(&mut central, &flex_payload(central_device, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], Some((500, 256)))).unwrap();
+        assert_eq!(central.query_row("select total_cents from local_sales", [], |r| r.get::<_, i64>(0)).unwrap(), 4_864);
+    }
+
+    #[test]
+    fn a_pack_line_is_rejected_when_it_is_not_exactly_the_pack_rule() {
+        let (mut connection, device_id) = pack_fixture();
+        let mutations: Vec<(&str, fn(&mut OfflineSaleItem))> = vec![
+            // 15 % bien calculado (todo consistente): sólo el porcentaje del Pack (20 %) lo hace inválido.
+            ("not 20 %", |item| { item.pack_discount_bps = Some(1_500); item.pack_discount_cents = Some("960".into()); item.discount_cents = Some("960".into()); item.promotion_discount_cents = Some("960".into()); item.subtotal_cents = "5440".into(); item.price_per_kg_cents = "680".into(); }),
+            ("units do not match the pack", |item| { item.pack_size_units_snapshot = Some(6); }),
+            ("amount is not the percentage", |item| { item.pack_discount_cents = Some("1000".into()); }),
+            ("size differs from the local catalog", |item| { item.pack_size_units_snapshot = Some(4); item.pack_count = Some(2); }),
+            ("no pack configuration", |item| { item.pack_config_id = None; }),
+            ("empty pack configuration", |item| { item.pack_config_id = Some(String::new()); }),
+            ("a configuration the device never received", |item| { item.pack_config_id = Some("cfg-invented".into()); }),
+            ("stacked with the branch promotion", |item| { item.branch_promotion_id = Some("promo-1".into()); item.branch_promotion_every_units = Some(3); item.branch_promotion_discount_bps = Some(1_500); item.branch_promotion_discounted_units = Some(6); item.branch_promotion_discount_cents = Some("720".into()); }),
+            ("stacked with a specific promotion", |item| { item.promotion_mode = Some("PACK_FIXED_TOTAL".into()); item.discount_rule_id = Some("rule".into()); }),
+            ("pack metadata without the pack flag", |item| { item.sold_as_pack = false; }),
+            ("price per unit does not match", |item| { item.price_per_kg_cents = "700".into(); }),
+        ];
+        for (label, mutate) in mutations {
+            let mut item = pack_line("hamburguesa", 800, 1, 8, 0);
+            mutate(&mut item);
+            let result = try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![item], None));
+            assert!(result.is_err(), "{label} must be rejected");
+        }
+        assert_eq!(count(&connection, "local_sales"), 0, "a rejected sale persists nothing");
+    }
+
+    #[test]
+    fn a_pack_needs_the_local_catalog_to_know_the_pack_and_never_applies_to_weight_or_manual_lines() {
+        let (mut connection, device_id) = pack_fixture();
+        connection.execute("delete from catalog_product_packs", []).unwrap();
+        assert!(try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None)).is_err(), "a product without a pack in the catalog cannot be sold as one");
+        connection.execute("insert into catalog_product_packs(product_id, pack_size_units, pack_config_id) values('hamburguesa', 8, 'cfg-8')", []).unwrap();
+        let mut weight = flex_item("vacio", "WEIGHT", 1_000, 1_500_000, 1_500_000, 1_500_000);
+        weight.sold_as_pack = true; weight.pack_count = Some(1); weight.pack_size_units_snapshot = Some(8); weight.pack_discount_bps = Some(2_000); weight.pack_discount_cents = Some("300000".into());
+        assert!(try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![weight], None)).is_err(), "WEIGHT lines are never packs");
+        let (mut central, central_device) = pack_fixture();
+        set_flexible_pricing_branch_inner(&mut central, "branch", true).unwrap();
+        let mut manual = manual_unit("hamburguesa", 8, 800, 700);
+        manual.sold_as_pack = true; manual.pack_count = Some(1); manual.pack_size_units_snapshot = Some(8); manual.pack_discount_bps = Some(2_000); manual.pack_discount_cents = Some("1280".into());
+        assert!(try_insert(&mut central, &flex_payload(central_device, "CASH", vec![manual], None)).is_err(), "a manual price excludes the pack");
+    }
+
+    #[test]
+    fn branch_promotion_discounts_only_complete_groups_of_the_same_product() {
+        let (mut connection, device_id) = pack_fixture();
+        // 8 unidades, cada 3 → 6 con 15 %: lista $64,00 − 6 × $8,00 × 15 % ($7,20) = $56,80.
+        try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![promo_line("hamburguesa", 800, 8, 3, 1_500, 0, "promo-1")], None)).unwrap();
+        assert_eq!((unit_row(&connection, "quantity_units"), unit_row(&connection, "subtotal_cents")), (8, 5_680));
+        assert_eq!(unit_row(&connection, "branch_promotion_discounted_units"), 6);
+        assert_eq!(unit_row(&connection, "branch_promotion_every_units"), 3);
+        assert_eq!(unit_row(&connection, "branch_promotion_discount_bps"), 1_500);
+        assert_eq!(unit_row(&connection, "branch_promotion_discount_cents"), 720);
+        assert_eq!(unit_row(&connection, "sold_as_pack"), 0);
+        // Con tarjeta: el recargo va una sola vez sobre el total ya descontado.
+        let (mut card, card_device) = pack_fixture();
+        try_insert(&mut card, &flex_payload(card_device, "DEBIT", vec![promo_line("hamburguesa", 800, 3, 3, 1_500, 1_000, "promo-1")], None)).unwrap();
+        // 3 × $8,00 = $24,00 − $3,60 = $20,40 + 10 % = $22,44.
+        assert_eq!(card.query_row("select subtotal_cents from local_sale_items", [], |r| r.get::<_, i64>(0)).unwrap(), 2_244);
+    }
+
+    #[test]
+    fn a_line_below_the_group_size_is_a_plain_line_and_cannot_claim_the_promotion() {
+        let (mut connection, device_id) = pack_fixture();
+        try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![normal_unit("hamburguesa", 2, 800)], None)).unwrap();
+        assert_eq!(unit_row(&connection, "subtotal_cents"), 1_600);
+        assert!(try_insert(&mut connection, &flex_payload(device_id, "CASH", vec![promo_line("hamburguesa", 800, 2, 3, 1_500, 0, "promo-1")], None)).is_err(), "no complete group, no discount");
+    }
+
+    #[test]
+    fn a_branch_promotion_must_be_the_one_this_device_received() {
+        let (mut connection, device_id) = pack_fixture();
+        let attempts: Vec<(&str, OfflineSaleItem)> = vec![
+            ("unknown id", promo_line("hamburguesa", 800, 3, 3, 1_500, 0, "nope")),
+            ("other percentage", promo_line("hamburguesa", 800, 3, 3, 3_000, 0, "promo-1")),
+            ("other group size", promo_line("hamburguesa", 800, 4, 2, 1_500, 0, "promo-1")),
+        ];
+        for (label, item) in attempts {
+            assert!(try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![item], None)).is_err(), "{label} must be rejected");
+        }
+        let mut partial = promo_line("hamburguesa", 800, 8, 3, 1_500, 0, "promo-1");
+        // 8 de 8 unidades con descuento, todo consistente (15 % de $64,00 = $9,60): sólo el grupo incompleto lo hace inválido.
+        partial.branch_promotion_discounted_units = Some(8);
+        partial.branch_promotion_discount_cents = Some("960".into());
+        partial.discount_cents = Some("960".into());
+        partial.promotion_discount_cents = Some("960".into());
+        partial.subtotal_cents = "5440".into();
+        partial.price_per_kg_cents = "680".into();
+        assert!(try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![partial], None)).is_err(), "only complete groups are discounted");
+        let mut wrong_amount = promo_line("hamburguesa", 800, 3, 3, 1_500, 0, "promo-1");
+        wrong_amount.branch_promotion_discount_cents = Some("100".into());
+        assert!(try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![wrong_amount], None)).is_err());
+        // Otra sucursal: la regla de Central no vale en una sucursal que no la recibió.
+        connection.execute("update catalog_branch_promotions set branch_id = 'another-branch'", []).unwrap();
+        assert!(try_insert(&mut connection, &flex_payload(device_id, "CASH", vec![promo_line("hamburguesa", 800, 3, 3, 1_500, 0, "promo-1")], None)).is_err());
+        assert_eq!(count(&connection, "local_sales"), 0);
+    }
+
+    #[test]
+    fn a_specific_product_promotion_that_applies_takes_precedence_over_the_branch_promotion() {
+        let (mut connection, device_id) = pack_fixture();
+        // Pack específico "4 por $20,00": con 8 unidades aplica (2 packs); la promoción de sucursal no puede acompañarla.
+        connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_quantity_units,pack_price_cents) values('pack-1','hamburguesa',null,'PACK_FIXED_TOTAL',4,2000)", []).unwrap();
+        let result = try_insert(&mut connection, &flex_payload(device_id.clone(), "CASH", vec![promo_line("hamburguesa", 800, 8, 3, 1_500, 0, "promo-1")], None));
+        assert!(result.unwrap_err().contains("takes precedence"));
+        // Con menos unidades que su pack, la específica no aplica y rige la de sucursal.
+        try_insert(&mut connection, &flex_payload(device_id, "CASH", vec![promo_line("hamburguesa", 800, 3, 3, 1_500, 0, "promo-1")], None)).unwrap();
+        assert_eq!(unit_row(&connection, "branch_promotion_discounted_units"), 3);
+    }
+
+    #[test]
+    fn the_outbox_payload_keeps_the_pack_and_promotion_snapshots_and_a_plain_line_stays_byte_compatible() {
+        let (_, device_id) = pack_fixture();
+        let sale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0), promo_line("hamburguesa", 800, 3, 3, 1_500, 0, "promo-1"), normal_unit("coca", 1, 1_200_000)], None);
+        let json = serde_json::to_value(&sale).unwrap();
+        assert_eq!(json["items"][0]["soldAsPack"], true);
+        assert_eq!(json["items"][0]["packCount"], 1);
+        assert_eq!(json["items"][0]["packSizeUnitsSnapshot"], 8);
+        assert_eq!(json["items"][0]["packConfigId"], "cfg-8");
+        assert_eq!(json["items"][0]["packDiscountBps"], 2000);
+        assert_eq!(json["items"][0]["packDiscountCents"], "1280");
+        assert!(json["items"][0].get("branchPromotionId").is_none());
+        assert_eq!(json["items"][1]["branchPromotionId"], "promo-1");
+        assert_eq!(json["items"][1]["branchPromotionEveryUnits"], 3);
+        assert_eq!(json["items"][1]["branchPromotionDiscountedUnits"], 3);
+        assert_eq!(json["items"][1]["branchPromotionDiscountCents"], "360");
+        assert!(json["items"][1].get("soldAsPack").is_none());
+        for key in ["soldAsPack", "packCount", "packSizeUnitsSnapshot", "packConfigId", "packDiscountBps", "packDiscountCents", "branchPromotionId", "branchPromotionEveryUnits", "branchPromotionDiscountBps", "branchPromotionDiscountedUnits", "branchPromotionDiscountCents"] {
+            assert!(json["items"][2].get(key).is_none(), "a plain line must not carry {key}");
+        }
+        let restored: OfflineSalePayload = serde_json::from_value(json).unwrap();
+        assert!(restored.items[0].sold_as_pack);
+        assert_eq!(restored.items[0].pack_discount_cents.as_deref(), Some("1280"));
+        assert_eq!(restored.items[0].pack_config_id.as_deref(), Some("cfg-8"));
+        assert_eq!(restored.items[1].branch_promotion_discounted_units, Some(3));
+    }
+
+    #[test]
+    fn a_pack_sale_made_before_the_product_changed_its_pack_size_is_not_rewritten() {
+        let (mut connection, device_id) = pack_fixture();
+        try_insert(&mut connection, &flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None)).unwrap();
+        // Mañana el producto pasa de 8 a 12: la venta guardada sigue siendo 1 pack × 8 unidades.
+        let mut changed = catalog_row("hamburguesa", "Hamburguesa", "UNIT", &[]);
+        changed.branch_id = "branch".into();
+        changed.pack_size_units = Some(12);
+        changed.pack_config_id = Some("cfg-12".into());
+        let mut payload = pull(vec![changed], &[]);
+        payload.branch_id = "branch".into();
+        apply_catalog_pull_inner(&mut connection, &payload, "profile", "a@b.c").unwrap();
+        assert_eq!(connection.query_row("select pack_size_units from catalog_product_packs where product_id = 'hamburguesa'", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!((unit_row(&connection, "pack_size_units_snapshot"), unit_row(&connection, "quantity_units"), unit_row(&connection, "pack_count")), (8, 8, 1));
+        assert_eq!(connection.query_row("select pack_config_id from local_sale_items", [], |r| r.get::<_, String>(0)).unwrap(), "cfg-8", "and it still points at the version it was sold with");
+    }
+
+    #[test]
+    fn after_the_pack_changes_to_12_the_device_sells_the_new_version_and_the_old_one_stays_in_the_outbox_payload() {
+        let (mut connection, device_id) = pack_fixture();
+        // Venta hecha con el pack de 8 y todavía sin sincronizar: su payload del outbox conserva la versión vieja.
+        let old_sale = flex_payload(device_id.clone(), "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None);
+        try_insert(&mut connection, &old_sale).unwrap();
+        // El Admin pasa el producto a 12 y el dispositivo sincroniza el catálogo.
+        let mut changed = catalog_row("hamburguesa", "Hamburguesa", "UNIT", &[]);
+        changed.branch_id = "branch".into();
+        changed.pack_size_units = Some(12);
+        changed.pack_config_id = Some("cfg-12".into());
+        changed.price_per_kg_cents = "800".into(); // el precio del producto no cambia: sólo el pack
+        let mut payload = pull(vec![changed], &[]);
+        payload.branch_id = "branch".into();
+        apply_catalog_pull_inner(&mut connection, &payload, "profile", "a@b.c").unwrap();
+        // El pull de prueba trae una autorización ya vencida: se renueva como lo haría un pull real.
+        connection.execute("update local_device set authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        let outbox = serde_json::to_value(&old_sale).unwrap();
+        assert_eq!((outbox["items"][0]["packConfigId"].clone(), outbox["items"][0]["packSizeUnitsSnapshot"].clone()), (serde_json::json!("cfg-8"), serde_json::json!(8)));
+        // La venta nueva usa 12 (un pack de 12 × $8,00 = $96,00 − 20 % = $76,80).
+        let new_sale = flex_payload(device_id.clone(), "CASH", vec![pack_line("hamburguesa", 800, 1, 12, 0)], None);
+        try_insert(&mut connection, &new_sale).unwrap();
+        assert_eq!(connection.query_row("select quantity_units, subtotal_cents, pack_size_units_snapshot, pack_config_id from local_sale_items order by rowid desc limit 1", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?))).unwrap(), (12, 7_680, 12, "cfg-12".to_string()));
+        // Una línea armada con la versión vieja ya no la acepta este dispositivo (vende con el catálogo que tiene hoy).
+        let stale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None);
+        assert!(try_insert(&mut connection, &stale).unwrap_err().contains("size does not match"));
     }
 }

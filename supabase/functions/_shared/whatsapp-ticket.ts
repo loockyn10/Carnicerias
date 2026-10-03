@@ -153,6 +153,14 @@ export interface TicketSourceItem {
   promotionMode: string | null;
   /** D-061: el operador fijó el precio de esta línea (`unitPriceCents` ya es ese precio manual). */
   manualPriceApplied: boolean;
+  /** Pack de un producto UNIT: `packCount` packs de `packSizeUnits` unidades (las unidades reales ya están en `quantityUnits`), con `packDiscountBps`. Ausentes si la línea no fue un pack. */
+  packCount?: number | null;
+  packSizeUnits?: number | null;
+  packDiscountBps?: number | null;
+  /** Promoción global de la sucursal aplicada a la línea: cada `...EveryUnits`, `...DiscountBps`, sobre `...DiscountedUnits` unidades. */
+  branchPromotionEveryUnits?: number | null;
+  branchPromotionDiscountBps?: number | null;
+  branchPromotionDiscountedUnits?: number | null;
 }
 
 export interface TicketSourcePayment {
@@ -219,10 +227,20 @@ export function parseTicketSource(value: unknown): TicketSource | null {
     if (!item || !name || unitPriceCents === null || subtotalCents === null || promotionDiscountCents === null || cardSurchargeCents === null) return null;
     if ((weightGrams === null) === (quantityUnits === null)) return null;
     if ((weightGrams ?? quantityUnits ?? 0) <= 0) return null;
+    const soldAsPack = item.soldAsPack === true;
+    const packCount = soldAsPack ? nonNegInt(item.packCount) : null;
+    const packSizeUnits = soldAsPack ? nonNegInt(item.packSizeUnits) : null;
+    const packDiscountBps = soldAsPack ? nonNegInt(item.packDiscountBps) : null;
+    const promoEvery = nonNegInt(item.branchPromotionEveryUnits);
+    const promoBps = nonNegInt(item.branchPromotionDiscountBps);
+    const promoUnits = nonNegInt(item.branchPromotionDiscountedUnits);
     items.push({
       name, weightGrams, quantityUnits, unitPriceCents, promotionDiscountCents, cardSurchargeCents, subtotalCents,
       promotionMode: typeof item.promotionMode === "string" ? item.promotionMode : null,
-      manualPriceApplied: item.manualPriceApplied === true
+      manualPriceApplied: item.manualPriceApplied === true,
+      // Pack y promoción de sucursal (opcionales: un servidor anterior no manda estas claves).
+      ...(packCount !== null && packSizeUnits !== null && packDiscountBps !== null ? { packCount, packSizeUnits, packDiscountBps } : {}),
+      ...(promoEvery !== null && promoBps !== null && promoUnits !== null ? { branchPromotionEveryUnits: promoEvery, branchPromotionDiscountBps: promoBps, branchPromotionDiscountedUnits: promoUnits } : {})
     });
   }
 
@@ -359,6 +377,22 @@ export interface TicketLine {
   subtotalCents: number;
   /** D-061: el precio de la línea lo fijó el operador (`unitPriceLabel` ya es ese precio). */
   manualPrice: boolean;
+  /** Cómo se vendió una línea UNIT con descuento propio: `pack 1x8 u -20%` / `promo cada 3: 6 u -15%`. Ausente si no aplica. */
+  unitDiscountLabel?: string;
+}
+
+function percentLabel(bps: number): string {
+  return String(bps / 100).replace(".", ",");
+}
+
+function unitDiscountLabelOf(item: TicketSourceItem): string | undefined {
+  if (item.packCount != null && item.packSizeUnits != null && item.packDiscountBps != null) {
+    return `pack ${String(item.packCount)}x${String(item.packSizeUnits)} u -${percentLabel(item.packDiscountBps)}%`;
+  }
+  if (item.branchPromotionEveryUnits != null && item.branchPromotionDiscountedUnits != null && item.branchPromotionDiscountBps != null) {
+    return `promo cada ${String(item.branchPromotionEveryUnits)}: ${String(item.branchPromotionDiscountedUnits)} u -${percentLabel(item.branchPromotionDiscountBps)}%`;
+  }
+  return undefined;
 }
 
 export interface TicketModel {
@@ -388,7 +422,8 @@ export function buildTicketModel(source: TicketSource): TicketModel {
       promotionDiscountCents: item.promotionDiscountCents,
       cardSurchargeCents: item.cardSurchargeCents,
       subtotalCents: item.subtotalCents,
-      manualPrice: item.manualPriceApplied
+      manualPrice: item.manualPriceApplied,
+      ...(unitDiscountLabelOf(item) ? { unitDiscountLabel: unitDiscountLabelOf(item) as string } : {})
     };
   });
   return {
@@ -410,6 +445,7 @@ export function buildTicketModel(source: TicketSource): TicketModel {
 export function renderTicketLine(line: TicketLine): string {
   const notes: string[] = [];
   if (line.manualPrice) notes.push("precio manual");
+  if (line.unitDiscountLabel) notes.push(line.unitDiscountLabel);
   if (line.promotionDiscountCents > 0) notes.push(`promo -${formatMoney(line.promotionDiscountCents)}`);
   if (line.cardSurchargeCents > 0) notes.push(`recargo tarjeta +${formatMoney(line.cardSurchargeCents)}`);
   return `${line.name} ${line.quantityLabel} x ${line.unitPriceLabel} = ${formatMoney(line.subtotalCents)}${notes.length > 0 ? ` (${notes.join(", ")})` : ""}`;
