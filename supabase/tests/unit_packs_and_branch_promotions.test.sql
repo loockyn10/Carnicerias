@@ -1,11 +1,13 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(150);
+select plan(152);
 
--- Covers 202610030060: pack de productos UNIT (20 % de descuento, unidades reales), promoción global por sucursal
--- ("cada 3 unidades, 15 %"), sus snapshots en sale_items, la revalidación del servidor de líneas que llegan del POS
--- (online/offline comparten sync_offline_sale) y la entrega al POS (pull_pos_state).
+-- Covers 202610030060 (+ el ajuste 202610040061): pack de productos UNIT (unidades reales, descuento propio de cada producto;
+-- acá 20 %), promoción global por sucursal ("desde 3 unidades, 15 % sobre TODAS las unidades de la línea"), sus snapshots en
+-- sale_items, la revalidación del servidor de líneas que llegan del POS (online/offline comparten sync_offline_sale) y la
+-- entrega al POS (pull_pos_state). Los casos nuevos de 061 (descuento por producto, categoría única, formato anterior "cada N")
+-- están en pack_discount_threshold_promotions.test.sql y single_product_category.test.sql.
 -- Fixture: Central (sucursal productiva) y Avenida, admin + empleado con acceso a ambas, Leche (UNIT $1.000, pack de 8),
 -- Coca Cola (UNIT $1.200, sin pack) y Vacío (WEIGHT $15.000/kg). Todo el dinero en centavos.
 
@@ -55,12 +57,13 @@ insert into public.product_prices (organization_id, product_id, price_cents, val
 -- Helpers del test: la línea del ticket tal como la arma el POS (cálculo independiente en numeric) y el payload de sync.
 create function public.t_pk_item(
   p_product uuid, p_name text, p_qty integer, p_list bigint, p_kind text default 'NONE', p_card_bps integer default 0,
-  p_pack_size integer default null, p_promo uuid default null, p_every integer default null, p_promo_bps integer default null
+  p_pack_size integer default null, p_promo uuid default null, p_every integer default null, p_promo_bps integer default null,
+  p_pack_bps integer default 2000
 ) returns jsonb language plpgsql security definer as $$
 declare units integer := p_qty; discounted integer := 0; bps integer := 0; disc bigint := 0; cash bigint; sub bigint; fin bigint; res jsonb;
 begin
-  if p_kind = 'PACK' then units := p_qty * p_pack_size; discounted := units; bps := 2000;
-  elsif p_kind = 'PROMO' then discounted := (units / p_every) * p_every; bps := p_promo_bps;
+  if p_kind = 'PACK' then units := p_qty * p_pack_size; discounted := units; bps := p_pack_bps;
+  elsif p_kind = 'PROMO' then discounted := case when units >= p_every then units else 0 end; bps := p_promo_bps;
   end if;
   disc := round(p_list::numeric * discounted * bps / 10000)::bigint;
   cash := p_list * units - disc;
@@ -77,10 +80,10 @@ begin
     'discountCents', disc::text, 'cashDiscountBps', p_card_bps::text, 'cashDiscountCents', '0',
     'cardSurchargeCents', (sub - (p_list * units - disc))::text, 'promotionDiscountCents', disc::text, 'subtotalCents', sub::text);
   if p_kind = 'PACK' then
-    res := res || jsonb_build_object('soldAsPack', true, 'packCount', p_qty, 'packSizeUnitsSnapshot', p_pack_size, 'packDiscountBps', 2000, 'packDiscountCents', disc::text,
-      'packConfigId', (select v.id from public.product_pack_versions v where v.product_id = p_product and v.pack_size_units = p_pack_size order by v.valid_to nulls first limit 1));
+    res := res || jsonb_build_object('soldAsPack', true, 'packCount', p_qty, 'packSizeUnitsSnapshot', p_pack_size, 'packDiscountBps', p_pack_bps, 'packDiscountCents', disc::text,
+      'packConfigId', (select v.id from public.product_pack_versions v where v.product_id = p_product and v.pack_size_units = p_pack_size and v.discount_bps = p_pack_bps order by v.valid_to nulls first limit 1));
   elsif p_kind = 'PROMO' and discounted > 0 then
-    res := res || jsonb_build_object('branchPromotionId', p_promo, 'branchPromotionEveryUnits', p_every, 'branchPromotionDiscountBps', p_promo_bps,
+    res := res || jsonb_build_object('branchPromotionId', p_promo, 'branchPromotionMinimumUnits', p_every, 'branchPromotionDiscountBps', p_promo_bps,
       'branchPromotionDiscountedUnits', discounted, 'branchPromotionDiscountCents', disc::text);
   end if;
   return res;
@@ -162,32 +165,32 @@ select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000
 -- ---------------------------------------------------------------------------------------------
 -- 2. Promociones por sucursal (branch_promotions)
 -- ---------------------------------------------------------------------------------------------
-select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 1500)$$, 'Admin creates "cada 3, 15 %" for Central');
+select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 1500)$$, 'Admin creates "desde 3, 15 %" for Central');
 create temp table promo_ids(name text primary key, id uuid);
 grant all on promo_ids to authenticated;
 insert into promo_ids select 'central', id from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001' and active;
-select is((select every_units || '/' || discount_bps || '/' || scope from public.branch_promotions where id = (select id from promo_ids where name = 'central')), '3/1500/ALL_UNIT_PRODUCTS', 'the rule is stored with its scope');
+select is((select minimum_units || '/' || discount_bps || '/' || scope from public.branch_promotions where id = (select id from promo_ids where name = 'central')), '3/1500/ALL_UNIT_PRODUCTS', 'the rule is stored with its scope');
 select is(public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 1500), (select id from promo_ids where name = 'central'), 'saving the same values again returns the same row (no new version)');
 select is((select count(*) from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001'), 1::bigint, 'no duplicate row was written');
 select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000002', 2, 1000)$$, 'Avenida gets its own, different promotion');
 insert into promo_ids select 'avenida', id from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000002' and active;
-select throws_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 1, 1500)$$, '22023', null, 'a group of 1 is not a promotion');
+select throws_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 1, 1500)$$, '22023', null, 'a minimum of 1 unit is not a promotion');
 select throws_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 0)$$, '22023', null, '0 % is not a promotion');
 select throws_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 10000)$$, '22023', null, '100 % is not allowed (the line would be free)');
 select throws_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-0000000000ff', 3, 1500)$$, '42501', null, 'an unknown branch is rejected');
-select throws_ok($$insert into public.branch_promotions (organization_id, branch_id, every_units, discount_bps) values ('a2000000-0000-4000-8000-000000000001', 'a3000000-0000-4000-8000-000000000001', 4, 500)$$, '42501', null, 'the table is not writable by clients, only through the RPC');
+select throws_ok($$insert into public.branch_promotions (organization_id, branch_id, minimum_units, discount_bps) values ('a2000000-0000-4000-8000-000000000001', 'a3000000-0000-4000-8000-000000000001', 4, 500)$$, '42501', null, 'the table is not writable by clients, only through the RPC');
 
 -- Editar cierra la vigente y crea otra (historial inmutable); el id viejo conserva sus valores.
-select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 4, 2000)$$, 'editing the Central promotion to "cada 4, 20 %" works');
+select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 4, 2000)$$, 'editing the Central promotion to "desde 4, 20 %" works');
 select is((select count(*) from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001'), 2::bigint, 'the edit kept the old version as history');
 select is((select count(*) from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001' and active), 1::bigint, 'exactly one version is active');
-select is((select every_units from public.branch_promotions where id = (select id from promo_ids where name = 'central')), 3, 'the closed version keeps its original values (a past sale can still be validated against it)');
+select is((select minimum_units from public.branch_promotions where id = (select id from promo_ids where name = 'central')), 3, 'the closed version keeps its original values (a past sale can still be validated against it)');
 select is((select active from public.branch_promotions where id = (select id from promo_ids where name = 'central')), false, 'the old version is closed');
-select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 1500)$$, 'going back to "cada 3, 15 %"...');
+select lives_ok($$select public.save_branch_promotion('a3000000-0000-4000-8000-000000000001', 3, 1500)$$, 'going back to "desde 3, 15 %"...');
 insert into promo_ids select 'central2', id from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001' and active;
 select isnt((select id from promo_ids where name = 'central2'), (select id from promo_ids where name = 'central'), '...creates a NEW version instead of reopening the old one');
 select is((select count(*) from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000001' and active), 1::bigint, 'still exactly one active promotion for Central');
-select is((select every_units from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000002' and active), 2, 'the other branch promotion is independent');
+select is((select minimum_units from public.branch_promotions where branch_id = 'a3000000-0000-4000-8000-000000000002' and active), 2, 'the other branch promotion is independent');
 
 -- ---------------------------------------------------------------------------------------------
 -- 3. Entrega al POS (pull_pos_state)
@@ -205,23 +208,27 @@ select is(
   'null'::jsonb, 'a product without pack carries a null packSizeUnits'
 );
 select is(
-  public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0) -> 'branchPromotions',
-  jsonb_build_array(jsonb_build_object('id', (select id from promo_ids where name = 'central2'), 'scope', 'ALL_UNIT_PRODUCTS', 'everyUnits', 3, 'discountBps', 1500)),
-  'the Central device receives exactly the active Central promotion'
+  public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0) -> 'branchPromotionsFromMinimum',
+  jsonb_build_array(jsonb_build_object('id', (select id from promo_ids where name = 'central2'), 'scope', 'ALL_UNIT_PRODUCTS', 'minimumUnits', 3, 'discountBps', 1500)),
+  'the Central device receives exactly the active Central promotion ("desde 3")'
 );
 select is(
-  public.pull_pos_state('a7000000-0000-4000-8000-000000000002', 0) -> 'branchPromotions',
-  jsonb_build_array(jsonb_build_object('id', (select id from promo_ids where name = 'avenida'), 'scope', 'ALL_UNIT_PRODUCTS', 'everyUnits', 2, 'discountBps', 1000)),
+  public.pull_pos_state('a7000000-0000-4000-8000-000000000002', 0) -> 'branchPromotionsFromMinimum',
+  jsonb_build_array(jsonb_build_object('id', (select id from promo_ids where name = 'avenida'), 'scope', 'ALL_UNIT_PRODUCTS', 'minimumUnits', 2, 'discountBps', 1000)),
   'the Avenida device receives its own promotion, never Central''s'
 );
-select ok(jsonb_array_length(public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 999999999) -> 'branchPromotions') = 1, 'the promotions travel as a full snapshot on every pull, even an incremental one with no catalog changes');
+select is(
+  public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0) -> 'branchPromotions', '[]'::jsonb,
+  'the key a POS from before 061 reads ("cada N") is always empty: that POS stops applying promotions'
+);
+select ok(jsonb_array_length(public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 999999999) -> 'branchPromotionsFromMinimum') = 1, 'the promotions travel as a full snapshot on every pull, even an incremental one with no catalog changes');
 
 -- ---------------------------------------------------------------------------------------------
--- 4. Ventas (Central): la promoción de sucursal sobre unidades reales del MISMO producto
+-- 4. Ventas (Central): la promoción de sucursal "desde N" sobre TODAS las unidades reales del MISMO producto
 -- ---------------------------------------------------------------------------------------------
 select lives_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(1, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 3, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'central2'), 3, 1500))))$$,
-  '3 units of Leche: cada 3, 15 % syncs');
+  '3 units of Leche: desde 3, 15 % syncs');
 select is((select subtotal_cents from public.sale_items where sale_id = public.t_pk_sale(1)), 255000::bigint, '3 × $1.000 with 15 % off = $2.550');
 select is((select promotion_discount_cents from public.sale_items where sale_id = public.t_pk_sale(1)), 45000::bigint, 'the discount is -$450 (promotion_discount_cents)');
 select is((select branch_promotion_discounted_units || '/' || branch_promotion_every_units || '/' || branch_promotion_discount_bps || '/' || branch_promotion_discount_cents from public.sale_items where sale_id = public.t_pk_sale(1)), '3/3/1500/45000', 'the promotion rule used is a snapshot on the line');
@@ -231,9 +238,9 @@ select is((select -quantity_grams from public.stock_movements where sale_id = pu
 
 select lives_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(2, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 8, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'central2'), 3, 1500))))$$,
-  '8 units of Leche (normal sale): 6 at 15 %, 2 at full price');
-select is((select subtotal_cents from public.sale_items where sale_id = public.t_pk_sale(2)), 710000::bigint, '8 × $1.000 with 6 units at 15 % off = $7.100');
-select is((select branch_promotion_discounted_units from public.sale_items where sale_id = public.t_pk_sale(2)), 6, 'only the complete groups are discounted (6 of 8)');
+  '8 units of Leche (normal sale): ALL 8 at 15 %');
+select is((select subtotal_cents from public.sale_items where sale_id = public.t_pk_sale(2)), 680000::bigint, '8 × $1.000 with 15 % off = $6.800');
+select is((select branch_promotion_discounted_units from public.sale_items where sale_id = public.t_pk_sale(2)), 8, 'desde 3: every unit of the line is discounted (8 of 8), not only the complete groups');
 
 select lives_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(3, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 2, 100000), public.t_pk_item('a5000000-0000-4000-8000-000000000002', 'Coca Cola 2.25 L', 1, 120000))))$$,
@@ -245,18 +252,18 @@ select is((select total_cents from public.sales where id = public.t_pk_sale(3)),
 -- Rechazos de la promoción de sucursal: inventar el grupo, el porcentaje, la regla o la sucursal.
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(4, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 2, 100000) || jsonb_build_object(
-    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionEveryUnits', 3, 'branchPromotionDiscountBps', 1500,
+    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionMinimumUnits', 3, 'branchPromotionDiscountBps', 1500,
     'branchPromotionDiscountedUnits', 2, 'branchPromotionDiscountCents', '30000', 'discountCents', '30000', 'promotionDiscountCents', '30000',
-    'subtotalCents', '170000', 'pricePerKgCents', '85000'))))$$, '22023', null, 'a promotion claimed on 2 units (incomplete group) is rejected');
+    'subtotalCents', '170000', 'pricePerKgCents', '85000'))))$$, '22023', null, 'a promotion claimed on 2 units (below the minimum of 3) is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(5, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 8, 100000) || jsonb_build_object(
-    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionEveryUnits', 3, 'branchPromotionDiscountBps', 1500,
-    'branchPromotionDiscountedUnits', 8, 'branchPromotionDiscountCents', '120000', 'discountCents', '120000', 'promotionDiscountCents', '120000',
-    'subtotalCents', '680000', 'pricePerKgCents', '85000'))))$$, '22023', null, 'discounting 8 of 8 units (a partial group) is rejected');
+    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionMinimumUnits', 3, 'branchPromotionDiscountBps', 1500,
+    'branchPromotionDiscountedUnits', 6, 'branchPromotionDiscountCents', '90000', 'discountCents', '90000', 'promotionDiscountCents', '90000',
+    'subtotalCents', '710000', 'pricePerKgCents', '88750'))))$$, '22023', null, 'discounting only 6 of 8 units (the old "cada 3" arithmetic) is rejected: desde 3 discounts the whole line');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(6, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 3, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'central2'), 3, 3000))))$$, '42501', null, 'a percentage the rule does not have (30 % vs 15 %) is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(7, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
-  jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 4, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'central2'), 2, 1500))))$$, '42501', null, 'a group size the rule does not have (2 vs 3) is rejected');
+  jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 4, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'central2'), 2, 1500))))$$, '42501', null, 'a minimum the rule does not have (2 vs 3) is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(8, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 3, 100000, 'PROMO', 0, null, (select id from promo_ids where name = 'avenida'), 2, 1000))))$$, '42501', null, 'Avenida''s promotion cannot be used in Central');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000002', public.t_pk_payload(9, 'a3000000-0000-4000-8000-000000000002', 'a7000000-0000-4000-8000-000000000002',
@@ -271,11 +278,11 @@ select is((select count(*) from public.sales where id in (public.t_pk_sale(4), p
 select lives_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(13, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 8, 100000, 'PROMO', 1000, null, (select id from promo_ids where name = 'central2'), 3, 1500)), 'DEBIT'))$$,
   '8 units with a card: promotion first, surcharge after');
-select is((select subtotal_cents from public.sale_items where sale_id = public.t_pk_sale(13)), 781000::bigint, '$7.100 + 10 % card = $7.810');
-select is((select card_surcharge_cents from public.sale_items where sale_id = public.t_pk_sale(13)), 71000::bigint, 'the card surcharge is $710 on the discounted total');
+select is((select subtotal_cents from public.sale_items where sale_id = public.t_pk_sale(13)), 748000::bigint, '$6.800 + 10 % card = $7.480');
+select is((select card_surcharge_cents from public.sale_items where sale_id = public.t_pk_sale(13)), 68000::bigint, 'the card surcharge is $680 on the discounted total');
 
 -- ---------------------------------------------------------------------------------------------
--- 5. Ventas como Pack: unidades reales y 20 % para todas; sin promoción encima
+-- 5. Ventas como Pack: unidades reales y el descuento de la versión del pack (acá 20 %) para todas; sin promoción encima
 -- ---------------------------------------------------------------------------------------------
 select lives_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(20, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8))))$$,
@@ -308,15 +315,15 @@ select is((select ticket_discount_cents from public.sale_items where sale_id = p
 -- Rechazos del pack.
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(24, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || jsonb_build_object(
-    'packDiscountBps', 1500, 'packDiscountCents', '120000', 'discountCents', '120000', 'promotionDiscountCents', '120000', 'subtotalCents', '680000', 'pricePerKgCents', '85000'))))$$, '22023', null, 'a pack must carry exactly 20 % (15 % is rejected)');
+    'packDiscountBps', 1500, 'packDiscountCents', '120000', 'discountCents', '120000', 'promotionDiscountCents', '120000', 'subtotalCents', '680000', 'pricePerKgCents', '85000'))))$$, '22023', null, 'a pack must carry exactly the percentage of its configuration (15 % vs 20 % is rejected)');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(25, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || '{"packSizeUnitsSnapshot":6}'::jsonb)))$$, '22023', null, 'the units must be pack_count × pack size (8 units with a size of 6 is rejected)');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(26, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
-  jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || '{"packDiscountCents":"100000"}'::jsonb)))$$, '22023', null, 'a pack discount amount that is not exactly 20 % is rejected');
+  jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || '{"packDiscountCents":"100000"}'::jsonb)))$$, '22023', null, 'a pack discount amount that is not exactly the configured percentage is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(27, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || jsonb_build_object(
-    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionEveryUnits', 3, 'branchPromotionDiscountBps', 1500,
-    'branchPromotionDiscountedUnits', 6, 'branchPromotionDiscountCents', '90000'))))$$, '22023', null, 'a pack that also claims the branch promotion (stacking) is rejected');
+    'branchPromotionId', (select id from promo_ids where name = 'central2'), 'branchPromotionMinimumUnits', 3, 'branchPromotionDiscountBps', 1500,
+    'branchPromotionDiscountedUnits', 8, 'branchPromotionDiscountCents', '120000'))))$$, '22023', null, 'a pack that also claims the branch promotion (stacking) is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(28, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
   jsonb_build_array(public.t_pk_item('a5000000-0000-4000-8000-000000000001', 'Leche', 1, 100000, 'PACK', 0, 8) || '{"promotionMode":"PACK_FIXED_TOTAL","discountRuleId":"a8000000-0000-4000-8000-0000000000aa"}'::jsonb)))$$, '22023', null, 'a pack that also claims a specific product promotion (stacking) is rejected');
 select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001', public.t_pk_payload(29, 'a3000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000001',
@@ -376,8 +383,8 @@ select is(
   '1x8@2000', 'with its pack snapshot (1 pack × 8 units, 20 %)'
 );
 select is(
-  (app_private.wa_sale_ticket_json(public.t_pk_sale(2)) -> 'items' -> 0 ->> 'branchPromotionDiscountedUnits')::int, 6,
-  'and the branch promotion snapshot of a normal line'
+  (app_private.wa_sale_ticket_json(public.t_pk_sale(2)) -> 'items' -> 0 ->> 'branchPromotionDiscountedUnits')::int, 8,
+  'and the branch promotion snapshot of a normal line (desde 3: all 8 units)'
 );
 select is(
   (app_private.wa_sale_ticket_json(public.t_pk_sale(20)) -> 'items' -> 0 ->> 'promotionDiscountCents')::bigint, 160000::bigint,
@@ -404,7 +411,7 @@ select is(
   (select string_agg(pack_size_units || ':' || (valid_to is null), ',' order by pack_size_units) from public.product_pack_versions where product_id = 'a5000000-0000-4000-8000-000000000001'),
   '8:false,12:true', 'the 8 version is closed and the 12 version is the open one'
 );
-select is((select count(*) from public.product_pack_versions where discount_bps <> 2000), 0::bigint, 'every version carries the 20 % discount (2000 bps)');
+select is((select count(*) from public.product_pack_versions where discount_bps <> 2000), 0::bigint, 'every version in this scenario carries the 20 % discount (2000 bps) it was created with');
 select lives_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000001', 12)$$, 'saving the same pack size again');
 select is((select count(*) from public.product_pack_versions where product_id = 'a5000000-0000-4000-8000-000000000001'), 2::bigint, 'an unchanged size does not open a new version');
 select is(
@@ -457,8 +464,10 @@ select throws_ok($$select public.t_pk_sync('a7000000-0000-4000-8000-000000000001
 reset role;
 insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to)
 values ('a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000001', 6, 2000, now() - interval '10 days', now() - interval '3 days');
-select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps) select organization_id, id, 9, 1500 from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
-  '23514', null, 'the table itself refuses a pack version with a discount other than 20 %');
+select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to) select organization_id, id, 9, 10000, now() - interval '30 days', now() - interval '20 days' from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
+  '23514', null, 'the table itself refuses a pack version with a 100 % discount');
+select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to) select organization_id, id, 9, 0, now() - interval '30 days', now() - interval '20 days' from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
+  '23514', null, 'the table itself refuses a pack version with a 0 % discount');
 select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps) select organization_id, id, 9, 2000 from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
   '23505', null, 'the table itself refuses a second open version for the same product');
 set local role authenticated;

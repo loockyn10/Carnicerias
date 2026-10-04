@@ -283,9 +283,9 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
-  // p_pack_size_units null = "this product has no pack" (quita las unidades por pack).
+  // p_pack_size_units null = "this product has no pack" (quita las unidades por pack y su descuento: p_pack_discount_bps null/omitido).
   set_product_pack_size: {
-    Args: { p_pack_size_units: number | null; p_product_id: string }
+    Args: { p_pack_discount_bps?: number | null; p_pack_size_units: number | null; p_product_id: string }
     Returns: undefined
   }
   // p_supplier_id null = "this product has no primary supplier".

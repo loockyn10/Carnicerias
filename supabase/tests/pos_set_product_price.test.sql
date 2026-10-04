@@ -72,8 +72,7 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('d6000000-0000-4000-8000-000000000006', 'd2000000-0000-4000-8000-000000000001', 'd5000000-0000-4000-8000-000000000001', 'Vacio por peso', 'vacio', 'VAC', 'WEIGHT', true),
   ('d6000000-0000-4000-8000-000000000007', 'd2000000-0000-4000-8000-000000000001', 'd5000000-0000-4000-8000-000000000001', 'Pendiente de precio', 'pendiente', 'PEND', 'UNIT', true),
   ('d6000000-0000-4000-8000-000000000009', 'd2000000-0000-4000-8000-000000000002', 'd5000000-0000-4000-8000-000000000002', 'Producto de B', 'prod-b', 'PB', 'UNIT', true);
-insert into public.product_category_assignments (organization_id, product_id, category_id)
-select organization_id, id, category_id from public.products;
+-- (la fila de product_category_assignments —proyección de la categoría principal— la crea el trigger del producto)
 insert into public.product_prices (organization_id, product_id, branch_id, price_cents, valid_from) values
   ('d2000000-0000-4000-8000-000000000001', 'd6000000-0000-4000-8000-000000000001', null, 0, now() - interval '1 day'),
   ('d2000000-0000-4000-8000-000000000001', 'd6000000-0000-4000-8000-000000000002', null, 350000, now() - interval '1 day'),

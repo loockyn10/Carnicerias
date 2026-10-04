@@ -139,16 +139,20 @@ export interface TicketLine {
   packSizeUnitsSnapshot?: number;
   /** Versión del pack (`product_pack_versions`) con la que se armó la línea: el servidor valida la venta contra ella. */
   packConfigId?: string;
-  /** El descuento de Pack (20 %) está aplicado a esta línea ahora. False/ausente si la línea es normal o tiene precio manual. */
+  /** El descuento de Pack (el % propio de ese producto, de la versión `packConfigId`) está aplicado a esta línea ahora.
+   * False/ausente si la línea es normal o tiene precio manual. */
   soldAsPack?: boolean;
+  /** Descuento de la versión del pack con la que se armó la línea (basis points). Como `packCount` y el tamaño, es memoria del
+   * modo Pack: sobrevive al precio manual para que "Usar precio normal" recupere el mismo porcentaje de esa versión. */
   packDiscountBps?: number;
   packDiscountCents?: bigint;
   /**
-   * Promoción global de la sucursal aplicada a esta línea UNIT ("cada N unidades, X %"): `branchPromotionDiscountedUnits`
-   * unidades (grupos completos del mismo producto) recibieron el descuento. Snapshot de la regla: la venta no vuelve a leerla.
+   * Promoción global de la sucursal aplicada a esta línea UNIT ("desde N unidades, X %"): `branchPromotionDiscountedUnits`
+   * unidades (TODAS las de la línea del mismo producto) recibieron el descuento. Snapshot de la regla: la venta no vuelve a leerla.
    */
   branchPromotionId?: string;
-  branchPromotionEveryUnits?: number;
+  /** Cantidad mínima ("desde N") de la regla aplicada. */
+  branchPromotionMinimumUnits?: number;
   branchPromotionDiscountBps?: number;
   branchPromotionDiscountedUnits?: number;
   branchPromotionDiscountCents?: bigint;

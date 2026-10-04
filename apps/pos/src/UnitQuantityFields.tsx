@@ -1,25 +1,26 @@
-import { PACK_DISCOUNT_BPS } from "@carnicerias/business-logic";
+import { formatBasisPointsPercent } from "@carnicerias/business-logic";
 
 interface UnitQuantityFieldsProps {
   /** Cantidad que tipea el operador: unidades, o packs si `packMode` está activo. */
   quantity: number;
   onQuantityChange: (quantity: number) => void;
-  /** Unidades por pack del producto; null = sin pack (entonces no se ofrece la opción Pack). */
-  packSizeUnits: number | null;
+  /** Pack del producto: unidades por pack y SU porcentaje de descuento; null = sin pack (entonces no se ofrece la opción Pack). */
+  pack: { packSizeUnits: number; packDiscountBps: number } | null;
   packMode: boolean;
   onPackModeChange: (packMode: boolean) => void;
 }
 
 /**
  * Cantidad de un producto UNIT, la misma para agregar desde la grilla/buscador y para modificar una línea ya agregada
- * (un único componente). Si el producto tiene `pack_size_units`, ofrece "Pack · N unidades · 20% OFF": con Pack la
- * cantidad son packs y la línea se carga con N × tamaño unidades REALES, todas con 20 % de descuento. El escaneo nunca
- * activa el Pack: agrega 1 unidad normal y recién al editar la cantidad aparece esta opción.
+ * (un único componente). Si el producto tiene pack, ofrece "Pack · N unidades · X% OFF" con el porcentaje REAL de ese
+ * producto: con Pack la cantidad son packs y la línea se carga con N × tamaño unidades REALES, todas con ese descuento.
+ * El escaneo nunca activa el Pack: agrega 1 unidad normal y recién al editar la cantidad aparece esta opción.
  */
-export function UnitQuantityFields({ quantity, onQuantityChange, packSizeUnits, packMode, onPackModeChange }: UnitQuantityFieldsProps) {
-  const packEnabled = packSizeUnits != null;
+export function UnitQuantityFields({ quantity, onQuantityChange, pack, packMode, onPackModeChange }: UnitQuantityFieldsProps) {
+  const packSizeUnits = pack?.packSizeUnits ?? 0;
+  const packEnabled = pack != null;
   const inPackMode = packEnabled && packMode;
-  const discountLabel = String(PACK_DISCOUNT_BPS / 100) + "% OFF";
+  const discountLabel = pack ? formatBasisPointsPercent(pack.packDiscountBps) + "% OFF" : "";
   return (
     <>
       {/* UNIT: cantidad entera con [-] [+] + input manual — nunca balanza ni gramos. */}

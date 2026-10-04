@@ -109,7 +109,6 @@ export function parseCatalogRow(value: unknown): QuickCatalogRow {
   const price = text(row, "pricePerKgCents");
   if (!/^\d+$/.test(price)) throw new Error("Respuesta inválida del servidor (precio)");
   const categoryId = text(row, "categoryId");
-  const categoryIds = Array.isArray(row.categoryIds) ? row.categoryIds.filter((id): id is string => typeof id === "string") : [];
   return {
     organizationId: text(row, "organizationId"),
     branchId: text(row, "branchId"),
@@ -118,7 +117,8 @@ export function parseCatalogRow(value: unknown): QuickCatalogRow {
     categoryName: text(row, "categoryName"),
     categoryColorHex: typeof row.categoryColorHex === "string" ? row.categoryColorHex : null,
     categorySortOrder: typeof row.categorySortOrder === "number" ? row.categorySortOrder : 0,
-    categoryIds: categoryIds.length > 0 ? categoryIds : [categoryId],
+    // Una sola categoría por producto: se ignora cualquier lista que mande el servidor.
+    categoryIds: [categoryId],
     productId: text(row, "productId"),
     productName: text(row, "productName"),
     productSku: typeof row.productSku === "string" ? row.productSku : null,

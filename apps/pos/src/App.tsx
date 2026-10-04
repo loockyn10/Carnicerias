@@ -11,7 +11,7 @@ import {
   advanceWeightStability,
   initialWeightStabilityState,
   sumMoney,
-  PACK_DISCOUNT_BPS,
+  formatBasisPointsPercent,
   type BranchUnitPromotion,
   type ScaleKind,
   type UnitPackSale,
@@ -27,7 +27,7 @@ import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./l
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
   applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, describeUnitLine, findMergeableUnitLine, findPackRule,
-  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule
+  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
 import { sanitizeDiscountInput } from "./lib/manual-price";
 import { ManualPriceModal } from "./ManualPriceModal";
@@ -76,8 +76,7 @@ interface CatalogProduct {
   categoryName: string;
   categoryColorHex: string | null;
   categorySortOrder: number;
-  /** Every active category this product is assigned to (principal included) — used only for
-   * multi-category filtering; the card's color/name keep coming from categoryId/Name/ColorHex. */
+  /** Contrato anterior: siempre exactamente [categoryId] (un producto tiene una sola categoría). */
   categoryIds: string[];
   productId: string;
   productName: string;
@@ -86,10 +85,12 @@ interface CatalogProduct {
   pricePerKgCents: bigint;
   /** Scanner codes of the product, from the synced catalog (SQLite offline). */
   barcodes: string[];
-  /** Unidades por pack (sólo UNIT; null = sin pack). Habilita "Pack · N unidades · 20% OFF" al cargar la cantidad. */
+  /** Unidades por pack (sólo UNIT; null = sin pack). Habilita "Pack · N unidades · X% OFF" al cargar la cantidad. */
   packSizeUnits: number | null;
   /** Id de la versión vigente del pack (la que respalda la venta en el servidor); sin él no se ofrece Pack. */
   packConfigId: string | null;
+  /** Descuento de esa versión (basis points): el % propio de este producto; sin él no se ofrece Pack. */
+  packDiscountBps: number | null;
 }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
@@ -118,7 +119,7 @@ class HandledStageError extends Error {}
 /** La promoción global de la sucursal (a lo sumo una vigente) tal como la necesita el motor de precios. */
 function toBranchPromotion(rows: readonly LocalBranchPromotion[] | undefined): BranchUnitPromotion | null {
   const row = rows?.[0];
-  return row ? { id: row.id, everyUnits: row.everyUnits, discountBps: row.discountBps } : null;
+  return row ? { id: row.id, minimumUnits: row.minimumUnits, discountBps: row.discountBps } : null;
 }
 
 function categoryAccent(color: string | null | undefined): string | undefined {
@@ -337,9 +338,9 @@ export default function App() {
   const [weightInput, setWeightInput] = useState("");
   const [quantityInput, setQuantityInput] = useState(1);
   const [sellAsPack, setSellAsPack] = useState(false);
-  // Producto UNIT con pack: la cantidad del modal son PACKS (cada uno = pack_size_units unidades reales, 20 % OFF).
+  // Producto UNIT con pack: la cantidad del modal son PACKS (cada uno = pack_size_units unidades reales, con el % OFF de ese producto).
   const [packMode, setPackMode] = useState(false);
-  // Promoción global de la sucursal ("cada N unidades, X %", sólo UNIT); viaja con el catálogo y se lee de SQLite.
+  // Promoción global de la sucursal ("desde N unidades, X %" sobre toda la línea, sólo UNIT); viaja con el catálogo y se lee de SQLite.
   const [branchPromotion, setBranchPromotion] = useState<BranchUnitPromotion | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   // Pricing flexible de Central (D-061): descuento general del ticket (texto libre del input, en %) y la línea
@@ -601,7 +602,7 @@ export default function App() {
           categoryName: row.categoryName,
           categoryColorHex: row.categoryColorHex,
           categorySortOrder: row.categorySortOrder,
-          categoryIds: row.categoryIds.length ? row.categoryIds : [row.categoryId],
+          categoryIds: [row.categoryId],
           productId: row.productId,
           productName: row.productName,
           productSku: row.productSku,
@@ -609,7 +610,8 @@ export default function App() {
           pricePerKgCents: BigInt(row.pricePerKgCents),
           barcodes: row.barcodes,
           packSizeUnits: row.packSizeUnits ?? null,
-          packConfigId: row.packConfigId ?? null
+          packConfigId: row.packConfigId ?? null,
+          packDiscountBps: row.packDiscountBps ?? null
         })));
         setCategoryDirectory(directory);
         return;
@@ -630,7 +632,7 @@ export default function App() {
             categoryName: row.category_name,
             categoryColorHex: row.category_color_hex,
             categorySortOrder: row.category_sort_order,
-            categoryIds: row.category_ids.length ? row.category_ids : [row.category_id],
+            categoryIds: [row.category_id],
             productId: row.product_id,
             productName: row.product_name,
             productSku: row.product_sku,
@@ -640,7 +642,8 @@ export default function App() {
             barcodes: (row.barcodes as string[] | undefined) ?? [],
             // El POS web de desarrollo no ofrece Pack ni promociones de sucursal: sólo el POS de escritorio los recibe y los revalida.
             packSizeUnits: null,
-            packConfigId: null
+            packConfigId: null,
+            packDiscountBps: null
           }))
         );
         setCategoryDirectory(categoriesData.map((row) => ({ id: row.id, name: row.name, colorHex: row.color_hex, sortOrder: row.sort_order })));
@@ -992,10 +995,9 @@ export default function App() {
     await runSync();
   }
 
-  // Los tabs salen del directorio de categorías sincronizado explícitamente (cualquier categoría
-  // activa con al menos un producto asignado, principal o secundaria — ver
-  // apps/pos/src/lib/catalog.ts), no de la categoría principal de un producto en particular. Una
-  // categoría usada sólo como "también aparece en" sigue generando su propio tab.
+  // Los tabs salen del directorio de categorías sincronizado explícitamente (cada categoría activa que
+  // es la categoría de al menos un producto habilitado en la sucursal — ver apps/pos/src/lib/catalog.ts).
+  // Un producto tiene una sola categoría: no hay asignaciones secundarias.
   const categories = useMemo(() => buildCategoryTabs(categoryDirectory), [categoryDirectory]);
 
   const filteredProducts = useMemo(() => {
@@ -1086,7 +1088,7 @@ export default function App() {
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
     // Una línea cargada como Pack se vuelve a abrir en modo Pack (la cantidad son packs); una normal, en unidades.
-    const modal = unitModalState(line, packSizeOffered(product));
+    const modal = unitModalState(line, packOfferOf(product)?.packSizeUnits ?? null);
     setPackMode(modal.packMode);
     setQuantityInput(modal.quantity);
     setSellAsPack(line?.sellAsPack ?? line?.promotionMode === "PACK_FIXED_TOTAL");
@@ -1137,14 +1139,15 @@ export default function App() {
    */
   function unitLineRequest(product: CatalogProduct): { units: number; packSale: UnitPackSale | null; lineId: string; mergedLine: TicketLine | undefined } {
     return resolveUnitLineRequest({
-      ticket: ticketRef.current, productId: product.productId, packSizeUnits: packSizeOffered(product),
-      packConfigId: product.packConfigId, packMode, quantity: quantityInput, editingLineId
+      ticket: ticketRef.current, productId: product.productId, packOffer: packOfferOf(product),
+      packMode, quantity: quantityInput, editingLineId
     });
   }
 
-  /** El Pack que el producto ofrece en este POS: sólo el de escritorio y sólo con la versión del pack que respalda la venta en el servidor. */
-  function packSizeOffered(product: CatalogProduct): number | null {
-    return desktop && product.packConfigId != null ? product.packSizeUnits : null;
+  /** El Pack que el producto ofrece en este POS: sólo el de escritorio y sólo con la versión del pack (id, tamaño y porcentaje) que respalda la venta en el servidor. */
+  function packOfferOf(product: CatalogProduct): PackOffer | null {
+    if (!desktop || product.packConfigId == null || product.packSizeUnits == null || product.packDiscountBps == null) return null;
+    return { packSizeUnits: product.packSizeUnits, packDiscountBps: product.packDiscountBps, packConfigId: product.packConfigId };
   }
 
   /**
@@ -1182,7 +1185,7 @@ export default function App() {
       if (isUnit) {
         if (!Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
         // Unidades REALES (en modo Pack: packs × tamaño) y, si el producto ya está en el ticket, se suma a esa línea: así
-        // "cada N unidades" cuenta todas las del mismo producto, vengan de la grilla o del scanner.
+        // "desde N unidades" cuenta todas las del mismo producto, vengan de la grilla o del scanner.
         const request = unitLineRequest(selectedProduct);
         mergedLineId = request.mergedLine?.id ?? null;
         line = buildUnitTicketLine(
@@ -1283,7 +1286,7 @@ export default function App() {
   }
 
   function toCatalogProduct(row: QuickCatalogRow): CatalogProduct {
-    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents), packSizeUnits: null, packConfigId: null };
+    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents), packSizeUnits: null, packConfigId: null, packDiscountBps: null };
   }
 
   // El POS sólo puede vender (confirm_local_sale) productos que ya están en su SQLite: tras el alta se
@@ -2481,7 +2484,7 @@ export default function App() {
                 <UnitQuantityFields
                   quantity={quantityInput}
                   onQuantityChange={setQuantityInput}
-                  packSizeUnits={packSizeOffered(selectedProduct)}
+                  pack={packOfferOf(selectedProduct)}
                   packMode={packMode}
                   onPackModeChange={setPackMode}
                 />
@@ -2516,8 +2519,8 @@ export default function App() {
                   const preview = computed.pricing;
                   const unitRequest = selectedProduct.unitType === "UNIT" ? unitLineRequest(selectedProduct) : null;
                   const unitPromoLabel = computed.unitDiscount?.kind === "PACK"
-                    ? "Pack " + String(PACK_DISCOUNT_BPS / 100) + "% OFF"
-                    : computed.unitDiscount ? "Promo cada " + String(unitPromotion?.everyUnits ?? 0) + " · " + String((unitPromotion?.discountBps ?? 0) / 100) + "%" : "Promo";
+                    ? "Pack " + formatBasisPointsPercent(computed.unitDiscount.discountBps) + "% OFF"
+                    : computed.unitDiscount ? "Promo desde " + String(unitPromotion?.minimumUnits ?? 0) + " u · " + formatBasisPointsPercent(unitPromotion?.discountBps ?? 0) + "% OFF" : "Promo";
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}

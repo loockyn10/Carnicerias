@@ -9,7 +9,7 @@ import { parsePesosToCents } from "../../lib/settlements";
 import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
-import { parseBranchPromotionForm, parsePackSizeUnits } from "../../lib/unit-promotions";
+import { parseBranchPromotionForm, parseCurrentPackConfig, parsePackConfigForm } from "../../lib/unit-promotions";
 import type { Database } from "@carnicerias/database";
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
@@ -138,12 +138,15 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
   try {
     const name = text(formData, "name");
     const productId = text(formData, "product_id");
-    // Unidades por pack (sólo productos por unidad; vacío = sin pack). Quitar el pack va ANTES de guardar el producto (si pasa a «por kg» no
-    // puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). No es una promoción ni toca precios.
-    const wantedPackSize = text(formData, "unit_type") === "UNIT" ? parsePackSizeUnits(text(formData, "pack_size_units")) : null;
-    const currentPackSize = parsePackSizeUnits(text(formData, "current_pack_size_units"));
-    if (wantedPackSize === null && currentPackSize !== null) {
-      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: null });
+    // Pack (sólo productos por unidad): unidades por pack Y descuento del pack, siempre juntos (vacío = sin pack). Quitar el pack va ANTES de
+    // guardar el producto (si pasa a «por kg» no puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). Cambiar
+    // cualquiera de los dos valores abre una versión nueva del pack en el servidor. No es una promoción ni toca precios.
+    const wantedPack = text(formData, "unit_type") === "UNIT"
+      ? parsePackConfigForm(text(formData, "pack_size_units"), text(formData, "pack_discount_percent"))
+      : { packSizeUnits: null, packDiscountBps: null };
+    const currentPack = parseCurrentPackConfig(text(formData, "current_pack_size_units"), text(formData, "current_pack_discount_bps"));
+    if (wantedPack.packSizeUnits === null && currentPack.packSizeUnits !== null) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: null, p_pack_discount_bps: null });
     }
     await rpcOrThrow("save_product", {
       p_product_id: productId, p_category_id: text(formData, "category_id"),
@@ -151,17 +154,11 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
       p_active: formData.get("active") === "on"
     });
-    if (wantedPackSize !== null && wantedPackSize !== currentPackSize) {
-      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPackSize });
+    if (wantedPack.packSizeUnits !== null && (wantedPack.packSizeUnits !== currentPack.packSizeUnits || wantedPack.packDiscountBps !== currentPack.packDiscountBps)) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPack.packSizeUnits, p_pack_discount_bps: wantedPack.packDiscountBps });
     }
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
-    // Categoría principal + adicionales en una sola llamada transaccional: set_product_categories
-    // agrega la principal si faltara en el set marcado, así el formulario no tiene que forzar el
-    // checkbox de la categoría principal para que quede coherente.
-    await rpcOrThrow("set_product_categories", {
-      p_product_id: productId, p_primary_category_id: text(formData, "category_id"),
-      p_category_ids: ids(formData, "category_ids")
-    });
+    // Una sola categoría por producto: la que guarda save_product (products.category_id). No hay categorías adicionales.
 
     // Precio de venta = decisión manual: se guarda directo, nunca derivado de costo+margen. Sólo
     // escribe si cambió respecto al valor vigente (hidden input), igual que el patrón anterior.
@@ -216,10 +213,6 @@ export async function createProductModalAction(_: ProductModalState, formData: F
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: role });
-    await rpcOrThrow("set_product_categories", {
-      p_product_id: productId, p_primary_category_id: text(formData, "category_id"),
-      p_category_ids: ids(formData, "category_ids")
-    });
     if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
     if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
     await saveProductBranchesAndBarcodes(productId, formData);
@@ -355,12 +348,13 @@ export async function saveWeightDiscountFormAction(_: PromotionFormState, formDa
   }
 }
 
-/** Promoción global de una sucursal ("cada N unidades del mismo producto, X %"): crea, edita o la desactiva. Editarla crea una versión nueva (las ventas conservan la que usaron). */
+/** Promoción global de una sucursal ("desde N unidades del mismo producto, X % sobre toda la línea"): crea, edita o la desactiva. Editarla crea una versión nueva (las ventas conservan la que usaron). */
 export async function saveBranchPromotionFormAction(_: PromotionFormState, formData: FormData): Promise<PromotionFormState> {
   try {
     const input = parseBranchPromotionForm(formData);
     await rpcOrThrow("save_branch_promotion", {
-      p_branch_id: input.branchId, p_every_units: input.everyUnits, p_discount_bps: input.discountBps, p_active: input.active
+      // p_every_units conserva el nombre público de 060 (compatibilidad con el Admin ya desplegado); desde 061 es la cantidad mínima ("desde N").
+      p_branch_id: input.branchId, p_every_units: input.minimumUnits, p_discount_bps: input.discountBps, p_active: input.active
     });
     revalidatePath("/admin/promotions");
     return { successToken: crypto.randomUUID() };

@@ -157,8 +157,8 @@ export interface TicketSourceItem {
   packCount?: number | null;
   packSizeUnits?: number | null;
   packDiscountBps?: number | null;
-  /** Promoción global de la sucursal aplicada a la línea: cada `...EveryUnits`, `...DiscountBps`, sobre `...DiscountedUnits` unidades. */
-  branchPromotionEveryUnits?: number | null;
+  /** Promoción global de la sucursal aplicada a la línea: "desde `...MinimumUnits`", `...DiscountBps`, sobre `...DiscountedUnits` unidades (todas las de la línea). */
+  branchPromotionMinimumUnits?: number | null;
   branchPromotionDiscountBps?: number | null;
   branchPromotionDiscountedUnits?: number | null;
 }
@@ -231,7 +231,8 @@ export function parseTicketSource(value: unknown): TicketSource | null {
     const packCount = soldAsPack ? nonNegInt(item.packCount) : null;
     const packSizeUnits = soldAsPack ? nonNegInt(item.packSizeUnits) : null;
     const packDiscountBps = soldAsPack ? nonNegInt(item.packDiscountBps) : null;
-    const promoEvery = nonNegInt(item.branchPromotionEveryUnits);
+    // `...EveryUnits` es el nombre anterior de la cantidad mínima (servidor sin actualizar o venta ya hecha con la regla "cada N").
+    const promoMinimum = nonNegInt(item.branchPromotionMinimumUnits ?? item.branchPromotionEveryUnits);
     const promoBps = nonNegInt(item.branchPromotionDiscountBps);
     const promoUnits = nonNegInt(item.branchPromotionDiscountedUnits);
     items.push({
@@ -240,7 +241,7 @@ export function parseTicketSource(value: unknown): TicketSource | null {
       manualPriceApplied: item.manualPriceApplied === true,
       // Pack y promoción de sucursal (opcionales: un servidor anterior no manda estas claves).
       ...(packCount !== null && packSizeUnits !== null && packDiscountBps !== null ? { packCount, packSizeUnits, packDiscountBps } : {}),
-      ...(promoEvery !== null && promoBps !== null && promoUnits !== null ? { branchPromotionEveryUnits: promoEvery, branchPromotionDiscountBps: promoBps, branchPromotionDiscountedUnits: promoUnits } : {})
+      ...(promoMinimum !== null && promoBps !== null && promoUnits !== null ? { branchPromotionMinimumUnits: promoMinimum, branchPromotionDiscountBps: promoBps, branchPromotionDiscountedUnits: promoUnits } : {})
     });
   }
 
@@ -377,7 +378,7 @@ export interface TicketLine {
   subtotalCents: number;
   /** D-061: el precio de la línea lo fijó el operador (`unitPriceLabel` ya es ese precio). */
   manualPrice: boolean;
-  /** Cómo se vendió una línea UNIT con descuento propio: `pack 1x8 u -20%` / `promo cada 3: 6 u -15%`. Ausente si no aplica. */
+  /** Cómo se vendió una línea UNIT con descuento propio: `pack 1x8 u -25%` / `promo desde 3: 8 u -15%`. Ausente si no aplica. */
   unitDiscountLabel?: string;
 }
 
@@ -389,8 +390,8 @@ function unitDiscountLabelOf(item: TicketSourceItem): string | undefined {
   if (item.packCount != null && item.packSizeUnits != null && item.packDiscountBps != null) {
     return `pack ${String(item.packCount)}x${String(item.packSizeUnits)} u -${percentLabel(item.packDiscountBps)}%`;
   }
-  if (item.branchPromotionEveryUnits != null && item.branchPromotionDiscountedUnits != null && item.branchPromotionDiscountBps != null) {
-    return `promo cada ${String(item.branchPromotionEveryUnits)}: ${String(item.branchPromotionDiscountedUnits)} u -${percentLabel(item.branchPromotionDiscountBps)}%`;
+  if (item.branchPromotionMinimumUnits != null && item.branchPromotionDiscountedUnits != null && item.branchPromotionDiscountBps != null) {
+    return `promo desde ${String(item.branchPromotionMinimumUnits)}: ${String(item.branchPromotionDiscountedUnits)} u -${percentLabel(item.branchPromotionDiscountBps)}%`;
   }
   return undefined;
 }

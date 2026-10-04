@@ -50,8 +50,9 @@ export interface OfflineSaleItemPayload {
   manualUnitPriceCents?: string;
   manualAdjustmentCents?: string;
   /** Pack de un producto UNIT: `quantityUnits` son las unidades REALES (packCount × packSizeUnitsSnapshot) y todas llevan
-   * `packDiscountBps` (20 %). Las cinco claves existen sólo en una línea vendida como pack; el resto de los payloads no
-   * cambia. El servidor y SQLite revalidan la aritmética; el tamaño del pack es un snapshot, nunca se relee del producto. */
+   * `packDiscountBps` (el % propio del producto en la versión `packConfigId`). Las claves existen sólo en una línea vendida
+   * como pack; el resto de los payloads no cambia. El servidor y SQLite revalidan la aritmética; tamaño y porcentaje son un
+   * snapshot de esa versión, nunca se releen del producto. */
   soldAsPack?: true;
   packCount?: number;
   packSizeUnitsSnapshot?: number;
@@ -59,9 +60,11 @@ export interface OfflineSaleItemPayload {
   packConfigId?: string;
   packDiscountBps?: number;
   packDiscountCents?: string;
-  /** Promoción global de la sucursal ("cada N unidades, X %") aplicada a la línea: cinco claves de snapshot, sólo si aplicó. */
+  /** Promoción global de la sucursal ("desde N unidades, X %" sobre TODA la línea) aplicada a la línea: cinco claves de
+   * snapshot, sólo si aplicó. `branchPromotionDiscountedUnits` = `quantityUnits`. (El formato anterior "cada N" usaba
+   * `branchPromotionEveryUnits`; el POS actual nunca lo envía y el servidor sólo lo acepta de ventas ya hechas.) */
   branchPromotionId?: string;
-  branchPromotionEveryUnits?: number;
+  branchPromotionMinimumUnits?: number;
   branchPromotionDiscountBps?: number;
   branchPromotionDiscountedUnits?: number;
   branchPromotionDiscountCents?: string;
@@ -164,9 +167,8 @@ export interface CatalogPullRow {
   categoryColorHex: string | null;
   categorySortOrder: number;
   categoryActive: boolean;
-  /** Every active category this product is assigned to (principal included). categoryId/Name/
-   * ColorHex above stay the PRINCIPAL category — still the single source for the product card's
-   * color/label; categoryIds is only used for multi-category filtering. */
+  /** Contrato anterior, conservado por compatibilidad: un producto tiene UNA sola categoría, así que contiene siempre
+   * exactamente [categoryId]. La fuente de verdad es categoryId/Name/ColorHex; nunca hay categorías secundarias. */
   categoryIds: string[];
   productId: string;
   productName: string;
@@ -182,19 +184,21 @@ export interface CatalogPullRow {
   packSizeUnits?: number | null;
   /** Id de la versión vigente del pack: viaja con el tamaño y se guarda en cada línea vendida como Pack. */
   packConfigId?: string | null;
+  /** Descuento de esa versión del pack (basis points, 1..9999): el % propio del producto. Ausente en un servidor anterior (20 %). */
+  packDiscountBps?: number | null;
 }
 
-/** Promoción global de una sucursal para sus productos UNIT ("cada N unidades, X %"). Foto completa en cada pull. */
+/** Promoción global de una sucursal para sus productos UNIT ("desde N unidades, X % sobre toda la línea"). Foto completa en cada pull. */
 export interface CatalogBranchPromotion {
   id: string;
   scope: "ALL_UNIT_PRODUCTS";
-  everyUnits: number;
+  /** Cantidad mínima del mismo producto desde la cual aplica a TODAS las unidades de la línea. */
+  minimumUnits: number;
   discountBps: number;
 }
 
-/** The POS category tab directory: every active category with at least one product assignment
- * (principal or "también aparece en"), independent of any single product's principal category —
- * a category used only as a secondary assignment still gets an entry here. */
+/** The POS category tab directory: every active category that is the (single) category of at least one
+ * product enabled in the device branch. */
 export interface CatalogCategoryDirectoryEntry {
   id: string;
   name: string;
@@ -212,8 +216,9 @@ export interface CatalogPullPayload {
   branchActive: boolean;
   deviceStatus: "ACTIVE" | "DISABLED";
   categories: CatalogCategoryDirectoryEntry[];
-  /** Promociones globales activas de la sucursal del dispositivo (foto completa; ausente en un servidor anterior). */
-  branchPromotions?: CatalogBranchPromotion[];
+  /** Promociones globales "desde N" activas de la sucursal del dispositivo (foto completa; ausente en un servidor anterior). Clave
+   * propia: `branchPromotions` (la que leía un POS de antes de la regla "desde N") el servidor la entrega vacía y este POS no la lee. */
+  branchPromotionsFromMinimum?: CatalogBranchPromotion[];
   roleName: string;
   catalog: CatalogPullRow[];
   removedProductIds: string[];
@@ -284,7 +289,7 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
     ...(line.branchPromotionId && !line.soldAsPack && !line.manualPriceApplied && line.quantityUnits != null
       ? {
           branchPromotionId: line.branchPromotionId,
-          branchPromotionEveryUnits: line.branchPromotionEveryUnits ?? 0,
+          branchPromotionMinimumUnits: line.branchPromotionMinimumUnits ?? 0,
           branchPromotionDiscountBps: line.branchPromotionDiscountBps ?? 0,
           branchPromotionDiscountedUnits: line.branchPromotionDiscountedUnits ?? 0,
           branchPromotionDiscountCents: (line.branchPromotionDiscountCents ?? 0n).toString()

@@ -6,8 +6,9 @@ import {
   calculateUnitPackLinePricing,
   calculateUnitPackSalePricing,
   calculateWeightPackSalePricing,
+  formatBasisPointsPercent,
+  isValidPackDiscountBps,
   packRealUnits,
-  PACK_DISCOUNT_BPS,
   sumMoney,
   type BranchUnitPromotion,
   type TicketDiscount,
@@ -20,9 +21,9 @@ import type { PaymentMethod, TicketLine } from "@carnicerias/types";
  * Pricing de las líneas del ticket del POS. Las funciones `compute*`/`build*` se movieron desde App.tsx
  * sin cambiar su comportamiento (mismo motor: lista -> promoción/pack -> recargo por tarjeta, D-044);
  * este módulo agrega el precio manual por línea y el resumen con descuento general (D-061, sólo Central),
- * y para las líneas UNIT el Pack (20 %) y la promoción global de la sucursal ("cada N unidades").
- * Precedencia de una línea UNIT (nunca se acumulan): precio manual > venta como Pack > promoción específica del
- * producto (PACK_FIXED_TOTAL) > promoción de sucursal. Todo es puro: sin React, SQLite ni red.
+ * y para las líneas UNIT el Pack (con el % propio de cada producto) y la promoción global de la sucursal ("desde N unidades",
+ * sobre TODA la línea). Precedencia de una línea UNIT (nunca se acumulan): precio manual > venta como Pack > promoción
+ * específica del producto (PACK_FIXED_TOTAL) > promoción de sucursal. Todo es puro: sin React, SQLite ni red.
  */
 
 export interface DiscountRule {
@@ -44,7 +45,7 @@ export interface ComputedLine {
   discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null;
   discountValue: bigint | null;
   promotionMode: "THRESHOLD" | "PACK_FIXED_TOTAL" | null;
-  /** Pack (20 %) o promoción de sucursal aplicados a una línea UNIT; null si la línea no recibió ninguno de los dos. */
+  /** Pack (con el % de su producto) o promoción de sucursal aplicados a una línea UNIT; null si la línea no recibió ninguno de los dos. */
   unitDiscount?: UnitDiscountPricing | null;
 }
 
@@ -81,11 +82,11 @@ export function computeWeightLine(
 }
 
 /** UNIT pricing: no balanza, no THRESHOLD (WEIGHT-only by design). Precedencia (nunca se acumulan):
- *   1. venta explícita como Pack (`options.packSale`): las unidades reales reciben 20 %; ni la promoción específica
- *      ni la de sucursal se suman;
+ *   1. venta explícita como Pack (`options.packSale`): las unidades reales reciben el % de la versión del pack de ese
+ *      producto; ni la promoción específica ni la de sucursal se suman;
  *   2. promoción específica del producto (PACK_FIXED_TOTAL): se aplica automáticamente en múltiplos exactos de su
  *      cantidad (sin toggle, a diferencia de WEIGHT: las unidades son exactas), el resto a precio normal;
- *   3. promoción de la sucursal ("cada N unidades, X %"): sólo los grupos completos del MISMO producto;
+ *   3. promoción de la sucursal ("desde N unidades, X %"): con N o más unidades del MISMO producto, TODAS las de la línea;
  *   4. precio normal.
  * (El precio manual está por encima de todo y no pasa por acá: ver `applyManualPrice`.) */
 export function computeUnitLine(
@@ -117,11 +118,12 @@ export function computeUnitLine(
 
 /** Todos los campos del snapshot de descuento UNIT (Pack / promoción de sucursal), para limpiarlos de una línea. */
 const UNIT_DISCOUNT_KEYS = [
-  "soldAsPack", "packDiscountBps", "packDiscountCents", "branchPromotionId", "branchPromotionEveryUnits",
+  "soldAsPack", "packDiscountCents", "branchPromotionId", "branchPromotionMinimumUnits",
   "branchPromotionDiscountBps", "branchPromotionDiscountedUnits", "branchPromotionDiscountCents"
 ] as const;
 
-/** Quita el Pack y la promoción de sucursal que la línea tenía aplicados (la memoria del modo Pack — packCount y tamaño — se conserva). */
+/** Quita el Pack y la promoción de sucursal que la línea tenía aplicados (la memoria del modo Pack — packCount, tamaño, versión y su
+ * porcentaje `packDiscountBps` — se conserva). */
 export function stripUnitDiscount(line: TicketLine): TicketLine {
   const dropped = new Set<string>(UNIT_DISCOUNT_KEYS);
   return Object.fromEntries(Object.entries(line).filter(([key]) => !dropped.has(key))) as unknown as TicketLine;
@@ -131,11 +133,11 @@ export function stripUnitDiscount(line: TicketLine): TicketLine {
 function unitDiscountFields(unitDiscount: UnitDiscountPricing | null | undefined, options: UnitLineOptions): Partial<TicketLine> {
   if (!unitDiscount) return {};
   if (unitDiscount.kind === "PACK") {
-    return { soldAsPack: true, packDiscountBps: PACK_DISCOUNT_BPS, packDiscountCents: unitDiscount.unitDiscountCents };
+    return { soldAsPack: true, packDiscountBps: unitDiscount.discountBps, packDiscountCents: unitDiscount.unitDiscountCents };
   }
   return {
     branchPromotionId: options.branchPromotion?.id ?? "",
-    branchPromotionEveryUnits: options.branchPromotion?.everyUnits ?? 0,
+    branchPromotionMinimumUnits: options.branchPromotion?.minimumUnits ?? 0,
     branchPromotionDiscountBps: unitDiscount.discountBps,
     branchPromotionDiscountedUnits: unitDiscount.discountedUnits,
     branchPromotionDiscountCents: unitDiscount.unitDiscountCents
@@ -144,8 +146,11 @@ function unitDiscountFields(unitDiscount: UnitDiscountPricing | null | undefined
 
 /** La memoria del modo Pack de una línea (si la tiene): sirve para reconstruirla al repreciar o quitar un precio manual. */
 export function packSaleOf(line: TicketLine): UnitPackSale | null {
-  return line.packCount != null && line.packSizeUnitsSnapshot != null
-    ? { packCount: line.packCount, packSizeUnits: line.packSizeUnitsSnapshot, ...(line.packConfigId ? { packConfigId: line.packConfigId } : {}) }
+  return line.packCount != null && line.packSizeUnitsSnapshot != null && isValidPackDiscountBps(line.packDiscountBps)
+    ? {
+        packCount: line.packCount, packSizeUnits: line.packSizeUnitsSnapshot, packDiscountBps: line.packDiscountBps,
+        ...(line.packConfigId ? { packConfigId: line.packConfigId } : {})
+      }
     : null;
 }
 
@@ -154,6 +159,9 @@ export function findPackRule(discounts: DiscountRule[], productId: string, branc
   return discounts.find((rule) => rule.productId === productId && rule.promotionMode === "PACK_FIXED_TOTAL"
     && (rule.branchId === branchId || rule.branchId === null)) ?? null;
 }
+
+/** El Pack que un producto ofrece hoy: tamaño, descuento y versión (los tres viajan juntos desde el catálogo sincronizado). */
+export interface PackOffer { packSizeUnits: number; packDiscountBps: number; packConfigId: string }
 
 /** Los tres campos del catálogo que necesita armar una línea. */
 export interface LineProduct { productId: string; productName: string; pricePerKgCents: bigint }
@@ -185,7 +193,7 @@ export function buildUnitTicketLine(
     ...line,
     ...(options.packSale
       ? {
-          packCount: options.packSale.packCount, packSizeUnitsSnapshot: options.packSale.packSizeUnits,
+          packCount: options.packSale.packCount, packSizeUnitsSnapshot: options.packSale.packSizeUnits, packDiscountBps: options.packSale.packDiscountBps,
           ...(options.packSale.packConfigId ? { packConfigId: options.packSale.packConfigId } : {})
         }
       : {}),
@@ -195,7 +203,7 @@ export function buildUnitTicketLine(
 
 /**
  * La línea UNIT normal (no manual) a la que se le puede sumar cantidad sin mezclar modos: una por producto y modo. Así
- * "cada N unidades del MISMO producto" cuenta todas las unidades de ese producto del ticket, venga del scanner o de la
+ * "desde N unidades del MISMO producto" cuenta todas las unidades de ese producto del ticket, venga del scanner o de la
  * grilla; una línea Pack y una normal del mismo producto son líneas distintas (el Pack no se acumula con la promoción).
  */
 export function findMergeableUnitLine(ticket: readonly TicketLine[], productId: string, packMode: boolean, includeManual = false): TicketLine | undefined {
@@ -207,12 +215,12 @@ export function describeUnitLine(line: TicketLine): { quantityLabel: string; bad
   const units = line.quantityUnits ?? 0;
   if (line.packCount != null && line.packSizeUnitsSnapshot != null) {
     const quantityLabel = `${String(line.packCount)} pack${line.packCount === 1 ? "" : "s"} × ${String(line.packSizeUnitsSnapshot)} u = ${String(units)} unidades`;
-    return { quantityLabel, badge: line.soldAsPack ? `Pack ${String(PACK_DISCOUNT_BPS / 100)}% OFF` : null };
+    return { quantityLabel, badge: line.soldAsPack ? `Pack ${formatBasisPointsPercent(line.packDiscountBps ?? 0)}% OFF` : null };
   }
   if (line.branchPromotionId && line.branchPromotionDiscountedUnits) {
     return {
       quantityLabel: `${String(units)} u`,
-      badge: `Promo ${String(line.branchPromotionEveryUnits ?? 0)}×${String((line.branchPromotionDiscountBps ?? 0) / 100)}%: ${String(line.branchPromotionDiscountedUnits)} u con descuento`
+      badge: `Desde ${String(line.branchPromotionMinimumUnits ?? 0)} u: ${formatBasisPointsPercent(line.branchPromotionDiscountBps ?? 0)}% OFF en ${String(line.branchPromotionDiscountedUnits)} u`
     };
   }
   return { quantityLabel: `${String(units)} u`, badge: null };
@@ -252,7 +260,7 @@ export function repriceTicketLine(line: TicketLine, context: PricingContext): Ti
     // computeUnitLine siempre recalcula desde pack.packPriceCents (el precio fijo real del
     // pack), nunca desde line.subtotalCents, porque ese subtotal puede venir ya recargado por
     // tarjeta de un cálculo anterior con otro método de pago (D-044: el recargo se aplica al
-    // total comercial completo, packs incluidos, sin excepción). El Pack del producto (20 %) se recalcula
+    // total comercial completo, packs incluidos, sin excepción). El Pack del producto (con su %) se recalcula
     // desde el snapshot de la propia línea (packCount × tamaño al venderla), nunca desde el producto actual.
     const pack = line.discountRuleId ? discounts.find((rule) => rule.id === line.discountRuleId) ?? null : null;
     const options: UnitLineOptions = { branchPromotion: context.branchPromotion ?? null, packSale: packSaleOf(line) };
@@ -366,22 +374,22 @@ export interface UnitLineRequest {
 
 /**
  * Qué línea UNIT resulta de lo cargado en el modal de cantidad, tanto al agregar desde la grilla/buscador como al modificar
- * una línea ya agregada (mismo modal): agregar suma a la línea del mismo producto y modo, así "cada N unidades" cuenta todas las
- * del producto; modificar reemplaza la línea. `packSizeUnits` es null si el producto no tiene pack (o no es el POS de escritorio):
- * entonces `packMode` se ignora y la cantidad son unidades.
+ * una línea ya agregada (mismo modal): agregar suma a la línea del mismo producto y modo, así "desde N unidades" cuenta todas las
+ * del producto; modificar reemplaza la línea. `packOffer` es null si el producto no tiene pack (o no es el POS de escritorio, o falta
+ * la versión que respalda la venta en el servidor): entonces `packMode` se ignora y la cantidad son unidades.
  */
 export function resolveUnitLineRequest(input: {
-  ticket: readonly TicketLine[]; productId: string; packSizeUnits: number | null; packConfigId: string | null; packMode: boolean; quantity: number; editingLineId: string | null;
+  ticket: readonly TicketLine[]; productId: string; packOffer: PackOffer | null; packMode: boolean; quantity: number; editingLineId: string | null;
 }): UnitLineRequest {
-  const { packSizeUnits, packConfigId } = input;
-  // Sin la versión del pack (el servidor que la envía) no hay Pack: la venta no podría validarse allá.
-  const usePack = input.packMode && packSizeUnits != null && packConfigId != null;
+  // Sin la versión del pack (el servidor que la envía) o con un porcentaje inválido no hay Pack: la venta no podría validarse allá.
+  const offer = input.packMode && input.packOffer && input.packOffer.packConfigId !== "" && isValidPackDiscountBps(input.packOffer.packDiscountBps) ? input.packOffer : null;
+  const usePack = offer !== null;
   const mergedLine = input.editingLineId ? undefined : findMergeableUnitLine(input.ticket, input.productId, usePack);
   const baseCount = mergedLine ? (usePack ? (mergedLine.packCount ?? 0) : (mergedLine.quantityUnits ?? 0)) : 0;
   const count = baseCount + input.quantity;
   return {
-    units: usePack ? count * packSizeUnits : count,
-    packSale: usePack ? { packCount: count, packSizeUnits, packConfigId } : null,
+    units: offer ? count * offer.packSizeUnits : count,
+    packSale: offer ? { packCount: count, packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, packConfigId: offer.packConfigId } : null,
     lineId: input.editingLineId ?? mergedLine?.id ?? "",
     mergedLine
   };

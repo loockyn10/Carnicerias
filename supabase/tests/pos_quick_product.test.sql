@@ -79,8 +79,7 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('a6000000-0000-4000-8000-000000000002', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000002', 'Agua 500 cc', 'agua-500', 'AGUA-5', 'UNIT', true),
   ('a6000000-0000-4000-8000-000000000003', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000002', 'Inactivo', 'inactivo', 'INACT-1', 'UNIT', false),
   ('a6000000-0000-4000-8000-000000000004', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000003', 'Vacío', 'vacio', 'VAC-1', 'WEIGHT', true);
-insert into public.product_category_assignments (organization_id, product_id, category_id)
-select organization_id, id, category_id from public.products where organization_id = 'a2000000-0000-4000-8000-000000000001';
+-- (la fila de product_category_assignments —proyección de la categoría principal— la crea el trigger del producto)
 insert into public.product_prices (organization_id, product_id, branch_id, price_cents, valid_from)
 select organization_id, id, null, 100000, now() - interval '1 day' from public.products where organization_id = 'a2000000-0000-4000-8000-000000000001';
 insert into public.product_barcodes (organization_id, product_id, barcode) values
@@ -98,8 +97,6 @@ insert into public.products (id, organization_id, category_id, name, slug, sku, 
   ('a6000000-0000-4000-8000-000000000005', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000002', 'Inactivo fuera', 'inactivo-fuera', 'INACT-2', 'UNIT', false),
   ('a6000000-0000-4000-8000-000000000006', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000002', 'Producto sin precio', 'producto-sin-precio', 'SINP-1', 'UNIT', true),
   ('a6000000-0000-4000-8000-000000000007', 'a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000002', 'Jugo 1 L', 'jugo-1l', 'JUGO-1', 'UNIT', true);
-insert into public.product_category_assignments (organization_id, product_id, category_id)
-select organization_id, id, category_id from public.products where id in ('a6000000-0000-4000-8000-000000000005', 'a6000000-0000-4000-8000-000000000006', 'a6000000-0000-4000-8000-000000000007');
 insert into public.product_prices (organization_id, product_id, branch_id, price_cents, valid_from) values
   ('a2000000-0000-4000-8000-000000000001', 'a6000000-0000-4000-8000-000000000005', null, 100000, now() - interval '1 day'),
   ('a2000000-0000-4000-8000-000000000001', 'a6000000-0000-4000-8000-000000000007', null, 250000, now() - interval '1 day');

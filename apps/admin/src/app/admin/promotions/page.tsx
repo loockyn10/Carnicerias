@@ -69,8 +69,8 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
     commercial.from("product_weight_discounts")
       .select("id, product_id, branch_id, promotion_mode, minimum_grams, discount_type, discount_value, pack_quantity_grams, pack_quantity_units, pack_price_cents, active, valid_from, valid_until")
       .eq("organization_id", context.organizationId).order("valid_from", { ascending: false }),
-    // Promoción global vigente de cada sucursal ("cada N unidades del mismo producto, X %"): a lo sumo una por sucursal.
-    supabase.from("branch_promotions").select("branch_id, every_units, discount_bps").eq("organization_id", context.organizationId).eq("active", true)
+    // Promoción global vigente de cada sucursal ("desde N unidades del mismo producto, X % sobre toda la línea"): a lo sumo una por sucursal.
+    supabase.from("branch_promotions").select("branch_id, minimum_units, discount_bps").eq("organization_id", context.organizationId).eq("active", true)
   ]);
   const error = [productsResult.error, branchesResult.error, categoriesResult.error, discountsResult.error, branchPromotionsResult.error].find(Boolean);
   const products = productsResult.data;
@@ -89,7 +89,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const activeBranchPromotions = new Map((branchPromotionsResult.data ?? []).map((promotion) => [promotion.branch_id, promotion]));
   const branchPromotionRows: BranchPromotionRow[] = branches.map((branch) => {
     const promotion = activeBranchPromotions.get(branch.id);
-    return { branchId: branch.id, branchName: branch.name, promotion: promotion ? { everyUnits: promotion.every_units, discountBps: promotion.discount_bps } : null };
+    return { branchId: branch.id, branchName: branch.name, promotion: promotion ? { minimumUnits: promotion.minimum_units, discountBps: promotion.discount_bps } : null };
   });
 
   const rows: PromotionRow[] = discounts.map((discount) => ({

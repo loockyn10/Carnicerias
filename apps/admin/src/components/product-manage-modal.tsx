@@ -5,13 +5,15 @@ import { useActionState, useEffect, useRef, useState } from "react";
 
 import { manageProductAction, type ProductManageState } from "../app/admin/actions";
 import { ProductPricingFields } from "./product-pricing-fields";
+import { ProductCategoryField } from "./product-category-field";
+import { ProductPackFields } from "./product-pack-fields";
 import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 
 interface ProductManageModalProps {
   product: {
-    id: string; categoryId: string | null; categoryIds: string[]; name: string; slug: string;
+    id: string; categoryId: string | null; name: string; slug: string;
     sku: string | null; unitType: "WEIGHT" | "UNIT"; active: boolean;
     inventoryRole: "RAW_MATERIAL" | "SELLABLE" | "BOTH"; hasUnitTypeHistory: boolean;
     barcodes: string[]; branchIds: string[];
@@ -19,6 +21,8 @@ interface ProductManageModalProps {
     primarySupplierId: string | null;
     /** Unidades por pack (sólo productos por unidad; null = sin pack). */
     packSizeUnits: number | null;
+    /** Descuento del pack en basis points (null sii no hay pack): cada producto tiene el suyo. */
+    packDiscountBps: number | null;
   };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
@@ -33,7 +37,7 @@ export function ProductManageModal({ product, price, promotion, categories, bran
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
   const activeRef = useRef<HTMLInputElement>(null);
-  const [primaryCategoryId, setPrimaryCategoryId] = useState(product.categoryId ?? "");
+  const [categoryId, setCategoryId] = useState(product.categoryId ?? "");
   const [unitType, setUnitType] = useState(product.unitType);
 
   useEffect(() => {
@@ -67,19 +71,8 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           <input name="current_price_cents" type="hidden" value={price?.cents ?? ""} /><input name="current_cost_cents" type="hidden" value={costCents ?? ""} />
           <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} defaultValue={product.name} name="name" required /></label>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm font-medium">Categoría principal<select className={input} name="category_id" onChange={(event) => setPrimaryCategoryId(event.target.value)} required value={primaryCategoryId}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <ProductCategoryField categories={categories} onChange={setCategoryId} value={categoryId} />
             <label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label>
-          </div>
-          <div className="rounded-lg bg-stone-50 p-3">
-            <p className="text-sm font-bold">También aparece en</p>
-            <div className="mt-2 flex flex-wrap gap-4 text-sm">
-              {categories.filter((category) => category.id !== primaryCategoryId).map((category) => (
-                <label className="flex items-center gap-2" key={category.id}>
-                  <input defaultChecked={product.categoryIds.includes(category.id)} name="category_ids" type="checkbox" value={category.id} /> {category.name}
-                </label>
-              ))}
-              {categories.length <= 1 ? <p className="text-stone-500">No hay más categorías para asignar.</p> : null}
-            </div>
           </div>
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se vende en</p>
@@ -105,13 +98,8 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           {/* Un <select> deshabilitado no viaja en el formulario: la forma de venta se manda igual para que el servidor sepa si es por unidad. */}
           {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
           <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
-          {unitType === "UNIT" ? (
-            <label className="grid gap-1 text-sm font-medium" data-testid="pack-size-field">
-              Unidades por pack
-              <input className={input} defaultValue={product.packSizeUnits ?? ""} inputMode="numeric" max="10000" min="2" name="pack_size_units" placeholder="Sin pack" step="1" type="number" />
-              <span className="text-xs text-stone-500">Opcional. Ejemplo: leche, 8. En el POS, «Pack» carga esa cantidad de unidades reales y les aplica 20% OFF. No es una promoción ni tiene precio propio; vacío = sin pack.</span>
-            </label>
-          ) : null}
+          <input name="current_pack_discount_bps" type="hidden" value={product.packDiscountBps ?? ""} />
+          {unitType === "UNIT" ? <ProductPackFields packDiscountBps={product.packDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
           <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>

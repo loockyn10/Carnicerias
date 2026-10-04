@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { createProductModalAction, type ProductModalState } from "../app/admin/actions";
+import { ProductCategoryField } from "./product-category-field";
 import { ProductPricingFields } from "./product-pricing-fields";
 import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
@@ -12,7 +13,6 @@ export function ProductCreateModal({ categories, branches, suppliers }: { catego
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
   const [isRawMaterial, setIsRawMaterial] = useState(false);
-  const [primaryCategoryId, setPrimaryCategoryId] = useState("");
   const [state, action, pending] = useActionState(createProductModalAction, {} as ProductModalState);
   const requiresPricing = isSellable || !isRawMaterial;
   useEffect(() => { if (state.success) setOpen(false); }, [state.success]);
@@ -24,16 +24,8 @@ export function ProductCreateModal({ categories, branches, suppliers }: { catego
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label>
-          <label className="grid gap-1 text-sm font-medium">Categoría principal<select className={input} name="category_id" onChange={(event) => setPrimaryCategoryId(event.target.value)} required value={primaryCategoryId}><option value="">Seleccionar</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+          <ProductCategoryField categories={categories} defaultValue="" placeholder="Seleccionar" />
         </div>
-        {primaryCategoryId && categories.length > 1 ? <div className="rounded-lg bg-stone-50 p-3">
-          <p className="text-sm font-bold">También aparece en</p>
-          <div className="mt-2 flex flex-wrap gap-4 text-sm">
-            {categories.filter((category) => category.id !== primaryCategoryId).map((category) => (
-              <label className="flex items-center gap-2" key={category.id}><input name="category_ids" type="checkbox" value={category.id} /> {category.name}</label>
-            ))}
-          </div>
-        </div> : null}
         <div className="rounded-lg bg-stone-50 p-3">
           <p className="text-sm font-bold">Se vende en</p>
           <p className="mt-1 text-xs text-stone-500">Sólo las sucursales marcadas ven este producto en su POS.</p>

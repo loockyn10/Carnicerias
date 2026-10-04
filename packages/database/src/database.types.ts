@@ -363,8 +363,10 @@ export type Database = {
           discount_bps: number
           every_units: number
           id: string
+          minimum_units: number
           organization_id: string
           scope: string
+          semantics: string
           updated_at: string
           valid_from: string
           valid_until: string | null
@@ -375,10 +377,12 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           discount_bps: number
-          every_units: number
+          every_units?: never
           id?: string
+          minimum_units: number
           organization_id: string
           scope?: string
+          semantics?: string
           updated_at?: string
           valid_from?: string
           valid_until?: string | null
@@ -389,10 +393,12 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           discount_bps?: number
-          every_units?: number
+          every_units?: never
           id?: string
+          minimum_units?: number
           organization_id?: string
           scope?: string
+          semantics?: string
           updated_at?: string
           valid_from?: string
           valid_until?: string | null
@@ -2453,6 +2459,7 @@ export type Database = {
           inventory_role: Database["public"]["Enums"]["product_inventory_role"]
           name: string
           organization_id: string
+          pack_discount_bps: number | null
           pack_size_units: number | null
           sku: string | null
           slug: string
@@ -2468,6 +2475,7 @@ export type Database = {
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
           name: string
           organization_id: string
+          pack_discount_bps?: number | null
           pack_size_units?: number | null
           sku?: string | null
           slug: string
@@ -2483,6 +2491,7 @@ export type Database = {
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
           name?: string
           organization_id?: string
+          pack_discount_bps?: number | null
           pack_size_units?: number | null
           sku?: string | null
           slug?: string
@@ -4486,7 +4495,11 @@ export type Database = {
         Returns: undefined
       }
       set_product_pack_size: {
-        Args: { p_pack_size_units: number; p_product_id: string }
+        Args: {
+          p_pack_discount_bps?: number
+          p_pack_size_units: number
+          p_product_id: string
+        }
         Returns: undefined
       }
       set_product_price: {

@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(120);
+select plan(127);
 
 -- ---------------------------------------------------------------------------------------------
 -- Shape and hardening
@@ -304,6 +304,29 @@ select is(
 select is(
   (select count(*) from public.product_prices pp join public.external_entity_links l on l.internal_id = pp.product_id and l.external_id = 'P1'),
   1::bigint, 'an unchanged price did not add a history row'
+);
+
+-- Una sola categoría por producto: reimportar un producto con OTRA categoría la reemplaza (la proyección no acumula categorías).
+select lives_ok($$select public.create_import_batch('simplygest', 'product', 'prod-cat', null, 'e3000000-0000-4000-8000-000000000001')$$, 'category-change batch');
+select lives_ok($t$select public.stage_import_rows(
+  (select id from public.import_batches where file_name = 'prod-cat'),
+  $j$[
+    {"rowNumber":1,"externalId":"P1","payload":{"name":"Coca Cola 2.25 L Retornable","unitType":"UNIT","sku":"coca-225","categoryName":"Existente"}}
+  ]$j$::jsonb)$t$, 'category-change row staged');
+select lives_ok($$select public.preview_import_batch((select id from public.import_batches where file_name = 'prod-cat'))$$, 'category-change batch previewed');
+select is(public.apply_import_batch((select id from public.import_batches where file_name = 'prod-cat')) -> 'result' ->> 'updated', '1', 'category-change batch applied');
+select is(
+  (select c.name from public.products p join public.categories c on c.id = p.category_id join public.external_entity_links l on l.internal_id = p.id and l.external_id = 'P1'),
+  'Existente', 'the imported product moved to the new category'
+);
+select is(
+  (select count(*) from public.product_category_assignments a join public.external_entity_links l on l.internal_id = a.product_id and l.external_id = 'P1'),
+  1::bigint, 'after changing the category of an imported product it still has exactly ONE category assignment'
+);
+select is(
+  (select a.category_id from public.product_category_assignments a join public.external_entity_links l on l.internal_id = a.product_id and l.external_id = 'P1'),
+  (select p.category_id from public.products p join public.external_entity_links l on l.internal_id = p.id and l.external_id = 'P1'),
+  'and that assignment is the product''s new principal category (the old one was replaced, not kept)'
 );
 
 -- Linking a pre-existing manual product explicitly (by SKU), with a price change + history.

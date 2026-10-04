@@ -95,8 +95,9 @@ export type {
   SourceQuantityVerdict
 } from "./catalog-import";
 export {
-  calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, isValidPackSizeUnits, MAX_PACK_SIZE_UNITS,
-  MIN_PACK_SIZE_UNITS, PACK_DISCOUNT_BPS, packRealUnits, promotedUnitsFor, unitDiscountCents
+  calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, DEFAULT_PACK_DISCOUNT_BPS, formatBasisPointsPercent, isValidPackDiscountBps,
+  isValidPackSizeUnits, MAX_PACK_DISCOUNT_BPS, MAX_PACK_SIZE_UNITS, MIN_PACK_DISCOUNT_BPS, MIN_PACK_SIZE_UNITS, packRealUnits,
+  promotedUnitsFor, unitDiscountCents
 } from "./unit-discounts";
 export type { BranchUnitPromotion, UnitDiscountKind, UnitDiscountPricing, UnitPackSale } from "./unit-discounts";
 export {
