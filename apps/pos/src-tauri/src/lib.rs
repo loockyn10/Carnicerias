@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 use uuid::Uuid;
 
+mod printer;
 mod scale;
 
 const INITIAL_SCHEMA: &str = include_str!("../migrations/001_offline_core.sql");
@@ -28,6 +29,7 @@ const FLEXIBLE_PRICING_SCHEMA: &str = include_str!("../migrations/016_flexible_p
 const UNIT_PACKS_PROMOTIONS_SCHEMA: &str = include_str!("../migrations/017_unit_packs_and_branch_promotions.sql");
 const PACK_CONFIG_SCHEMA: &str = include_str!("../migrations/018_pack_config_versions.sql");
 const PACK_DISCOUNT_SCHEMA: &str = include_str!("../migrations/019_pack_discount_single_category_threshold_promotions.sql");
+const RECEIPT_SNAPSHOTS_SCHEMA: &str = include_str!("../migrations/020_receipt_snapshots.sql");
 
 /// Un producto sin precio (precio 0, importado desde SimplyGest) nunca se vende: el POS pide el precio antes de agregarlo al ticket.
 const PRICE_REQUIRED: &str = "PRICE_REQUIRED: el producto no tiene precio; fijá el precio antes de venderlo.";
@@ -630,6 +632,15 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(PACK_DISCOUNT_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (19, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
+    // 020: nombre del operador y de la sucursal de cada venta (snapshot local para el ticket impreso). Sólo ADD COLUMN nulas.
+    let receipt_snapshots_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 20)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !receipt_snapshots_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(RECEIPT_SNAPSHOTS_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (20, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -1746,13 +1757,25 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         return Err("Sale, item, and payment totals differ".to_string());
     }
 
+    // Snapshot local (sólo para el ticket impreso, no viaja al servidor): quién atendió y en qué sucursal, con los nombres de hoy.
+    let operator_name: Option<String> = transaction
+        .query_row("select display_name from local_pos_operators where profile_id = ?1", [&sale.profile_id], |row| row.get(0))
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let branch_name: Option<String> = transaction
+        .query_row("select branch_name from local_device where singleton = 1", [], |row| row.get(0))
+        .optional()
+        .map_err(|error| error.to_string())?
+        .flatten();
     transaction
         .execute(
             "insert into local_sales(id, organization_id, branch_id, profile_id, device_id, status,
-              total_cents, total_weight_grams, created_at, completed_at, ticket_discount_bps, ticket_discount_cents)
-             values (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10, ?11)",
+              total_cents, total_weight_grams, created_at, completed_at, ticket_discount_bps, ticket_discount_cents,
+              operator_name_snapshot, branch_name_snapshot)
+             values (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![sale.sale_id, sale.organization_id, sale.branch_id, sale.profile_id, sale.device_id,
-                    computed_total, computed_weight, sale.created_at, sale.completed_at, ticket_discount_bps, ticket_discount_cents],
+                    computed_total, computed_weight, sale.created_at, sale.completed_at, ticket_discount_bps, ticket_discount_cents,
+                    operator_name, branch_name],
         )
         .map_err(|error| error.to_string())?;
 
@@ -1870,6 +1893,129 @@ fn recent_local_sales(connection: &Connection, limit: i64) -> Result<Vec<RecentL
         })
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+/// Snapshots de una venta tal como se guardaron, para armar el ticket impreso (`SaleReceipt` en el POS). Sólo lee
+/// `local_sales`/`local_sale_items`/`local_payments`: NUNCA el catálogo ni los precios, promociones o packs vigentes,
+/// así una reimpresión histórica no cambia aunque después cambie el precio, el pack o el nombre del producto.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaleReceiptSource {
+    sale_id: String,
+    status: String,
+    completed_at: String,
+    branch_name: Option<String>,
+    operator_name: Option<String>,
+    total_cents: String,
+    ticket_discount_bps: i64,
+    ticket_discount_cents: String,
+    payment: Option<SaleReceiptPayment>,
+    items: Vec<SaleReceiptItemSource>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaleReceiptPayment { method: String, provider: Option<String>, verification_status: String }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaleReceiptItemSource {
+    product_name: String,
+    weight_grams: Option<i64>,
+    quantity_units: Option<i64>,
+    /// Precio final cobrado por kg (WEIGHT) o por unidad (UNIT), ya con promoción y recargo de tarjeta.
+    charged_price_cents: String,
+    /// Precio de lista de ese momento (snapshot de la línea).
+    original_price_cents: String,
+    subtotal_cents: String,
+    promotion_discount_cents: String,
+    card_surcharge_cents: String,
+    promotion_mode: Option<String>,
+    discount_type: Option<String>,
+    discount_value: Option<i64>,
+    manual_price_applied: bool,
+    manual_unit_price_cents: Option<String>,
+    sold_as_pack: bool,
+    pack_count: Option<i64>,
+    pack_size_units_snapshot: Option<i64>,
+    pack_discount_bps: Option<i64>,
+    branch_promotion_minimum_units: Option<i64>,
+    branch_promotion_discount_bps: Option<i64>,
+}
+
+#[tauri::command]
+fn get_sale_receipt_source(state: State<'_, DatabaseState>, sale_id: String) -> Result<Option<SaleReceiptSource>, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    sale_receipt_source(&connection, &sale_id)
+}
+
+fn sale_receipt_source(connection: &Connection, sale_id: &str) -> Result<Option<SaleReceiptSource>, String> {
+    let header = connection
+        .query_row(
+            // Respaldo para ventas anteriores a la migración 020 (sin snapshot): el nombre actual del operador / dispositivo.
+            "select s.status, s.completed_at, coalesce(s.branch_name_snapshot, d.branch_name), coalesce(s.operator_name_snapshot, o.display_name),
+                    s.total_cents, s.ticket_discount_bps, s.ticket_discount_cents
+             from local_sales s
+             left join local_device d on d.singleton = 1
+             left join local_pos_operators o on o.profile_id = s.profile_id
+             where s.id = ?1",
+            [sale_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((status, completed_at, branch_name, operator_name, total_cents, ticket_discount_bps, ticket_discount_cents)) = header else {
+        return Ok(None);
+    };
+    let payment = connection
+        .query_row(
+            "select method, provider, verification_status from local_payments where sale_id = ?1 order by rowid limit 1",
+            [sale_id],
+            |row| Ok(SaleReceiptPayment { method: row.get(0)?, provider: row.get(1)?, verification_status: row.get(2)? }),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let mut statement = connection
+        .prepare(
+            "select product_name_snapshot, weight_grams, quantity_units, price_per_kg_cents, coalesce(original_price_per_kg_cents, price_per_kg_cents),
+                    subtotal_cents, promotion_discount_cents, card_surcharge_cents, promotion_mode, discount_type, discount_value,
+                    manual_price_applied, manual_unit_price_cents, sold_as_pack, pack_count, pack_size_units_snapshot, pack_discount_bps,
+                    branch_promotion_every_units, branch_promotion_discount_bps
+             from local_sale_items where sale_id = ?1 order by rowid",
+        )
+        .map_err(|error| error.to_string())?;
+    let items = statement
+        .query_map([sale_id], |row| {
+            Ok(SaleReceiptItemSource {
+                product_name: row.get(0)?,
+                weight_grams: row.get(1)?,
+                quantity_units: row.get(2)?,
+                charged_price_cents: row.get::<_, i64>(3)?.to_string(),
+                original_price_cents: row.get::<_, i64>(4)?.to_string(),
+                subtotal_cents: row.get::<_, i64>(5)?.to_string(),
+                promotion_discount_cents: row.get::<_, i64>(6)?.to_string(),
+                card_surcharge_cents: row.get::<_, i64>(7)?.to_string(),
+                promotion_mode: row.get(8)?,
+                discount_type: row.get(9)?,
+                discount_value: row.get(10)?,
+                manual_price_applied: row.get::<_, i64>(11)? != 0,
+                manual_unit_price_cents: row.get::<_, Option<i64>>(12)?.map(|value| value.to_string()),
+                sold_as_pack: row.get::<_, i64>(13)? != 0,
+                pack_count: row.get(14)?,
+                pack_size_units_snapshot: row.get(15)?,
+                pack_discount_bps: row.get(16)?,
+                branch_promotion_minimum_units: row.get(17)?,
+                branch_promotion_discount_bps: row.get(18)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(Some(SaleReceiptSource {
+        sale_id: sale_id.to_string(), status, completed_at, branch_name, operator_name,
+        total_cents: total_cents.to_string(), ticket_discount_bps, ticket_discount_cents: ticket_discount_cents.to_string(),
+        payment, items,
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -2217,6 +2363,11 @@ pub fn run() {
             record_shift_heartbeat_local,
             confirm_local_sale,
             get_recent_local_sales,
+            get_sale_receipt_source,
+            printer::list_printers,
+            printer::get_printer_settings,
+            printer::set_printer_settings,
+            printer::print_document,
             get_pending_provider_payments,
             set_local_payment_verification,
             set_manual_transfer_policy,
@@ -2256,7 +2407,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 19);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 20);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -2308,7 +2459,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 19);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 20);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -4271,7 +4422,7 @@ mod tests {
 
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select max(version) from schema_migrations", [], |r| r.get::<_, i64>(0)).unwrap(), 19);
+        assert_eq!(connection.query_row("select max(version) from schema_migrations", [], |r| r.get::<_, i64>(0)).unwrap(), 20);
         let pairs: Vec<(String, String)> = connection.prepare("select product_id, category_id from catalog_product_categories order by product_id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap();
         assert_eq!(pairs, vec![("coca".into(), "bebidas".into()), ("leche-a".into(), "almacen".into()), ("leche-b".into(), "lacteos".into())], "only the principal category of each product remains");
         let packs: Vec<(String, i64, String, i64)> = connection.prepare("select product_id, pack_size_units, pack_config_id, pack_discount_bps from catalog_product_packs order by product_id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().collect::<Result<_, _>>().unwrap();
@@ -4405,5 +4556,100 @@ mod tests {
         // Una línea armada con la versión vieja ya no la acepta este dispositivo (vende con el catálogo que tiene hoy).
         let stale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None);
         assert!(try_insert(&mut connection, &stale).unwrap_err().contains("size does not match"));
+    }
+
+    // ---- Ticket impreso (sprint "ticket no fiscal"): la fuente del recibo sale sólo de los snapshots de la venta ----------
+
+    #[test]
+    fn migration_020_adds_nullable_name_snapshots_and_a_sale_stores_the_names_of_that_moment() {
+        let (mut connection, device_id) = pack_fixture();
+        for column in ["operator_name_snapshot", "branch_name_snapshot"] {
+            assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sales') where name = ?1", [column], |row| row.get::<_, i64>(0)).unwrap(), 1, "{column}");
+        }
+        connection.execute("update local_device set branch_name = 'Central'", []).unwrap();
+        let sale = flex_payload(device_id, "CASH", vec![normal_unit("hamburguesa", 2, 800)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        // Después se renombran el operador y la sucursal: el ticket de la venta vieja sigue diciendo lo de entonces.
+        connection.execute("update local_pos_operators set display_name = 'Otro nombre'", []).unwrap();
+        connection.execute("update local_device set branch_name = 'Sucursal renombrada'", []).unwrap();
+        let source = sale_receipt_source(&connection, &sale.sale_id).unwrap().unwrap();
+        assert_eq!((source.operator_name.as_deref(), source.branch_name.as_deref()), (Some("Operador"), Some("Central")));
+    }
+
+    #[test]
+    fn a_sale_from_before_migration_020_prints_with_the_current_operator_and_branch_names() {
+        let (mut connection, device_id) = pack_fixture();
+        connection.execute("update local_device set branch_name = 'Central'", []).unwrap();
+        let sale = flex_payload(device_id, "CASH", vec![normal_unit("hamburguesa", 1, 800)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        connection.execute("update local_sales set operator_name_snapshot = null, branch_name_snapshot = null", []).unwrap();
+        let source = sale_receipt_source(&connection, &sale.sale_id).unwrap().unwrap();
+        assert_eq!((source.operator_name.as_deref(), source.branch_name.as_deref()), (Some("Operador"), Some("Central")));
+    }
+
+    #[test]
+    fn the_receipt_of_a_pack_sale_is_not_rewritten_when_the_pack_the_price_and_the_name_change_afterwards() {
+        let (mut connection, device_id) = pack_fixture();
+        connection.execute("update local_device set branch_name = 'Avenida'", []).unwrap();
+        let sale = flex_payload(device_id, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        let before = serde_json::to_value(sale_receipt_source(&connection, &sale.sale_id).unwrap().unwrap()).unwrap();
+        // Mañana: el pack pasa de 8 al 25 %/12, el precio sube y el producto se renombra en el catálogo.
+        let mut changed = catalog_row("hamburguesa", "Hamburguesa Premium", "UNIT", &[]);
+        changed.branch_id = "branch".into();
+        changed.price_per_kg_cents = "950".into();
+        changed.pack_size_units = Some(12);
+        changed.pack_config_id = Some("cfg-12".into());
+        changed.pack_discount_bps = Some(2_500);
+        let mut payload = pull(vec![changed], &[]);
+        payload.branch_id = "branch".into();
+        apply_catalog_pull_inner(&mut connection, &payload, "profile", "a@b.c").unwrap();
+        connection.execute("update catalog_prices set price_per_kg_cents = 950", []).unwrap();
+        connection.execute("update catalog_products set name = 'Hamburguesa Premium'", []).unwrap();
+        let after = serde_json::to_value(sale_receipt_source(&connection, &sale.sale_id).unwrap().unwrap()).unwrap();
+        assert_eq!(before, after, "reprinting reads only the sale snapshots");
+        let item = &after["items"][0];
+        assert_eq!(
+            (item["soldAsPack"].clone(), item["packCount"].clone(), item["packSizeUnitsSnapshot"].clone(), item["packDiscountBps"].clone(), item["originalPriceCents"].clone(), item["quantityUnits"].clone()),
+            (serde_json::json!(true), serde_json::json!(1), serde_json::json!(8), serde_json::json!(2000), serde_json::json!("800"), serde_json::json!(8)),
+        );
+        assert_eq!((item["promotionDiscountCents"].clone(), item["subtotalCents"].clone()), (serde_json::json!("1280"), serde_json::json!("5120")));
+    }
+
+    #[test]
+    fn the_receipt_source_carries_the_branch_promotion_the_manual_price_and_the_ticket_discount_snapshots() {
+        let (mut connection, device_id) = flexible_fixture(true);
+        // Coca de $12.000 vendida a $10.000 (precio manual) con 5 % de descuento general.
+        let manual = flex_payload(device_id, "CASH", vec![manual_unit("coca", 1, 1_200_000, 1_000_000)], Some((500, 50_000)));
+        try_insert(&mut connection, &manual).unwrap();
+        let source = sale_receipt_source(&connection, &manual.sale_id).unwrap().unwrap();
+        assert_eq!((source.ticket_discount_bps, source.ticket_discount_cents.as_str(), source.total_cents.as_str()), (500, "50000", "950000"));
+        let item = &source.items[0];
+        assert!(item.manual_price_applied);
+        assert_eq!((item.manual_unit_price_cents.as_deref(), item.original_price_cents.as_str(), item.charged_price_cents.as_str()), (Some("1000000"), "1200000", "1000000"));
+
+        let (mut connection, device_id) = pack_fixture();
+        let promo = flex_payload(device_id, "CASH", vec![promo_line("hamburguesa", 800, 4, 3, 1_500, 0, "promo-1")], None);
+        try_insert(&mut connection, &promo).unwrap();
+        let source = sale_receipt_source(&connection, &promo.sale_id).unwrap().unwrap();
+        let item = &source.items[0];
+        assert_eq!((item.branch_promotion_minimum_units, item.branch_promotion_discount_bps, item.promotion_discount_cents.as_str(), item.subtotal_cents.as_str()), (Some(3), Some(1_500), "480", "2720"));
+        assert!(!item.sold_as_pack && item.pack_count.is_none());
+    }
+
+    #[test]
+    fn the_receipt_source_exposes_the_payment_state_so_a_cancelled_or_pending_charge_is_never_printed_as_final() {
+        let (mut connection, device_id) = pack_fixture();
+        let sale = flex_payload(device_id, "TRANSFER", vec![normal_unit("hamburguesa", 1, 800)], None);
+        try_insert(&mut connection, &sale).unwrap();
+        let payment_of = |connection: &Connection| { let source = sale_receipt_source(connection, &sale.sale_id).unwrap().unwrap(); source.payment.unwrap() };
+        let manual = payment_of(&connection);
+        assert_eq!((manual.method.as_str(), manual.provider.as_deref(), manual.verification_status.as_str()), ("TRANSFER", None, "NOT_REQUIRED"));
+        connection.execute("update local_payments set provider = 'MERCADOPAGO', verification_status = 'PENDING'", []).unwrap();
+        assert_eq!(payment_of(&connection).verification_status, "PENDING");
+        assert!(apply_provider_payment_status(&connection, &sale.sale_id, "CANCELLED").unwrap());
+        let cancelled = payment_of(&connection);
+        assert_eq!((cancelled.provider.as_deref(), cancelled.verification_status.as_str()), (Some("MERCADOPAGO"), "CANCELLED"));
+        assert!(sale_receipt_source(&connection, "missing-sale").unwrap().is_none());
     }
 }

@@ -47,7 +47,10 @@ import { isManualTransferOffered, isSessionDegraded, resolveMercadoPagoAvailabil
 import { readManualTransferAllowed, readMercadoPagoEnabled, writeMercadoPagoEnabled } from "./lib/mercadopago-capability";
 import { reconcilePendingMercadoPago } from "./lib/mercadopago-reconcile";
 import { describeLocalPayment } from "./lib/mercadopago-state";
-import { PostSaleBar } from "./PostSaleBar";
+import { PostSaleBar, type PostSalePrintView } from "./PostSaleBar";
+import { PrinterSettingsModal } from "./PrinterSettingsModal";
+import { isPrinterReady, printerApi, printSaleReceipt, shouldAutoPrint, type PrinterSettings } from "./lib/printer";
+import { canPrintReceipt } from "./lib/receipt";
 import { WhatsAppQrModal } from "./WhatsAppQrModal";
 import { requestWhatsAppClaim } from "./lib/whatsapp-claim";
 import { canOfferTicket, resolveWhatsAppAvailability } from "./lib/whatsapp-ticket-state";
@@ -362,6 +365,13 @@ export default function App() {
   // venta cuyo QR se está mostrando (modal). El teléfono nunca se pide ni se escribe en el POS.
   const [postSale, setPostSale] = useState<{ saleId: string; totalCents: string | null } | null>(null);
   const [whatsappSaleId, setWhatsappSaleId] = useState<string | null>(null);
+  // Ticket impreso (no fiscal): configuración LOCAL de la impresora de esta computadora, la pantalla de configuración y
+  // el último trabajo de impresión. Un error de impresión nunca toca la venta: sólo se muestra y se ofrece reintentar.
+  const [printerSettings, setPrinterSettings] = useState<PrinterSettings | null>(null);
+  const [printerModalOpen, setPrinterModalOpen] = useState(false);
+  const [printJob, setPrintJob] = useState<{ saleId: string; phase: "printing" | "done" | "error"; message: string | null } | null>(null);
+  const autoPrintedSaleIds = useRef<Set<string>>(new Set());
+  const printInFlight = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDiagnostics, setErrorDiagnostics] = useState<string | null>(null);
@@ -1422,7 +1432,7 @@ export default function App() {
   const scanHandlerRef = useRef(handleScan);
   scanHandlerRef.current = handleScan;
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
-    && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && mpPanelSale === null && whatsappSaleId === null && !loading;
+    && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !printerModalOpen && mpPanelSale === null && whatsappSaleId === null && !loading;
 
   useEffect(() => {
     if (!scannerEnabled) return;
@@ -1520,6 +1530,49 @@ export default function App() {
   // Vender sigue siendo rápido: en cuanto se carga el próximo producto, la barra de "Venta completada" se va sola.
   useEffect(() => { if (ticket.length > 0) setPostSale(null); }, [ticket.length]);
 
+  // ---- Ticket impreso no fiscal ---------------------------------------------------------------------------
+  // Por ahora sólo en el POS de la sucursal productiva (`centralPos`, la capacidad que informa el servidor: nunca el nombre);
+  // el resto de la capa de impresión no sabe de sucursales, así que habilitarla en otra es sólo cambiar esta condición.
+  const printerVisible = desktop && centralPos;
+  const printerReady = printerVisible && isPrinterReady(printerSettings);
+  useEffect(() => {
+    if (!desktop) return;
+    void printerApi.getSettings().then(setPrinterSettings).catch(() => setPrinterSettings(null));
+  }, [desktop]);
+
+  // Todo el camino es local (SQLite -> ESC/POS -> spooler): imprime igual sin Internet. No lanza ni toca la venta.
+  const runPrint = useCallback(async (saleId: string, reprint: boolean) => {
+    if (printInFlight.current) return;
+    printInFlight.current = true;
+    setPrintJob({ saleId, phase: "printing", message: null });
+    try {
+      const outcome = await printSaleReceipt(saleId, { reprint });
+      setPrintJob({ saleId, phase: outcome.ok ? "done" : "error", message: outcome.ok ? null : outcome.message });
+    } finally {
+      printInFlight.current = false;
+    }
+  }, []);
+
+  // Impresión automática: una sola vez por venta. `postSale` sólo existe para una venta COMPLETED con el cobro confirmado
+  // (una venta Mercado Pago recién cuando el backend confirmó el pago), así que nunca imprime un ticket pendiente o anulado.
+  useEffect(() => {
+    if (!postSale) return;
+    if (!shouldAutoPrint({ settings: printerSettings, visible: printerVisible, saleId: postSale.saleId, alreadyPrinted: autoPrintedSaleIds.current })) return;
+    autoPrintedSaleIds.current.add(postSale.saleId);
+    void runPrint(postSale.saleId, false);
+  }, [postSale?.saleId, printerSettings, printerVisible, runPrint]);
+
+  function postSalePrintView(saleId: string): PostSalePrintView | null {
+    if (!printerVisible) return null;
+    if (!printerReady) return { phase: "unconfigured" };
+    if (printJob?.saleId === saleId) {
+      if (printJob.phase === "printing") return { phase: "printing" };
+      if (printJob.phase === "error") return { phase: "error", message: printJob.message ?? "No se pudo imprimir el ticket." };
+      return { phase: "done" };
+    }
+    return { phase: "ready" };
+  }
+
   const requestClaimForSale = useCallback(async (saleId: string) => {
     if (!localRuntime?.deviceId || !operator?.operatorToken) {
       return { kind: "error", message: "Seleccioná un empleado autorizado.", canRetry: false } as const;
@@ -1561,7 +1614,11 @@ export default function App() {
       setNotice(`Venta ${short}: pago de Mercado Pago confirmado`);
       // Recién con el cobro confirmado por el backend se ofrece el ticket definitivo.
       const panel = mpPanelSaleRef.current;
-      setPostSale({ saleId, totalCents: panel?.saleId === saleId ? panel.totalCents.toString() : null });
+      const confirmedSale = { saleId, totalCents: panel?.saleId === saleId ? panel.totalCents.toString() : null };
+      // El ticket impreso se arma desde SQLite y sólo imprime un cobro CONFIRMED: se asegura el caché local (idempotente) ANTES
+      // de ofrecer/imprimir el ticket final, en vez de depender de que el espejo asíncrono ya haya terminado.
+      if (desktop) void localDatabase.setPaymentVerification(saleId, "CONFIRMED").catch(() => false).then(() => setPostSale(confirmedSale));
+      else setPostSale(confirmedSale);
     }
     else if (outcome === "NOT_PAID") setNotice(`${title}. La venta ${short} quedó anulada: no se cobró y su stock se restituyó.`);
     else setNotice(`Venta ${short}: revisá el cobro de Mercado Pago (${title}) y avisá al administrador.`);
@@ -1943,6 +2000,16 @@ export default function App() {
             </button>
           ) : null}
           <button className="pos-recent-sales rounded-xl border border-stone-700 px-3 py-2 text-xs font-black hover:bg-stone-800" onClick={() => setRecentSalesOpen(true)}><span className="pos-label-full">Ventas recientes</span><span className="pos-label-compact">Ventas</span></button>
+          {printerVisible ? (
+            <button
+              className={`shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-black hover:bg-stone-800 ${printerReady ? "border-stone-700" : "border-amber-700 text-amber-200"}`}
+              onClick={() => setPrinterModalOpen(true)}
+              title={printerReady ? `Impresora de tickets: ${printerSettings.printerName}` : "La impresora de tickets no está configurada en esta caja"}
+              type="button"
+            >
+              🖨 Impresora
+            </button>
+          ) : null}
           {desktop ? (
             <button
               className={`pos-sync w-56 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-center text-xs font-black tabular-nums ${syncStatus.state === "error" ? "border-red-700 bg-red-950 text-red-200" : syncStatus.state === "offline" || sessionDegraded ? "border-amber-700 bg-amber-950 text-amber-200" : "border-emerald-700 bg-emerald-950 text-emerald-200"}`}
@@ -2022,8 +2089,11 @@ export default function App() {
           saleLabel={postSale.saleId.slice(0, 8)}
           totalLabel={postSale.totalCents ? formatCurrency(BigInt(postSale.totalCents)) : null}
           availability={whatsappAvailability}
+          print={postSalePrintView(postSale.saleId)}
           onNewSale={() => setPostSale(null)}
           onSendTicket={() => setWhatsappSaleId(postSale.saleId)}
+          onPrint={() => void runPrint(postSale.saleId, false)}
+          onConfigurePrinter={() => setPrinterModalOpen(true)}
         />
       ) : null}
       {scanFeedback ? <div className={`pos-toast ${scanFeedback.tone === "warn" ? "pos-toast-warn" : ""}`} role="status">{scanFeedback.tone === "ok" ? "✓ " : "⚠ "}{scanFeedback.text}</div> : null}
@@ -2391,7 +2461,7 @@ export default function App() {
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{printerVisible && canPrintReceipt(sale) ? <div className="grid justify-items-end gap-1"><button className="rounded-lg border border-stone-500 px-2 py-1 text-xs font-black text-stone-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!printerReady || printJob?.phase === "printing"} title={printerReady ? undefined : "Configurá la impresora de tickets"} type="button" onClick={() => void runPrint(sale.saleId, true)}>Reimprimir ticket</button>{printJob?.saleId === sale.saleId ? <span className={`max-w-48 text-right text-xs font-bold ${printJob.phase === "error" ? "text-amber-300" : "text-emerald-400"}`} data-testid="reprint-status">{printJob.phase === "printing" ? "Imprimiendo…" : printJob.phase === "error" ? printJob.message : "Ticket enviado a la impresora."}</span> : null}</div> : null}{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
           </section>
         </div>
       ) : null}
@@ -2404,6 +2474,14 @@ export default function App() {
           onClose={closeMercadoPagoPanel}
           onVerification={mirrorMercadoPagoVerification}
           onSettled={handleMercadoPagoSettled}
+        />
+      ) : null}
+
+      {printerModalOpen && printerVisible ? (
+        <PrinterSettingsModal
+          settings={printerSettings}
+          onSaved={setPrinterSettings}
+          onClose={() => setPrinterModalOpen(false)}
         />
       ) : null}
 

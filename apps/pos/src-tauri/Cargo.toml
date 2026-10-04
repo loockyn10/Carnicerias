@@ -27,3 +27,9 @@ serialport = { version = "4", default-features = false }
 tauri = { version = "2", features = [] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+
+# Impresión directa de tickets: API nativa del spooler de Windows (winspool.drv, datatype RAW).
+# Sólo se compila en Windows; en Debian el backend de impresión responde PRINTER_UNSUPPORTED
+# (ver apps/pos/src-tauri/src/printer/mod.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Printing"] }

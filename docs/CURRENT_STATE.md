@@ -553,6 +553,16 @@ Decisión y reglas en `DECISIONS.md` D-064, `DOMAIN_RULES.md` ("Pack y promoció
 - **Validación:** `pnpm check` OK (business-logic 416, sync 18, admin 130, pos 280); `cargo test --lib` 120/120; `pnpm build:pos:desktop` OK. Postgres vía PGlite (sin Docker; 61 migraciones aplican) con shim pgTAP: `pack_discount_threshold_promotions` 154/154, `single_product_category` 45/45 (reemplaza a `product_multi_category.test.sql`), `unit_packs_and_branch_promotions` 152/152, `import_infrastructure` 127/127 (con las mutaciones relevantes verificadas) y sin regresión frente a la línea base en los 34 archivos pgTAP (las mismas fallas del shim de siempre); la migración sobre **datos** (estado de producción con multicategoría y packs al 20 %) se probó aplicando `060` + fixture + `061` (18 verificaciones). **REQUIERE VERIFICACIÓN:** nada corrió contra Postgres/Supabase real, ni la UI del modal en la app de escritorio real.
 - **Tipos:** `database.types.ts` y `database.rpc-null-overrides.ts` editados a mano (`products.pack_discount_bps`, `branch_promotions.minimum_units`, `set_product_pack_size`, `save_branch_promotion`); reemplazar con `supabase gen types --linked` tras el `db push`.
 
+## Ticket impreso no fiscal en Central — implementado 2026-10-04 (D-065, sin impresora física probada, sin tocar Supabase)
+
+Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket impreso no fiscal»).
+
+- **Rust:** módulo `printer` (`escpos.rs` codificación y code pages, `mod.rs` settings + `PrinterBackend` + comandos `list_printers` / `get_printer_settings` / `set_printer_settings` / `print_document`, `spooler_windows.rs` con `windows-sys` 0.61 sólo en Windows) y `get_sale_receipt_source`. Dependencia nueva: `windows-sys` (target Windows, ya estaba en el lockfile).
+- **SQLite `020`** (`local_sales.operator_name_snapshot`, `branch_name_snapshot`, nulas). Configuración de la impresora en `sync_metadata` (sin migración).
+- **POS:** `lib/receipt.ts` (`SaleReceipt`, `receiptPrintability`), `lib/receipt-render.ts` (renderer 42/32 columnas), `lib/printer.ts` (`printSaleReceipt`, errores, auto-impresión una vez por venta), `PrinterSettingsModal`, botón «Impresora» en el header (sólo `centralPos`), `PostSaleBar` con «Imprimir ticket» / «Reintentar impresión» y «Reimprimir ticket» en Ventas recientes.
+- **Validación:** `pnpm check` OK (pos 346, business-logic 416, admin 130, sync 18); `cargo test --lib` 147/147 (incluye la enumeración real del spooler de Windows y la impresora inexistente); `pnpm build:pos:desktop` OK (instalador NSIS generado).
+- **Sólo con impresora física:** salida real del RAW ESC/POS, acentos/ñ con la code page elegida, corte y avance de papel, columnas reales (42 vs 48) y velocidad. Ver `TASKS.md`.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -640,6 +650,7 @@ Decisión y reglas en `DECISIONS.md` D-064, `DOMAIN_RULES.md` ("Pack y promoció
 17. `017_unit_packs_and_branch_promotions.sql`
 18. `018_pack_config_versions.sql`
 19. `019_pack_discount_single_category_threshold_promotions.sql`
+20. `020_receipt_snapshots.sql`
 
 ### Estado remoto
 

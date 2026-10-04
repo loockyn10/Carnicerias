@@ -361,7 +361,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           discount_bps: number
-          every_units: number
+          every_units: number | null
           id: string
           minimum_units: number
           organization_id: string
@@ -377,7 +377,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           discount_bps: number
-          every_units?: never
+          every_units?: number | null
           id?: string
           minimum_units: number
           organization_id: string
@@ -393,7 +393,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           discount_bps?: number
-          every_units?: never
+          every_units?: number | null
           id?: string
           minimum_units?: number
           organization_id?: string

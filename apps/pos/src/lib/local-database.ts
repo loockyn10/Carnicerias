@@ -100,6 +100,47 @@ export interface RecentLocalSale {
   /** Estado de verificación cacheado del pago (NOT_REQUIRED para medios manuales). */
   verificationStatus: string | null;
 }
+/**
+ * Snapshots de una venta tal como se guardaron (`get_sale_receipt_source`): sólo `local_sales`/`local_sale_items`/
+ * `local_payments`, nunca el catálogo de hoy. Es la única entrada del ticket impreso (`lib/receipt.ts`).
+ */
+export interface LocalSaleReceiptItemSource {
+  productName: string;
+  weightGrams: number | null;
+  quantityUnits: number | null;
+  /** Precio final cobrado por kg/unidad (con promoción y recargo de tarjeta). Centavos. */
+  chargedPriceCents: string;
+  /** Precio de lista de ese momento por kg/unidad. Centavos. */
+  originalPriceCents: string;
+  subtotalCents: string;
+  promotionDiscountCents: string;
+  cardSurchargeCents: string;
+  promotionMode: string | null;
+  discountType: string | null;
+  discountValue: number | null;
+  manualPriceApplied: boolean;
+  manualUnitPriceCents: string | null;
+  soldAsPack: boolean;
+  packCount: number | null;
+  packSizeUnitsSnapshot: number | null;
+  packDiscountBps: number | null;
+  branchPromotionMinimumUnits: number | null;
+  branchPromotionDiscountBps: number | null;
+}
+
+export interface LocalSaleReceiptSource {
+  saleId: string;
+  status: string;
+  completedAt: string;
+  branchName: string | null;
+  operatorName: string | null;
+  totalCents: string;
+  ticketDiscountBps: number;
+  ticketDiscountCents: string;
+  payment: { method: string; provider: string | null; verificationStatus: string } | null;
+  items: LocalSaleReceiptItemSource[];
+}
+
 /** Venta local declarada Mercado Pago cuyo pago el servidor todavía no confirmó (caché local). */
 export interface PendingProviderPayment {
   saleId: string;
@@ -150,6 +191,8 @@ export const localDatabase = {
   confirmSale: (sale: OfflineSalePayload) =>
     desktopOnly<LocalSaleReceipt>("confirm_local_sale", { sale }),
   recentSales: (limit = 10) => desktopOnly<RecentLocalSale[]>("get_recent_local_sales", { limit }),
+  /** Snapshots de una venta para el ticket impreso (null = no existe en esta caja). Sólo SQLite: funciona sin Internet. */
+  saleReceiptSource: (saleId: string) => desktopOnly<LocalSaleReceiptSource | null>("get_sale_receipt_source", { saleId }),
   /** Cobros Mercado Pago que se pueden retomar (PENDING / ERROR). `includeStale` suma los de más de 12 h
    * (sólo para reconciliarlos contra el servidor; el aviso de pantalla no los muestra). */
   pendingProviderPayments: (limit = 10, includeStale = false) => desktopOnly<PendingProviderPayment[]>("get_pending_provider_payments", { limit, includeStale }),

@@ -87,7 +87,7 @@ describe("WhatsAppQrModal", () => {
 });
 
 describe("PostSaleBar", () => {
-  const props = { saleLabel: "f7000000", totalLabel: "$ 16.500", onNewSale: () => undefined, onSendTicket: () => undefined };
+  const props = { saleLabel: "f7000000", totalLabel: "$ 16.500", print: null, onNewSale: () => undefined, onSendTicket: () => undefined, onPrint: () => undefined, onConfigurePrinter: () => undefined };
 
   it("shows 'Venta completada' with Nueva venta and Ticket por WhatsApp, without blocking the screen", () => {
     const html = renderToStaticMarkup(<PostSaleBar {...props} availability={{ visible: true, usable: true }} />);
