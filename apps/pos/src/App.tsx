@@ -1063,10 +1063,6 @@ export default function App() {
   // El descuento general pertenece al ticket en curso: si se vacía (se eliminó la última línea) vuelve a 0.
   useEffect(() => { if (ticket.length === 0) setTicketDiscountInput(""); }, [ticket.length]);
   const ticketManualAdjustment = useMemo(() => sumMoney(ticket.map((line) => line.manualAdjustmentCents ?? 0n)), [ticket]);
-  const ticketWeight = useMemo(
-    () => ticket.reduce((total, line) => total + line.weightGrams, 0),
-    [ticket]
-  );
   const ticketListSubtotal = useMemo(() => sumMoney(ticket.map((line) => {
     const listPrice = line.originalPricePerKgCents ?? line.pricePerKgCents;
     return line.quantityUnits != null ? listPrice * BigInt(line.quantityUnits) : priceForWeight(listPrice, line.weightGrams);
@@ -2120,7 +2116,7 @@ export default function App() {
       ) : null}
       {scanFeedback ? <div className={`pos-toast ${scanFeedback.tone === "warn" ? "pos-toast-warn" : ""}`} role="status">{scanFeedback.tone === "ok" ? "✓ " : "⚠ "}{scanFeedback.text}</div> : null}
 
-      <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_410px]">
+      <div className="pos-workspace grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_clamp(410px,37vw,640px)]">
         <section className="pos-catalog min-w-0 border-stone-800 p-4 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:border-r lg:p-5">
           {centralPos ? (
             <CategoryPicker categories={categories} value={categoryId} onChange={setCategoryId} />
@@ -2183,18 +2179,17 @@ export default function App() {
         </section>
 
         <aside className="pos-ticket flex min-h-[520px] flex-col bg-stone-900 p-4 lg:min-h-0 lg:overflow-hidden lg:p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black">Ticket actual</h2>
-            {ticket.length ? (
+          {ticket.length ? (
+            <div className="mb-2 flex justify-end">
               <button
                 className="text-sm font-bold text-red-400 hover:text-red-300"
                 onClick={() => setCancelTicketModalOpen(true)}
               >
                 Cancelar
               </button>
-            ) : null}
-          </div>
-          <div className="pos-ticket-items mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto">
+            </div>
+          ) : null}
+          <div className="pos-ticket-items min-h-0 flex-1 space-y-3 overflow-y-auto">
             {ticket.length === 0 ? <div className="grid h-44 place-items-center rounded-2xl border border-dashed border-stone-700 text-center text-stone-500">Seleccioná un producto<br />para comenzar</div> : null}
             {ticket.map((line) => {
               const product = catalog.find((candidate) => candidate.productId === line.productId);
@@ -2243,8 +2238,7 @@ export default function App() {
           </div>
 
           <div className="pos-ticket-footer mt-4 shrink-0 border-t border-stone-700 pt-4">
-            <div className="flex justify-between text-sm text-stone-400"><span>Peso total</span><span>{formatWeight(ticketWeight)}</span></div>
-            <div className="pos-payment mt-5 grid gap-2 text-sm font-bold text-stone-300">
+            <div className="pos-payment grid gap-2 text-sm font-bold text-stone-300">
               <span id="payment-method-label">Método de pago</span>
               <div className={`pos-payment-buttons grid ${paymentColumns === 4 ? "grid-cols-2" : "grid-cols-3"} gap-2`} role="group" aria-labelledby="payment-method-label">
                 {paymentButtons.map((option) => {

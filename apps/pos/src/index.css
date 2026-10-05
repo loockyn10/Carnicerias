@@ -133,7 +133,7 @@ button {
     display: grid;
     min-height: 0;
     flex: 1 1 0%;
-    grid-template-columns: minmax(0, 1fr) clamp(330px, 34vw, 380px);
+    grid-template-columns: minmax(0, 1fr) clamp(330px, 37vw, 440px);
   }
 
   .pos-catalog {
@@ -209,15 +209,6 @@ button {
     min-height: 0;
     overflow: hidden;
     padding: 0.75rem;
-  }
-
-  .pos-ticket h2 {
-    font-size: 1.25rem;
-    line-height: 1.75rem;
-  }
-
-  .pos-ticket-items {
-    margin-top: 0.5rem;
   }
 
   .pos-ticket-item {
