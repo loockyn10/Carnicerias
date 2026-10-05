@@ -22,6 +22,8 @@ import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } 
 
 import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, stockForAvailability, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { CategoryPicker } from "./CategoryPicker";
+import { CentralProductList, type CentralRowBadge } from "./CentralProductList";
+import { catalogViewMode } from "./lib/central-list";
 import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
@@ -1041,6 +1043,14 @@ export default function App() {
   const visibleAvailable = availableProducts.slice(0, gridLimit);
   const visibleOutOfStock = outOfStockProducts.slice(0, Math.max(0, gridLimit - visibleAvailable.length));
   const hiddenCount = (availableProducts.length - visibleAvailable.length) + (showOutOfStock ? outOfStockProducts.length - visibleOutOfStock.length : 0);
+  // Central: lista compacta (con ventana virtual: no usa gridLimit); el resto de las sucursales conserva la grilla de cards.
+  const viewMode = catalogViewMode(centralPos);
+  // Primera regla por producto (lo mismo que mostraba la card con `slice(0, 1)`), resuelta una sola vez por cambio de `discounts`.
+  const firstDiscountByProduct = useMemo(() => {
+    const byProduct = new Map<string, DiscountRule>();
+    for (const rule of discounts) if (!byProduct.has(rule.productId)) byProduct.set(rule.productId, rule);
+    return byProduct;
+  }, [discounts]);
 
   // Descuento general (D-061): % libre en el input -> basis points. Un valor inválido (>100) no descuenta y
   // bloquea el cobro hasta corregirlo; fuera de Central no existe.
@@ -1103,6 +1113,18 @@ export default function App() {
     setQuantityInput(modal.quantity);
     setSellAsPack(line?.sellAsPack ?? line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
+  }
+
+  // Badges de la fila de Central: la misma regla de promoción que mostraba la card (la primera del producto) y el
+  // Pack UNIT si el producto lo ofrece en este POS (mismo texto que el diálogo de cantidad).
+  function centralRowBadges(product: CatalogProduct): CentralRowBadge[] {
+    const badges: CentralRowBadge[] = [];
+    const rule = firstDiscountByProduct.get(product.productId);
+    const label = rule ? discountBadgeLabel(rule) : null;
+    if (rule && label) badges.push({ kind: rule.promotionMode === "PACK_FIXED_TOTAL" ? "PACK" : "PROMO", label });
+    const offer = packOfferOf(product);
+    if (offer) badges.push({ kind: "PACK", label: `Pack ${String(offer.packSizeUnits)} u · ${formatBasisPointsPercent(offer.packDiscountBps)}% OFF` });
+    return badges;
   }
 
   // Mismo markup de card de siempre (el CSS compacto depende del orden name / category / price);
@@ -2125,6 +2147,17 @@ export default function App() {
               if (barcodeIndex.has(code) || (/^\d{6,}$/.test(code) && filteredProducts.length === 0)) { event.preventDefault(); setSearch(""); handleScan(code); }
             }}
           />
+          {viewMode === "LIST" ? (
+            availableProducts.length > 0 ? (
+              <CentralProductList
+                products={availableProducts}
+                onSelect={(product) => openWeight(product)}
+                badgesFor={centralRowBadges}
+                accentFor={(product) => categoryAccent(product.categoryColorHex)}
+                resetKey={`${categoryId}\u0000${search}`}
+              />
+            ) : null
+          ) : (
           <div className="pos-product-grid mt-4 grid auto-rows-max content-start grid-cols-2 gap-3 md:grid-cols-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1 xl:grid-cols-4">
             {stockGate !== null && availableProducts.length > 0 ? <h3 className="col-span-full text-xs font-black uppercase tracking-widest text-stone-400">Disponibles</h3> : null}
             {visibleAvailable.map((product) => renderProductCard(product, false))}
@@ -2145,6 +2178,7 @@ export default function App() {
             {showOutOfStock ? visibleOutOfStock.map((product) => renderProductCard(product, true)) : null}
             {hiddenCount > 0 ? <button className="col-span-full rounded-xl border border-stone-700 px-4 py-3 text-sm font-bold text-stone-300 hover:bg-stone-800" onClick={() => setGridLimit((limit) => limit + GRID_PAGE)} type="button">Mostrar más ({String(hiddenCount)} restantes) — o buscá por nombre / escaneá el código</button> : null}
           </div>
+          )}
           {!loading && filteredProducts.length === 0 ? <p className="mt-10 text-center text-stone-500">No hay productos disponibles.</p> : null}
         </section>
 

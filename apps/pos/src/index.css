@@ -37,6 +37,19 @@ button {
   overflow-y: auto;
 }
 
+/* Lista compacta de Central: alto acotado en pantallas angostas; en el workspace de dos columnas ocupa el resto de la columna. */
+.pos-central-list {
+  height: 60dvh;
+  min-height: 0;
+}
+
+@media (min-width: 1024px) {
+  .pos-central-list {
+    height: auto;
+    flex: 1 1 0%;
+  }
+}
+
 .pos-toast {
   position: fixed;
   top: 4.5rem;
@@ -162,6 +175,12 @@ button {
     gap: 0.4rem;
     margin-top: 0.5rem;
     overflow-y: auto;
+  }
+
+  .pos-central-list {
+    height: auto;
+    flex: 1 1 0%;
+    margin-top: 0.5rem;
   }
 
   .pos-product-card {

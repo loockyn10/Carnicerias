@@ -4176,6 +4176,10 @@ export type Database = {
         Args: { p_candidates: Json; p_source_system: string }
         Returns: Json
       }
+      preview_import_zero_price_purge: {
+        Args: { p_source_system: string }
+        Returns: Json
+      }
       publish_restock_announcement: {
         Args: { p_message: string; p_restock_event_id: string; p_title: string }
         Returns: string
@@ -4187,6 +4191,14 @@ export type Database = {
       purge_import_products: {
         Args: {
           p_candidates: Json
+          p_expected_delete_count: number
+          p_source_system: string
+        }
+        Returns: Json
+      }
+      purge_import_zero_price_products: {
+        Args: {
+          p_batch_size?: number
           p_expected_delete_count: number
           p_source_system: string
         }

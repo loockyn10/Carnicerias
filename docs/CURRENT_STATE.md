@@ -541,6 +541,10 @@ Decisiones y reglas en `DECISIONS.md` D-062/D-063, `DOMAIN_RULES.md` ("Pack y pr
 - **Validación:** `pnpm check` OK (business-logic 407, sync 18, admin 102, pos 269); `cargo test --lib` 111/111; `pnpm build:pos:desktop` OK. Postgres vía PGlite (sin Docker; 60 migraciones aplican) con shim pgTAP: `import_product_purge.test.sql` 64/64 y `unit_packs_and_branch_promotions.test.sql` 150/150 (verificados con mutaciones; las de la purga y del servidor/SQLite que sobrevivían se endurecieron), y sin regresión frente a la línea base 058 en los 31 archivos pgTAP (las mismas fallas del shim de antes: `initial_schema`, `manual_pricing`, `online_pos`, `operational_pilot`, `product_multi_category`, `production_batches`, `promotions_pack`, `shift_heartbeat_lease`, `stock_transfers`, `unit_sale_support`, `card_surcharge_pricing`). **REQUIERE VERIFICACIÓN:** nada corrió contra Postgres/Supabase real, ni la UI del modal en la app de escritorio real (sólo tests unitarios/de render), ni la purga contra datos reales.
 - **Tipos:** `database.types.ts` editado a mano (`branch_promotions`, columnas nuevas, 4 RPC; `set_product_pack_size` en `database.rpc-null-overrides.ts`); reemplazar con `supabase gen types --linked` tras el `db push`.
 
+## Purga por precio vigente $0 — implementado 2026-10-05 (extensión de D-062; sin aplicar a producción, purga NO ejecutada)
+
+Segundo modo `--zero-current-price` del script `purge-simplygest` + migración `202610050062_import_zero_price_purge.sql` (`preview_import_zero_price_purge` / `purge_import_zero_price_products`). Reglas y operación en `IMPORTS.md` ("Segundo modo"). El modo por `CANTIDAD` no cambió (sigue 64/64). **No se pudo hacer preview contra producción** (el CLI de Supabase respondió 403 al pedir un rol de login y no hay `PURGE_ADMIN_*` en el entorno): los 946 candidatos que reportó el usuario no están verificados; salen del primer `preview` tras el `db push`. Validación: `import_zero_price_purge.test.sql` 78/78 vía PGlite (con mutaciones), CLI de punta a punta contra el SQL real, `pnpm check` OK. `database.types.ts` editado a mano (2 RPC).
+
 ## Ajuste de D-063: Pack con descuento por producto, categoría única y promoción "desde N" — implementado 2026-10-04 (D-064, sin aplicar a producción)
 
 Decisión y reglas en `DECISIONS.md` D-064, `DOMAIN_RULES.md` ("Pack y promoción global por sucursal", "Categorías") y `ARCHITECTURE.md` ("Ajuste D-064"). `059` y `060` ya estaban aplicadas en producción y no se tocaron.
@@ -628,6 +632,7 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 59. `202610030059_import_product_purge.sql`
 60. `202610030060_unit_packs_and_branch_promotions.sql`
 61. `202610040061_pack_discount_single_category_threshold_promotions.sql`
+62. `202610050062_import_zero_price_purge.sql`
 
 ### SQLite POS
 

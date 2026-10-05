@@ -14,17 +14,26 @@
  *
  * Ejecución (desde apps/admin; Node >= 22.18 ejecuta TypeScript directamente):
  *   node --env-file=.env.local scripts/purge-simplygest/index.mts preview --file ..\simplygest.xlsx --quantity-column CANTIDAD
+ *
+ * Segundo modo, sin archivo: --zero-current-price. Los candidatos salen de la base: productos importados de SimplyGest cuyo precio VIGENTE
+ * existente es $0 ("SIN PRECIO ($0)" en el Admin; un producto sin ninguna fila de precio NO es candidato). Mismas protecciones que el modo
+ * por CANTIDAD (las clasifica el mismo clasificador SQL) y el mismo preview/apply:
+ *   node --env-file=.env.local scripts/purge-simplygest/index.mts preview --zero-current-price
+ *   node --env-file=.env.local scripts/purge-simplygest/index.mts apply --zero-current-price --confirm-count <DELETE_SAFE> --yes-delete-permanently
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, extname } from "node:path";
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import {
   buildPurgeCandidates, decodeCsvBytes, detectTableNumberFormat, parseCsvText, suggestColumnMapping, tableFromRecords, validateColumnMapping,
   type CatalogColumnMapping, type CatalogImportField, type CellValue, type ImportTable, type PurgeCandidate
 } from "../../../../packages/business-logic/src/catalog-import.ts";
-import { chunkItems, parseArgs, reportCsv, summarize, type PurgeArgs, type PurgePreviewItem } from "./core.mts";
+import {
+  chunkItems, describeReasons, parseArgs, reportCsv, summarize, zeroPriceApplyGuard, zeroPriceReportCsv,
+  type PurgeArgs, type PurgePreviewItem, type ZeroPriceApplyResult, type ZeroPricePreview
+} from "./core.mts";
 
 function fail(message: string): never {
   console.error(`\n✖ ${message}\n`);
@@ -64,9 +73,85 @@ function buildMapping(table: ImportTable, columns: PurgeArgs["columns"]): Catalo
   return mapping;
 }
 
+async function signInAsAdmin(): Promise<SupabaseClient> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const email = process.env.PURGE_ADMIN_EMAIL;
+  const password = process.env.PURGE_ADMIN_PASSWORD;
+  if (!url || !key || !email || !password) fail("Faltan variables de entorno: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, PURGE_ADMIN_EMAIL y PURGE_ADMIN_PASSWORD.");
+  const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const signedIn = await supabase.auth.signInWithPassword({ email, password });
+  if (signedIn.error) fail(`No se pudo iniciar sesión como administrador: ${signedIn.error.message}`);
+  return supabase;
+}
+
+/** Modo --zero-current-price: preview siempre (también antes de aplicar) y apply con el conteo exacto de DELETE_SAFE. */
+async function runZeroCurrentPrice(args: PurgeArgs) {
+  const supabase = await signInAsAdmin();
+  const previewed = await supabase.rpc("preview_import_zero_price_purge", { p_source_system: args.source });
+  if (previewed.error) fail(`La base rechazó el preview: ${previewed.error.message}`);
+  const preview = previewed.data as ZeroPricePreview;
+  const { summary } = preview;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const reportPath = args.out ?? `purga-precio-cero-${args.command}-${stamp}.csv`;
+
+  console.log(`Modo: precio vigente $0 | origen: ${preview.sourceSystem} | sucursal productiva: ${preview.branchName ?? preview.branchId}`);
+  console.log(`\nPREVIEW — ${String(summary.total)} candidatos con precio vigente $0: ${String(summary.deleteSafe)} DELETE_SAFE | ${String(summary.blocked)} BLOCKED | ${String(summary.notImported)} no importados (sin vínculo con ${preview.sourceSystem})`);
+  const reasons = Object.entries(preview.blockedByReason).sort((a, b) => b[1] - a[1]);
+  if (reasons.length) {
+    console.log("\nMotivos (un producto puede tener más de uno):");
+    for (const [reason, count] of reasons) console.log(`  ${String(count).padStart(5)}  ${describeReasons([reason])}  [${reason}]`);
+  }
+  const line = (item: ZeroPricePreview["items"][number]) => `  ${(item.sku ?? "—").padEnd(16)} ${item.productName.slice(0, 44).padEnd(44)} ${item.active ? "activo  " : "inactivo"} ${item.reasons.join(",")}`;
+  const safe = preview.items.filter((item) => item.verdict === "DELETE_SAFE");
+  const blocked = preview.items.filter((item) => item.verdict === "BLOCKED");
+  console.log("\nDELETE_SAFE (sku, nombre):");
+  for (const item of safe.slice(0, 25)) console.log(line(item));
+  if (safe.length > 25) console.log(`  … y ${String(safe.length - 25)} más (ver el reporte)`);
+  console.log("\nBLOCKED (no se tocan; sku, nombre, motivo):");
+  for (const item of blocked.slice(0, 100)) console.log(line(item));
+  if (blocked.length > 100) console.log(`  … y ${String(blocked.length - 100)} más (ver el reporte)`);
+  const notImported = preview.items.filter((item) => item.reasons.includes("NOT_IMPORTED_FROM_SOURCE"));
+  console.log(`\nProductos con precio $0 que NO son importados de ${preview.sourceSystem}: ${String(notImported.length)}`);
+  for (const item of notImported) console.log(line(item));
+
+  if (args.command === "preview") {
+    writeFileSync(reportPath, zeroPriceReportCsv(preview.items), "utf8");
+    console.log(`\nReporte completo: ${reportPath}\nNo se borró nada. Para borrar: apply --zero-current-price --confirm-count ${String(summary.deleteSafe)} --yes-delete-permanently`);
+    return;
+  }
+
+  const refusal = zeroPriceApplyGuard(args, summary.deleteSafe);
+  if (refusal) fail(refusal);
+  const outcome = new Map<string, string>();
+  let deleted = 0;
+  let remaining = summary.deleteSafe;
+  while (remaining > 0) {
+    // Una transacción por llamada; sin --batch-size es una única llamada con todos los DELETE_SAFE.
+    const applied = await supabase.rpc("purge_import_zero_price_products", { p_source_system: args.source, p_expected_delete_count: remaining, p_batch_size: args.batchSize });
+    if (applied.error) {
+      writeFileSync(reportPath, zeroPriceReportCsv(preview.items, outcome), "utf8");
+      fail(`La purga se detuvo: ${applied.error.message}\nBorrados hasta acá: ${String(deleted)}. Cada llamada es atómica y repetirla es seguro (volver a correr el preview). Reporte parcial: ${reportPath}`);
+    }
+    const result = applied.data as ZeroPriceApplyResult;
+    for (const entry of result.deleted) outcome.set(entry.productId, "BORRADO");
+    for (const entry of result.blocked) outcome.set(entry.productId, `NO BORRADO: ${entry.reasons.join(",")}`);
+    deleted += result.summary.deleted;
+    console.log(`  llamada: ${String(result.summary.deleted)} borrados, ${String(result.summary.remainingDeletable)} pendientes`);
+    if (args.batchSize === null || result.summary.deleted === 0) break;
+    remaining = result.summary.remainingDeletable;
+  }
+  writeFileSync(reportPath, zeroPriceReportCsv(preview.items, outcome), "utf8");
+  const notDeleted = summary.deleteSafe - deleted;
+  console.log(`\nLISTO — borrados: ${String(deleted)} | bloqueados (no se tocaron): ${String(summary.blocked)}\nReporte final: ${reportPath}`);
+  if (notDeleted > 0) console.log(`Atención: ${String(notDeleted)} productos DELETE_SAFE no se borraron (ver el reporte); volver a correr el preview.`);
+}
+
 async function main() {
   let args: PurgeArgs;
   try { args = parseArgs(process.argv.slice(2)); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+  if (args.mode === "zero-current-price") { await runZeroCurrentPrice(args); return; }
+  if (!args.file) fail("Falta --file <archivo de SimplyGest con la columna CANTIDAD>.");
 
   const table = await loadTable(args.file);
   const mapping = buildMapping(table, args.columns);
@@ -82,14 +167,7 @@ async function main() {
   console.log(`Sin CANTIDAD legible (no son candidatas): ${String(built.emptyQuantityRows + built.unreadableQuantityRows)} | filas que la importación había rechazado: ${String(built.notImportedRows)}`);
   if (!built.candidates.length) { console.log("\nNo hay candidatos."); return; }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const email = process.env.PURGE_ADMIN_EMAIL;
-  const password = process.env.PURGE_ADMIN_PASSWORD;
-  if (!url || !key || !email || !password) fail("Faltan variables de entorno: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, PURGE_ADMIN_EMAIL y PURGE_ADMIN_PASSWORD.");
-  const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  const signedIn = await supabase.auth.signInWithPassword({ email, password });
-  if (signedIn.error) fail(`No se pudo iniciar sesión como administrador: ${signedIn.error.message}`);
+  const supabase = await signInAsAdmin();
 
   const payload = (candidates: PurgeCandidate[]) => candidates.map((candidate) => ({ externalId: candidate.externalId, quantity: candidate.quantity, name: candidate.name }));
   const fileNames = new Map(built.candidates.map((candidate) => [candidate.externalId, candidate]));
