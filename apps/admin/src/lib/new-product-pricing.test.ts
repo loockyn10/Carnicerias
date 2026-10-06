@@ -37,6 +37,17 @@ describe("newProductPricingState (alta de producto: costo + margen → precio)",
     }
   });
 
+  it("categoría excluida del margen automático: con costo + margen el precio sigue siendo manual (nada derivado)", () => {
+    const state = newProductPricingState({ marginBps: 3_000, costRaw: "8000", priceRaw: "", excludedCategory: true });
+    expect(state).toMatchObject({ priceRequired: true, derivedPriceCents: null });
+    expect(state.message).toContain("precio manual");
+    expect(state.message).toContain("El costo se guarda igual");
+    // Un precio escrito a mano SÍ vale (no se ignora, a diferencia de un producto automático).
+    expect(resolveNewProductPricing({ sellable: true, active: true, marginBps: 3_000, costRaw: "8000", priceRaw: "12500", excludedCategory: true })).toBe("MANUAL");
+    expect(() => resolveNewProductPricing({ sellable: true, active: true, marginBps: 3_000, costRaw: "8000", priceRaw: "", excludedCategory: true })).toThrow(/precio manual/);
+    expect(resolveNewProductPricing({ sellable: true, active: true, marginBps: 3_000, costRaw: "8000", priceRaw: "12500" })).toBe("DERIVED");
+  });
+
   it("un producto inactivo no forma precio desde el costo", () => {
     const state = newProductPricingState({ marginBps: 3_000, costRaw: "10000", priceRaw: "", active: false });
     expect(state.priceRequired).toBe(true);

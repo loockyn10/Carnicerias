@@ -13,13 +13,13 @@ select plan(331);
 -- Forma y endurecimiento
 -- ---------------------------------------------------------------------------------------------
 select has_table('public', 'organization_pricing_settings', 'organization_pricing_settings exists');
-select has_function('public', 'save_pricing_config', array['integer','integer','integer','integer','boolean','boolean'], 'save_pricing_config RPC exists');
+select has_function('public', 'save_pricing_config', array['integer','integer','integer','integer','boolean','boolean','uuid[]'], 'save_pricing_config RPC exists');
 select has_function('public', 'close_branch_price_overrides', array['uuid[]'], 'close_branch_price_overrides RPC exists');
 select ok(not has_function_privilege('anon', 'public.close_branch_price_overrides(uuid[])', 'EXECUTE'), 'anonymous cannot close branch prices');
 select has_function('public', 'bulk_set_product_costs', array['jsonb','timestamptz'], 'bulk_set_product_costs RPC exists');
-select ok(not has_function_privilege('anon', 'public.save_pricing_config(integer,integer,integer,integer,boolean,boolean)', 'EXECUTE'), 'anonymous cannot save the pricing config');
+select ok(not has_function_privilege('anon', 'public.save_pricing_config(integer,integer,integer,integer,boolean,boolean,uuid[])', 'EXECUTE'), 'anonymous cannot save the pricing config');
 select ok(not has_function_privilege('anon', 'public.bulk_set_product_costs(jsonb,timestamptz)', 'EXECUTE'), 'anonymous cannot bulk-set costs');
-select ok(not has_function_privilege('authenticated', 'app_private.recalculate_prices_from_margin(uuid,integer,uuid,boolean,boolean)', 'EXECUTE'), 'the mass recalculation is not callable directly');
+select ok(not has_function_privilege('authenticated', 'app_private.recalculate_prices_from_margin(uuid,integer,uuid,boolean,boolean,uuid[],uuid[])', 'EXECUTE'), 'the mass recalculation is not callable directly');
 select ok(not has_function_privilege('authenticated', 'app_private.apply_unit_bulk_promotion(uuid,uuid,integer,uuid)', 'EXECUTE'), 'the promotion fan-out is not callable directly');
 select ok((select relrowsecurity from pg_class where oid = 'public.organization_pricing_settings'::regclass), 'organization_pricing_settings has RLS');
 select ok(not has_table_privilege('authenticated', 'public.organization_pricing_settings', 'INSERT'), 'browser clients cannot write the config table directly');

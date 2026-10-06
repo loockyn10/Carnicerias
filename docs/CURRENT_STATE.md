@@ -584,11 +584,17 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 
 **Antes:** el precio de lista era manual (D-037), el descuento de pack por producto (D-064) y la promoción «desde 3» se editaba por sucursal. **Ahora (D-068, detalle completo allí):** `precio = costo ÷ (1 − margen)` con el gross-up existente; configuración global en `organization_pricing_settings`; costo nuevo ⇒ precio nuevo en la misma transacción; recálculo masivo server-side con vista previa/confirmación; precio manual sólo como fallback (sin costo o sin margen; Quick Create y precio manual por línea de Central se conservan); pack global con **0 % válido** y versionado; «llevando 3u» global; precios por sucursal informados y cerrables (nunca borrados); importación que forma el precio desde costo + margen; recargo de tarjeta offline validado contra la configuración histórica de la venta.
 
-**Migración pendiente: `202610060065_global_pricing_config.sql` (la única; sin aplicar).** Cambios en POS (Rust/TS) sólo para el pack 0 % (labels y rango); el sync del servidor cambió en `sync_offline_sale_core` (pack 0 % y recargo histórico). El POS sigue en 0.1.0.
+**Migración `202610060065_global_pricing_config.sql`: ya aplicada en Supabase (verificado con `supabase migration list --linked`, 2026-10-07).** Cambios en POS (Rust/TS) sólo para el pack 0 % (labels y rango); el sync del servidor cambió en `sync_offline_sale_core` (pack 0 % y recargo histórico). El POS sigue en 0.1.0.
 
 **Qué NO se recalcula solo:** el costo de Desposte no reprecia; un cambio de margen sí recalcula todo producto activo y vendible con costo > 0, también los cortes de desposte. Hallazgo preexistente (sin cambiar): el sync offline no relee `product_prices`.
 
-**Validación (2026-10-06):** ver «Validación actual». **Pendiente contra Postgres real:** `supabase db push` y el smoke de TASKS.
+**Validación (2026-10-06):** ver «Validación actual». **Pendiente contra Postgres real:** el smoke de TASKS (y la migración 066 de abajo).
+
+## Categorías excluidas del margen automático (precio manual en carnicería) — implementado 2026-10-07 (D-069, sin aplicar)
+
+**Antes:** el margen global (D-068) reprecia todo producto activo/vendible con costo, también la carne. **Ahora (D-069, detalle allí):** `organization_pricing_excluded_categories` (IDs por organización, configurable en Productos → Precios → «Categorías excluidas del margen automático»). Producto de categoría excluida: costo nuevo (manual, carga masiva, importación, desposte) **sólo guarda el costo**; el cambio de margen no lo toca; precio manual en alta/ficha; carga masiva con «Precio manual». Sacar una categoría de la lista pide confirmación con vista previa (productos que pasan a automáticos y precios que cambian); agregar una no reprecia. Sin categoría = automático.
+
+**Migración pendiente: `202610070066_pricing_excluded_categories.sql` (la única; sin aplicar).** Reemplaza `apply_product_cost`, `bulk_set_product_costs`, `recalculate_prices_from_margin`, `save_pricing_config` (6 argumentos siguen válidos) e `import_apply_product`; no mueve datos ni recalcula nada.
 
 ## Migraciones locales confirmadas
 
@@ -656,7 +662,8 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 60. `202610030060_unit_packs_and_branch_promotions.sql`
 61. `202610040061_pack_discount_single_category_threshold_promotions.sql`
 62. `202610050062_import_zero_price_purge.sql`
-65. `202610060065_global_pricing_config.sql` (D-068: configuración global de precios; **sin aplicar**)
+65. `202610060065_global_pricing_config.sql` (D-068: configuración global de precios; aplicada)
+66. `202610070066_pricing_excluded_categories.sql` (D-069: categorías excluidas del margen automático; **sin aplicar**)
 64. `202610060064_bulk_deactivate_products.sql` (la `202610060063` existe en el repo pero no estaba listada acá)
 
 ### SQLite POS
@@ -687,6 +694,8 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 `REQUIERE VERIFICACIÓN`: el repositorio está vinculado al proyecto Supabase, pero no se ejecutó `migration list --linked` en ninguna sesión reciente. Evidencia indirecta (2026-09-24): una tarea de esta misma sesión detectó que `save_weight_discount` existe con dos overloads en un Supabase real inspeccionado por el usuario, lo que confirma que al menos parte de `202609230031` en adelante ya está aplicada en algún entorno — no asumir cuáles exactamente sin `supabase migration list --linked` autenticado.
 
 ## Validación actual
+
+- **Categorías excluidas del margen automático (D-069, 2026-10-07):** `pnpm check` OK (business-logic 431, admin 268, pos 432, sync 18); pgTAP vía PGlite: `pricing_excluded_categories` 111/111 (16 de 17 mutaciones muertas; la sobreviviente es equivalente), `global_pricing_config` 331/331 (sólo se actualizaron las firmas de `save_pricing_config`/`recalculate_prices_from_margin`) y el resto de la regresión de precios/importación idéntica a la línea base 065 (`manual_pricing`, `pos_quick_product`, `flexible_pricing_central`, `price_formation`, `card_surcharge_discount_precedence`, `pack_discount_threshold_promotions`, `unit_packs_and_branch_promotions`, `import_*`, `profitability_analytics`, `pos_set_product_price`, `single_product_category`). Sin Docker: no se corrió `supabase test db` ni `db lint` reales.
 
 - **Precio por margen global (D-068, 2026-10-06, cierre):** `pnpm check` OK (business-logic 431, admin 256, pos 432, sync 18); `cargo test --lib` 148/148; builds de Admin y POS OK; pgTAP vía PGlite: `global_pricing_config` 331/331, `card_surcharge_discount_precedence` 49/49, `pos_quick_product` 91/91, `flexible_pricing_central` 101/101, `pack_discount_threshold_promotions` 154/154, `unit_packs_and_branch_promotions` 152/152 e importadores sin cambios; suite completa idéntica a la línea base salvo los archivos nuevos/ampliados (los fallos del shim de PGlite en `initial_schema`, `online_pos`, `operational_pilot`, `production_batches`, `promotions_pack`, `shift_heartbeat_lease`, `stock_transfers`, `unit_sale_support` y `card_surcharge_pricing` 31/32 son preexistentes).
 - **Ajuste D-064 (Pack por producto, categoría única, promoción "desde N", 2026-10-04):** ver la sección propia más arriba (`pnpm check` OK, `cargo test --lib` 120/120, `pnpm build:pos:desktop`, pgTAP 154/154, 45/45, 152/152 y 127/127 vía PGlite).

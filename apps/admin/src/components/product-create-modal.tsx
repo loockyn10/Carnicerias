@@ -8,8 +8,9 @@ import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories, branches, suppliers, marginBps }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null }) {
+export function ProductCreateModal({ categories, branches, suppliers, marginBps, excludedCategoryIds = [] }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null; /** Categorías excluidas del margen automático (D-069): el precio de sus productos es manual. */ excludedCategoryIds?: string[] }) {
   const [open, setOpen] = useState(false);
+  const [categoryId, setCategoryId] = useState("");
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
   const [isSellable, setIsSellable] = useState(true);
   const [isRawMaterial, setIsRawMaterial] = useState(false);
@@ -24,7 +25,7 @@ export function ProductCreateModal({ categories, branches, suppliers, marginBps 
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label>
-          <ProductCategoryField categories={categories} defaultValue="" placeholder="Seleccionar" />
+          <ProductCategoryField categories={categories} onChange={setCategoryId} placeholder="Seleccionar" value={categoryId} />
         </div>
         <div className="rounded-lg bg-stone-50 p-3">
           <p className="text-sm font-bold">Se vende en</p>
@@ -45,7 +46,7 @@ export function ProductCreateModal({ categories, branches, suppliers, marginBps 
             <label className="flex items-center gap-2"><input checked={isRawMaterial} name="is_raw_material" onChange={(event) => setIsRawMaterial(event.target.checked)} type="checkbox" /> Materia prima (insumo de desposte)</label>
           </div>
         </div>
-        {requiresPricing ? <ProductPricingFields creationMarginBps={marginBps} currentCostCents={null} currentPriceCents={null} marginConfigured={marginBps !== null} required unitType={unitType} /> : <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-600">Una materia prima no necesita precio de venta: su costo se registra en cada desposte.</p>}
+        {requiresPricing ? <ProductPricingFields creationMarginBps={marginBps} currentCostCents={null} excludedCategory={excludedCategoryIds.includes(categoryId)} currentPriceCents={null} marginConfigured={marginBps !== null} required unitType={unitType} /> : <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-600">Una materia prima no necesita precio de venta: su costo se registra en cada desposte.</p>}
         <input name="slug" type="hidden" value="" /><label className="flex items-center gap-2 text-sm"><input defaultChecked name="active" type="checkbox" /> Producto activo</label>
         {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}
         <div className="mt-2 flex justify-end gap-2"><button className="rounded-lg px-4 py-2 text-sm font-bold text-stone-600" onClick={() => setOpen(false)} type="button">Cancelar</button><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Creando…" : "Crear producto"}</button></div>

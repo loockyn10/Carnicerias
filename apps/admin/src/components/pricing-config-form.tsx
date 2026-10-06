@@ -4,7 +4,7 @@ import { calculateListPriceFromMargin, formatCurrency } from "@carnicerias/busin
 import { useActionState, useMemo, useState, useTransition } from "react";
 
 import { closeBranchPriceOverridesAction, savePricingConfigAction, type CloseOverridesState, type PricingConfigState } from "../app/admin/actions";
-import { describePricingConfigOutcome, describePricingConfigPreview } from "../lib/pricing-config";
+import { describePricingConfigOutcome, describePricingConfigPreview, describePricingConfigPreviewNotes, describePricingConfigSample } from "../lib/pricing-config";
 
 const input = "w-28 rounded-lg border border-stone-300 bg-white px-3 py-2 text-right text-sm";
 
@@ -33,7 +33,14 @@ function previewPrice(marginField: string): string | null {
  * descuento por pack y recargo por tarjeta. Cambiar el margen recalcula los precios de lista de todos los productos con costo, así
  * que primero muestra una vista previa (cuántos precios cambian, cuántos productos no tienen costo) y pide confirmar.
  */
-export function PricingConfigForm({ values, branchOverrides = 0 }: { values: PricingConfigValues; /** Precios VIGENTES por sucursal de la organización (en el POS le ganan al precio global). */ branchOverrides?: number }) {
+export function PricingConfigForm({ values, branchOverrides = 0, categories = [], excludedCategoryIds = [] }: {
+  values: PricingConfigValues; /** Precios VIGENTES por sucursal de la organización (en el POS le ganan al precio global). */ branchOverrides?: number;
+  /** Categorías que se pueden excluir del margen automático (id + nombre). */ categories?: { id: string; name: string }[];
+  /** Categorías hoy excluidas (ids guardados). */ excludedCategoryIds?: string[];
+}) {
+  const [excluded, setExcluded] = useState<string[]>(() => [...excludedCategoryIds].sort());
+  const categoryNames = useMemo(() => Object.fromEntries(categories.map((category) => [category.id, category.name])), [categories]);
+  const toggleExcluded = (id: string) => setExcluded((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id].sort()));
   const [closing, startClosing] = useTransition();
   const [closeResult, setCloseResult] = useState<CloseOverridesState | null>(null);
   const closeOverrides = () => {
@@ -50,7 +57,7 @@ export function PricingConfigForm({ values, branchOverrides = 0 }: { values: Pri
   const set = (key: keyof typeof fields) => (event: { target: { value: string } }) => setFields((current) => ({ ...current, [key]: event.target.value }));
 
   // La vista previa sólo vale para los valores con los que se pidió: si se edita un campo después, hay que volver a guardar.
-  const signature = JSON.stringify(fields);
+  const signature = JSON.stringify({ ...fields, excluded });
   const preview = state.preview && state.signature === signature && dismissed !== state ? state.preview : null;
   const saved = state.successToken && state.result && state.signature === signature ? state.result : null;
   const example = useMemo(() => previewPrice(fields.margin), [fields.margin]);
@@ -65,7 +72,7 @@ export function PricingConfigForm({ values, branchOverrides = 0 }: { values: Pri
     <div className="grid gap-4 sm:grid-cols-2">
       <label className="grid gap-1 text-sm font-medium">Margen de ganancia
         <span className="flex items-center gap-2"><input className={input} inputMode="decimal" max="99.99" min="0.01" name="margin" onChange={set("margin")} required step="0.01" type="number" value={fields.margin} /> %</span>
-        <span className="text-xs font-normal text-stone-500">Porcentaje de ganancia sobre el precio de venta (no sobre el costo).{example ? ` Ejemplo: costo $ 10.000 con margen ${fields.margin.trim().replace(".", ",")}% → venta ${example}.` : ""}</span>
+        <span className="text-xs font-normal text-stone-500">Porcentaje de ganancia sobre el precio de venta (no sobre el costo). Margen automático: sólo para los productos con pricing automático (no para las categorías excluidas).{example ? ` Ejemplo: costo $ 10.000 con margen ${fields.margin.trim().replace(".", ",")}% → venta ${example}.` : ""}</span>
       </label>
       <label className="grid gap-1 text-sm font-medium">Dto llevando 3u
         <span className="flex items-center gap-2"><input className={input} inputMode="decimal" max="99.99" min="0" name="unit_bulk" onChange={set("unit_bulk")} required step="0.01" type="number" value={fields.unit_bulk} /> %</span>
@@ -80,6 +87,17 @@ export function PricingConfigForm({ values, branchOverrides = 0 }: { values: Pri
         <span className="text-xs font-normal text-stone-500">Se suma al precio base cuando el pago es con tarjeta (débito o crédito). Efectivo y transferencia no tienen ajuste.</span>
       </label>
     </div>
+    <fieldset className="grid gap-2 rounded-lg border border-stone-200 p-3" data-testid="excluded-categories">
+      <legend className="px-1 text-sm font-medium">Categorías excluidas del margen automático</legend>
+      <input name="excluded_sent" type="hidden" value="1" />
+      <p className="text-xs text-stone-500">El margen automático se aplica a los productos habilitados para pricing automático. Los productos de las categorías marcadas (por ejemplo, carnicería) conservan su precio: se escribe a mano y un costo nuevo sólo se guarda (sigue sirviendo para la rentabilidad). Un producto sin categoría es automático.</p>
+      {categories.length ? <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        {categories.map((category) => <label className="flex items-center gap-2" key={category.id}>
+          <input checked={excluded.includes(category.id)} name="excluded_category" onChange={() => toggleExcluded(category.id)} type="checkbox" value={category.id} /> {category.name}
+        </label>)}
+      </div> : <p className="text-sm text-stone-500">No hay categorías cargadas.</p>}
+      <p className="text-xs text-stone-500">{excluded.length ? `Excluidas: ${excluded.map((id) => categoryNames[id] ?? "Categoría").join(" · ")}. Agregar una categoría no cambia ningún precio; sacarla pide confirmación y recién ahí se recalculan sus productos.` : "Ninguna categoría excluida: el margen se aplica a todos los productos con costo."}</p>
+    </fieldset>
     {branchOverrides > 0 || closeResult?.successToken ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" data-testid="branch-overrides-notice" role="status">
       {closeResult?.successToken
         ? <p>Se cerraron {String(closeResult.closed ?? 0)} precio(s) por sucursal: ahora vale el precio global. Quedan en el historial.</p>
@@ -93,8 +111,13 @@ export function PricingConfigForm({ values, branchOverrides = 0 }: { values: Pri
 
     {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
     {preview ? <div className="grid gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="alertdialog">
-      <p className="font-bold">¿Recalcular los precios con el nuevo margen?</p>
-      <p>{describePricingConfigPreview(preview)}</p>
+      <p className="font-bold">{preview.marginChanged ? "¿Recalcular los precios con el nuevo margen?" : "¿Pasar estas categorías a pricing automático y recalcular sus precios?"}</p>
+      <ul className="grid gap-0.5" data-testid="pricing-preview">{describePricingConfigPreview(preview, categoryNames).map((line) => <li key={line}>{line}</li>)}</ul>
+      {preview.sample.length ? <div data-testid="pricing-preview-sample">
+        <p className="font-bold">Algunos precios que cambian:</p>
+        <ul className="list-disc pl-5">{describePricingConfigSample(preview).map((line) => <li key={line}>{line}</li>)}</ul>
+      </div> : null}
+      <ul className="grid gap-1 text-xs">{describePricingConfigPreviewNotes(preview).map((note) => <li key={note}>{note}</li>)}</ul>
       {preview.branchOverrides > 0 ? <label className="flex items-start gap-2 font-bold" data-testid="close-overrides-option">
         <input defaultChecked name="close_overrides" type="checkbox" />
         <span>Cerrar los {preview.branchOverrides.toLocaleString("es-AR")} precio(s) por sucursal de estos productos para que valga el precio global (se conservan en el historial).</span>

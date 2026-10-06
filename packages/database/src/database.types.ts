@@ -1362,6 +1362,52 @@ export type Database = {
           },
         ]
       }
+      organization_pricing_excluded_categories: {
+        Row: {
+          category_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+        }
+        Insert: {
+          category_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+        }
+        Update: {
+          category_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_pricing_excluded__category_id_organization_id_fkey"
+            columns: ["category_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "organization_pricing_excluded_categories_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_pricing_excluded_categories_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_pricing_settings: {
         Row: {
           created_at: string
@@ -4424,6 +4470,7 @@ export type Database = {
           p_card_surcharge_bps: number
           p_close_branch_overrides?: boolean
           p_confirm?: boolean
+          p_excluded_category_ids?: string[]
           p_margin_bps: number
           p_pack_discount_bps: number
           p_unit_bulk_discount_bps: number

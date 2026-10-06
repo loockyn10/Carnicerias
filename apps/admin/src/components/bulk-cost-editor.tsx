@@ -1,10 +1,10 @@
 "use client";
 
-import { formatCurrency } from "@carnicerias/business-logic";
+import { calculateListPriceFromMargin, formatCurrency } from "@carnicerias/business-logic";
 import { useActionState, useEffect, useMemo, useState } from "react";
 
 import { bulkSetProductCostsAction, type BulkCostState } from "../app/admin/actions";
-import { changedCostItems, costPlaceholder } from "../lib/bulk-costs";
+import { changedCostItems, costPlaceholder, parseCostCents } from "../lib/bulk-costs";
 import { normalizeSearchText } from "../lib/text-search";
 
 const input = "w-32 rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm";
@@ -18,6 +18,8 @@ export interface BulkCostRow {
   currentCostCents: number | null;
   /** Precio de lista vigente en centavos (null = sin precio). Dato de referencia: acá nunca se edita. */
   currentPriceCents: number | null;
+  /** Categoría excluida del margen automático (D-069): el costo se guarda pero el precio NO se recalcula (precio manual). */
+  manualPrice: boolean;
 }
 
 /**
@@ -25,7 +27,7 @@ export interface BulkCostRow {
  * recalcula en el servidor con el margen global, en la misma operación que guarda cada costo. Sólo se envían las filas cuyo costo
  * realmente cambió. Los precios de lista no se escriben acá (la columna «Precio actual» es de sólo lectura).
  */
-export function BulkCostEditor({ rows, marginConfigured }: { rows: BulkCostRow[]; marginConfigured: boolean }) {
+export function BulkCostEditor({ rows, marginConfigured, marginBps = null }: { rows: BulkCostRow[]; marginConfigured: boolean; /** Margen global en basis points: sólo para mostrar el precio que va a formar el servidor (no se envía). */ marginBps?: number | null }) {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [state, action, pending] = useActionState(bulkSetProductCostsAction, {} as BulkCostState);
@@ -86,7 +88,11 @@ export function BulkCostEditor({ rows, marginConfigured }: { rows: BulkCostRow[]
                   value={raw}
                 />
               </td>
-              <td className="p-3">{row.currentPriceCents !== null ? `${formatCurrency(BigInt(row.currentPriceCents))} ${suffix}` : "SIN PRECIO"}</td>
+              <td className="p-3">
+                {row.currentPriceCents !== null ? `${formatCurrency(BigInt(row.currentPriceCents))} ${suffix}` : "SIN PRECIO"}
+                {dirtyIds.has(row.id) && !row.manualPrice && marginBps !== null && parseCostCents(raw) !== null ? <span className="ml-2 font-bold text-emerald-800" data-testid="projected-price">{`→ ${formatCurrency(calculateListPriceFromMargin(BigInt(parseCostCents(raw) ?? 0), BigInt(marginBps)))}`}</span> : null}
+                {row.manualPrice ? <span className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs font-bold text-sky-900" data-testid="manual-price-badge" title="Categoría excluida del margen automático: el costo se guarda y el precio queda igual">Precio manual</span> : null}
+              </td>
             </tr>;
           })}</tbody>
         </table>
@@ -99,6 +105,7 @@ export function BulkCostEditor({ rows, marginConfigured }: { rows: BulkCostRow[]
       {state.successToken ? <p className="text-sm font-bold text-emerald-700">
         Guardado ({state.applied ?? 0} costo(s)){state.marginConfigured ? `; precios recalculados: ${String(state.repriced ?? 0)}` : "; margen sin configurar: los precios no cambiaron"}
         {state.scheduledPrice ? `; ${String(state.scheduledPrice)} con precio programado (no se tocó)` : ""}
+        {state.manualPrice ? `; ${String(state.manualPrice)} con precio manual (sólo se guardó el costo, el precio quedó igual)` : ""}
         {state.branchOverrides ? `. ATENCIÓN: ${String(state.branchOverrides)} producto(s) tienen un precio propio de sucursal que le gana al precio recalculado en el POS (cerralos desde «Configuración de precios»).` : ""}
       </p> : null}
       <button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-50" disabled={pending || changedItems.length === 0} type="submit">

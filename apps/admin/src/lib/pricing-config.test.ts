@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { changedCostItems, costPlaceholder, parseCostCents } from "./bulk-costs";
-import { describePricingConfigOutcome, describePricingConfigPreview, parsePricingConfigForm, parsePricingConfigOutcome } from "./pricing-config";
+import { describePricingConfigOutcome, describePricingConfigPreview, describePricingConfigPreviewNotes, describePricingConfigSample, parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome } from "./pricing-config";
 
 function form(values: Record<string, string>) {
   const data = new FormData();
@@ -45,6 +45,23 @@ describe("parsePricingConfigForm (configuración global de precios)", () => {
   });
 });
 
+describe("parseExcludedCategoryIds (categorías excluidas del margen automático, por id)", () => {
+  it("sin el marcador excluded_sent el formulario no tocó la lista (null: el servidor la deja como está)", () => {
+    expect(parseExcludedCategoryIds(form({}))).toBeNull();
+  });
+
+  it("con el marcador y ninguna casilla marcada la lista queda vacía (se quitaron todas)", () => {
+    expect(parseExcludedCategoryIds(form({ excluded_sent: "1" }))).toEqual([]);
+  });
+
+  it("devuelve los ids marcados, sin repetir ni vacíos (nunca nombres)", () => {
+    const data = new FormData();
+    data.set("excluded_sent", "1");
+    for (const id of ["a-1", "b-2", "a-1", " ", ""]) data.append("excluded_category", id);
+    expect(parseExcludedCategoryIds(data)).toEqual(["a-1", "b-2"]);
+  });
+});
+
 describe("resultado del guardado de la configuración", () => {
   const preview = parsePricingConfigOutcome({
     requiresConfirmation: true, previousMarginBps: 3000, marginBps: 3500, recalculated: 1843, unchanged: 54, withoutCost: 27, scheduledPrice: 0
@@ -57,11 +74,51 @@ describe("resultado del guardado de la configuración", () => {
   });
 
   it("la vista previa dice cuántos precios cambian, cuántos no tienen costo y cuántos no cambian", () => {
-    const message = describePricingConfigPreview(preview);
-    expect(message).toContain("1.843");
-    expect(message).toContain("27 productos sin costo conservan su precio");
-    expect(message).toContain("54 productos ya tienen ese precio");
-    expect(message).toContain("historial");
+    const lines = describePricingConfigPreview(preview);
+    expect(lines).toContain("Se recalcularán: 1.843 productos");
+    expect(lines).toContain("Sin costo (conservan su precio): 27");
+    expect(lines).toContain("Ya tienen ese precio: 54");
+    expect(describePricingConfigPreviewNotes(preview).join(" ")).toContain("historial");
+  });
+
+  it("la vista previa muestra los excluidos por categoría y los nombres de las categorías excluidas (Vaca · Cerdo · Pollo)", () => {
+    const withExclusions = parsePricingConfigOutcome({
+      requiresConfirmation: true, marginChanged: true, previousMarginBps: 2500, marginBps: 3000, recalculated: 1742, unchanged: 0, withoutCost: 21, excludedByCategory: 83,
+      branchOverrides: 4, excludedCategoryIds: ["c1", "c2", "c3"]
+    });
+    expect(describePricingConfigPreview(withExclusions, { c1: "Vaca", c2: "Cerdo", c3: "Pollo" })).toEqual([
+      "Margen nuevo: 30%",
+      "Se recalcularán: 1.742 productos",
+      "Excluidos por categoría (conservan su precio): 83",
+      "Sin costo (conservan su precio): 21",
+      "Ya tienen ese precio: 0",
+      "Con precio por sucursal: 4",
+      "Categorías excluidas: Vaca · Cerdo · Pollo"
+    ]);
+    expect(describePricingConfigPreviewNotes(withExclusions).join(" ")).toContain("NO van a cambiar de precio");
+    expect(describePricingConfigPreview({ ...withExclusions, excludedCategoryIds: [] })).toContain("Categorías excluidas: ninguna");
+  });
+
+  it("quitar una categoría de la exclusión sin cambiar el margen: dice cuántos productos pasan a automáticos y qué precios cambian", () => {
+    const removal = parsePricingConfigOutcome({
+      requiresConfirmation: true, marginChanged: false, marginBps: 3000, recalculated: 3, newlyAutomatic: 5, excludedByCategory: 10,
+      removedExcludedCategoryIds: ["c1"], excludedCategoryIds: ["c2"],
+      sample: [{ name: "Vacío", currentCents: 1_250_000, newCents: 1_142_857 }, { name: "Sin precio", currentCents: null, newCents: 500_000 }, { name: 7 }]
+    });
+    const lines = describePricingConfigPreview(removal, { c1: "Vaca", c2: "Cerdo" });
+    expect(lines[0]).toBe("Margen: 30% (sin cambios)");
+    expect(lines).toContain("Pasan a pricing automático (salen de la exclusión: Vaca): 5 productos");
+    expect(describePricingConfigSample(removal)).toEqual(["Vacío: $ 12.500 → $ 11.428,57", "Sin precio: sin precio → $ 5.000"]);
+    expect(describePricingConfigPreviewNotes(removal).join(" ")).toContain("vigencia nueva de precio");
+    expect(describePricingConfigOutcome({ ...removal, requiresConfirmation: false }, false)).toEqual([
+      "Productos que pasaron a pricing automático y se recalcularon: 3",
+      "Productos con precio manual (categorías excluidas, no se tocan): 10"
+    ]);
+  });
+
+  it("el resultado de un cambio de margen informa los productos con precio manual que no se tocaron", () => {
+    const lines = describePricingConfigOutcome(parsePricingConfigOutcome({ marginBps: 3500, previousMarginBps: 3000, recalculated: 9, excludedByCategory: 83 }), true);
+    expect(lines).toContain("Productos con precio manual (categorías excluidas, no se tocan): 83");
   });
 
   it("el resultado informa recalculados / sin costo / sin cambios, y packs y promociones actualizados", () => {
@@ -77,11 +134,11 @@ describe("resultado del guardado de la configuración", () => {
 
   it("la vista previa advierte de los precios por sucursal que le ganarían al global, y los que quedan fuera", () => {
     const withOverrides = parsePricingConfigOutcome({ requiresConfirmation: true, marginBps: 3500, recalculated: 10, unchanged: 1, withoutCost: 2, branchOverrides: 3, branchOverridesOther: 4 });
-    const message = describePricingConfigPreview(withOverrides);
+    const message = describePricingConfigPreviewNotes(withOverrides).join(" ");
     expect(message).toContain("ATENCIÓN: 3 productos tienen un precio propio de sucursal");
     expect(message).toContain("cerrarlos");
     expect(message).toContain("4 precios por sucursal");
-    expect(describePricingConfigPreview(preview)).not.toContain("ATENCIÓN");
+    expect(describePricingConfigPreviewNotes(preview).join(" ")).not.toContain("ATENCIÓN");
   });
 
   it("el resultado dice cuántos precios por sucursal se cerraron y avisa de los que siguen ganando", () => {

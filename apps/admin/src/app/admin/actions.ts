@@ -13,7 +13,7 @@ import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
 import { resolveNewProductPricing } from "../../lib/new-product-pricing";
-import { parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
+import { parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
 import type { Database } from "@carnicerias/database";
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
@@ -114,6 +114,17 @@ async function currentMarginBps(): Promise<number | null> {
   return data?.margin_bps ?? null;
 }
 
+/** ¿La categoría está excluida del margen automático (D-069)? Sus productos conservan el precio manual aunque tengan costo y haya margen. */
+async function isCategoryExcludedFromMargin(categoryId: string): Promise<boolean> {
+  if (!categoryId) return false;
+  const context = await requireAdminContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("organization_pricing_excluded_categories").select("category_id")
+    .eq("organization_id", context.organizationId).eq("category_id", categoryId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data !== null;
+}
+
 export async function saveProductAction(formData: FormData) {
   const name = text(formData, "name");
   await rpcOrThrow("save_product", {
@@ -188,7 +199,9 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
     // ni lo envía). Sólo se escribe si el admin lo CAMBIÓ respecto al vigente.
     const rawPrice = text(formData, "price");
     const costKnown = Boolean(rawDirectCost) || Number(text(formData, "current_cost_cents") || 0) > 0;
-    const derivedPrice = costKnown && inventoryRole(formData) !== "RAW_MATERIAL" && formData.get("active") === "on" && (await currentMarginBps()) !== null;
+    // Una categoría excluida del margen automático (D-069, carnicería) nunca deriva el precio: el costo se guarda y el precio sigue siendo manual.
+    const derivedPrice = costKnown && inventoryRole(formData) !== "RAW_MATERIAL" && formData.get("active") === "on" && (await currentMarginBps()) !== null
+      && !(await isCategoryExcludedFromMargin(text(formData, "category_id")));
     if (rawPrice && !derivedPrice) {
       const priceCents = pesosToCents(rawPrice);
       if (priceCents !== Number(text(formData, "current_price_cents") || 0)) {
@@ -244,7 +257,9 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     // lo forma el servidor (D-068, misma función que set_product_cost). Sin margen o sin costo hace falta el precio manual: si no se puede
     // formar ningún precio, el error dice por qué y NO se crea nada.
     const pricing = resolveNewProductPricing({
-      sellable: role !== "RAW_MATERIAL", active: formData.get("active") === "on", marginBps: await currentMarginBps(), costRaw: rawDirectCost, priceRaw: rawPrice
+      sellable: role !== "RAW_MATERIAL", active: formData.get("active") === "on", marginBps: await currentMarginBps(), costRaw: rawDirectCost, priceRaw: rawPrice,
+      // Categoría excluida del margen automático (D-069): el costo se guarda igual, pero el precio se escribe a mano.
+      excludedCategory: await isCategoryExcludedFromMargin(text(formData, "category_id"))
     });
     // create_product_with_pricing (202609130012) is called purely as "create the product row"
     // here: cost/markup are always omitted, so its optional save_product_pricing branch never
@@ -327,9 +342,12 @@ export async function savePricingConfigAction(_: PricingConfigState, formData: F
   const signature = text(formData, "signature");
   try {
     const input = parsePricingConfigForm(formData);
+    // Categorías excluidas del margen automático (D-069): por ID. Si el formulario no mandó la lista (null) el servidor la deja como está.
+    const excluded = parseExcludedCategoryIds(formData);
     const data = await rpcOrThrow("save_pricing_config", {
       p_margin_bps: input.marginBps, p_unit_bulk_discount_bps: input.unitBulkDiscountBps,
       p_pack_discount_bps: input.packDiscountBps, p_card_surcharge_bps: input.cardSurchargeBps,
+      ...(excluded !== null ? { p_excluded_category_ids: excluded } : {}),
       p_confirm: formData.get("confirm") === "1",
       // Cerrar (nunca borrar) los precios por sucursal de los productos que se reprecian, para que no le ganen al global. Sólo aplica con confirmación.
       p_close_branch_overrides: formData.get("close_overrides") === "on"
@@ -361,6 +379,8 @@ export interface BulkCostState {
   applied?: number;
   repriced?: number;
   scheduledPrice?: number;
+  /** Costos guardados de productos de categorías excluidas del margen (precio manual): su precio NO cambió. */
+  manualPrice?: number;
   marginConfigured?: boolean;
   /** Productos guardados que tienen un precio vigente de sucursal que le gana al precio global recién formado. */
   branchOverrides?: number;
@@ -393,11 +413,11 @@ export async function bulkSetProductCostsAction(_: BulkCostState, formData: Form
     const raw = text(formData, "items");
     const items = raw ? (JSON.parse(raw) as { productId: string; costCents: number }[]) : [];
     if (!items.length) throw new Error("No hay cambios para guardar");
-    const result = await rpcOrThrow("bulk_set_product_costs", { p_items: items }) as { applied?: number; repriced?: number; scheduledPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null;
+    const result = await rpcOrThrow("bulk_set_product_costs", { p_items: items }) as { applied?: number; repriced?: number; scheduledPrice?: number; manualPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null;
     revalidatePath("/admin/products");
     return {
       successToken: crypto.randomUUID(), applied: result?.applied ?? items.length, repriced: result?.repriced ?? 0,
-      scheduledPrice: result?.scheduledPrice ?? 0, marginConfigured: result?.marginConfigured ?? false, branchOverrides: result?.branchOverrides ?? 0
+      scheduledPrice: result?.scheduledPrice ?? 0, manualPrice: result?.manualPrice ?? 0, marginConfigured: result?.marginConfigured ?? false, branchOverrides: result?.branchOverrides ?? 0
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudieron guardar los costos" };

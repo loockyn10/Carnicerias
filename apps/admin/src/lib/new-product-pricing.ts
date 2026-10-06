@@ -18,10 +18,17 @@ export interface NewProductPricingState {
   message: string;
 }
 
-export function newProductPricingState(input: { marginBps: number | null; costRaw: string; priceRaw: string; active?: boolean }): NewProductPricingState {
+export function newProductPricingState(input: { marginBps: number | null; costRaw: string; priceRaw: string; active?: boolean; /** Categoría excluida del margen automático (D-069): el precio es siempre manual. */ excludedCategory?: boolean }): NewProductPricingState {
   const cost = parseCostCents(input.costRaw);
   const hasManualPrice = input.priceRaw.trim() !== "";
   const active = input.active ?? true;
+  if (input.excludedCategory) {
+    return {
+      priceRequired: true,
+      derivedPriceCents: null,
+      message: `Categoría con precio manual (excluida del margen automático): escribí el precio de venta.${cost !== null ? " El costo se guarda igual, para la rentabilidad, pero no calcula el precio." : ""}`
+    };
+  }
   if (input.marginBps !== null && cost !== null && active) {
     const derived = Number(calculateListPriceFromMargin(BigInt(cost), BigInt(input.marginBps)));
     return {
@@ -45,7 +52,7 @@ export type NewProductPricingSource = "NONE" | "MANUAL" | "DERIVED";
  * el servidor forma el precio; un precio escrito se ignora) o `MANUAL` (fallback: sin costo o sin margen, con el precio escrito). Si no puede formarse un
  * precio lanza un Error con el motivo (antes de crear nada).
  */
-export function resolveNewProductPricing(input: { sellable: boolean; active: boolean; marginBps: number | null; costRaw: string; priceRaw: string }): NewProductPricingSource {
+export function resolveNewProductPricing(input: { sellable: boolean; active: boolean; marginBps: number | null; costRaw: string; priceRaw: string; excludedCategory?: boolean }): NewProductPricingSource {
   if (!input.sellable) return "NONE";
   const state = newProductPricingState(input);
   if (!state.priceRequired) return "DERIVED";

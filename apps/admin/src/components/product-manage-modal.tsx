@@ -34,9 +34,11 @@ interface ProductManageModalProps {
   globalPackDiscountBps: number | null;
   /** ¿Hay un margen global configurado? Con margen, guardar un costo nuevo recalcula el precio de venta. */
   marginConfigured: boolean;
+  /** Categorías excluidas del margen automático (D-069): sus productos tienen precio manual aunque haya costo y margen. */
+  excludedCategoryIds?: string[];
 }
 
-export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers, globalPackDiscountBps, marginConfigured }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers, globalPackDiscountBps, marginConfigured, excludedCategoryIds = [] }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -103,7 +105,7 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
           <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
           {unitType === "UNIT" ? <ProductPackFields currentPackDiscountBps={product.packDiscountBps} globalPackDiscountBps={globalPackDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
-          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} marginConfigured={marginConfigured} unitType={unitType} />
+          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} excludedCategory={excludedCategoryIds.includes(categoryId)} marginConfigured={marginConfigured} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>
             <div className="mt-2 flex flex-wrap gap-4 text-sm">

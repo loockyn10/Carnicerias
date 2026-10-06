@@ -7,9 +7,9 @@ import { BulkCostEditor, type BulkCostRow } from "./bulk-cost-editor";
 vi.mock("../app/admin/actions", () => ({ bulkSetProductCostsAction: () => Promise.resolve({}) }));
 
 const rows: BulkCostRow[] = [
-  { id: "aceite", name: "Aceite Cañuelas", categoryName: "Aceites", unitType: "UNIT", currentCostCents: 350_000, currentPriceCents: 562_500 },
-  { id: "yerba", name: "Yerba XXX", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 400_000, currentPriceCents: 640_000 },
-  { id: "vacio", name: "Vacío", categoryName: "Carnes", unitType: "WEIGHT", currentCostCents: null, currentPriceCents: null }
+  { id: "aceite", name: "Aceite Cañuelas", categoryName: "Aceites", unitType: "UNIT", currentCostCents: 350_000, currentPriceCents: 562_500, manualPrice: false },
+  { id: "yerba", name: "Yerba XXX", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 400_000, currentPriceCents: 640_000, manualPrice: false },
+  { id: "vacio", name: "Vacío", categoryName: "Carnes", unitType: "WEIGHT", currentCostCents: null, currentPriceCents: null, manualPrice: false }
 ];
 
 describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio actual", () => {
@@ -51,6 +51,15 @@ describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio ac
   it("sin margen configurado avisa que los precios no se recalculan; con margen no", () => {
     expect(html).not.toContain("Todavía no configuraste el margen");
     expect(renderToStaticMarkup(<BulkCostEditor marginConfigured={false} rows={rows} />)).toContain("Todavía no configuraste el margen");
+  });
+
+  it("un producto de categoría excluida (precio manual) muestra su precio actual y «Precio manual»; los automáticos no", () => {
+    expect(html).not.toContain("manual-price-badge");
+    const manual = renderToStaticMarkup(<BulkCostEditor marginBps={3_000} marginConfigured rows={[{ id: "vacio", name: "Vacío", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 800_000, currentPriceCents: 1_250_000, manualPrice: true }, ...rows.slice(0, 1)]} />);
+    const vacioRow = manual.split("<tr").find((chunk) => chunk.includes("Vacío")) ?? "";
+    expect(vacioRow).toContain("$ 12.500 /kg");
+    expect(vacioRow).toContain("Precio manual");
+    expect(manual.match(/manual-price-badge/g)).toHaveLength(1);
   });
 
   it("sin filas lo dice", () => {

@@ -28,9 +28,11 @@ function formatBps(bps: bigint | null) {
  * fallback cuando falta el costo o el margen. Ganancia/rentabilidad son métricas informativas (precio − costo vigente, sólo lectura).
  */
 export function ProductPricingFields({
-  unitType, currentPriceCents, currentCostCents, required = false, marginConfigured = false, creationMarginBps
+  unitType, currentPriceCents, currentCostCents, required = false, marginConfigured = false, creationMarginBps, excludedCategory = false
 }: {
   unitType: "WEIGHT" | "UNIT"; currentPriceCents: number | null; currentCostCents: number | null; required?: boolean; marginConfigured?: boolean;
+  /** La categoría elegida está excluida del margen automático (D-069): el precio es manual aunque haya costo y margen. */
+  excludedCategory?: boolean;
   /** Sólo en el ALTA: margen global en basis points (null = sin configurar). Con costo + margen el precio no hace falta escribirlo. */
   creationMarginBps?: number | null;
 }) {
@@ -40,9 +42,10 @@ export function ProductPricingFields({
 
   const parsedPrice = useMemo(() => parseCents(price), [price]);
   // Alta: el precio sólo es obligatorio cuando no puede formarse solo (sin costo válido o sin margen configurado). El servidor lo vuelve a decidir.
-  const creation = creationMarginBps !== undefined ? newProductPricingState({ marginBps: creationMarginBps, costRaw: directCost, priceRaw: price }) : null;
+  const creation = creationMarginBps !== undefined ? newProductPricingState({ marginBps: creationMarginBps, costRaw: directCost, priceRaw: price, excludedCategory }) : null;
   // ¿El precio se deriva del costo? Alta: costo válido + margen. Producto existente: margen + costo vigente o un costo nuevo escrito.
-  const derived = creation ? !creation.priceRequired : marginConfigured && ((currentCostCents !== null && currentCostCents > 0) || parseCostCents(directCost) !== null);
+  // Nunca en una categoría excluida del margen automático: ahí el precio es manual y un costo nuevo sólo se guarda.
+  const derived = creation ? !creation.priceRequired : marginConfigured && !excludedCategory && ((currentCostCents !== null && currentCostCents > 0) || parseCostCents(directCost) !== null);
   const margin = useMemo(() => {
     if (parsedPrice === null || parsedPrice <= 0n || currentCostCents === null) return null;
     const costCents = BigInt(currentCostCents);
@@ -55,6 +58,7 @@ export function ProductPricingFields({
       <input className={input} min="0.01" name="price" onChange={(event) => setPrice(event.target.value)} disabled={derived} required={required && !derived} step="0.01" type="number" value={derived && creation?.derivedPriceCents != null ? centsInput(creation.derivedPriceCents) : price} />
     </label>
     {creation ? <p className={`rounded-lg p-2 text-xs ${creation.priceRequired ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-900"}`} data-testid="new-product-price-note">{creation.message}</p> : null}
+    {!creation && excludedCategory ? <p className="rounded-lg bg-sky-50 p-2 text-xs text-sky-900" data-testid="price-manual-note">Categoría con precio manual (excluida del margen automático): el precio de venta se escribe a mano y un costo nuevo no lo recalcula. El costo se guarda igual, para la rentabilidad.</p> : null}
     {!creation && derived ? <p className="rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900" data-testid="price-derived-note">Con el margen configurado el precio de venta se forma desde el costo (no se escribe a mano): al guardar un costo nuevo se recalcula.</p> : null}
     <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-3">
       <div><dt className="text-stone-500">Costo estimado vigente</dt><dd className="font-black">{currentCostCents !== null ? `${formatCurrency(BigInt(currentCostCents))} ${suffix}` : "No disponible"}</dd></div>
@@ -63,7 +67,9 @@ export function ProductPricingFields({
     </dl>
     <p className="text-xs text-stone-500" data-testid="cost-price-note">
       El costo se calcula solo (desposte) o se carga a mano si el producto se compra ya terminado.{" "}
-      {marginConfigured
+      {excludedCategory
+        ? "Esta categoría tiene precio manual: guardar un costo nuevo no cambia el precio de venta."
+        : marginConfigured
         ? "Al guardar un costo nuevo, el precio de venta se recalcula con el margen configurado. El precio manual sólo se usa si el producto no tiene costo."
         : "Todavía no hay un margen configurado (Productos → Precios): guardar un costo no modifica el precio de venta y el precio se escribe a mano."}
     </p>

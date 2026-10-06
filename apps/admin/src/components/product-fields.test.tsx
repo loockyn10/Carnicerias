@@ -43,7 +43,7 @@ describe("ProductCategoryField: una sola categoría por producto", () => {
     }
     const actions = source("../app/admin/actions.ts");
     expect(actions).not.toContain("set_product_categories");
-    expect(actions).not.toContain("category_ids");
+    expect(actions).not.toMatch(/\bcategory_ids\b/); // (p_excluded_category_ids es la lista de exclusión del margen, no categorías del producto)
   });
 
   it("la lista de productos ya no lee product_category_assignments (la categoría es products.category_id)", () => {

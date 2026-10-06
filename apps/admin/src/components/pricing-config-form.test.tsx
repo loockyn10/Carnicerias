@@ -60,6 +60,23 @@ describe("PricingConfigForm: margen, dto llevando 3u, dto por pack y recargo por
     expect(withOverrides).toContain("Cerrar precios por sucursal");
   });
 
+  it("categorías excluidas del margen automático: un selector múltiple por id, con las ya excluidas marcadas", () => {
+    const categories = [{ id: "c-almacen", name: "Almacén" }, { id: "c-vaca", name: "Vaca" }, { id: "c-cerdo", name: "Cerdo" }, { id: "c-pollo", name: "Pollo" }];
+    const withCategories = renderToStaticMarkup(<PricingConfigForm categories={categories} excludedCategoryIds={["c-vaca", "c-cerdo", "c-pollo"]} values={configured} />);
+    expect(withCategories).toContain("Categorías excluidas del margen automático");
+    expect(withCategories).toContain('name="excluded_sent"');
+    expect(withCategories.match(/name="excluded_category"/g)).toHaveLength(4);
+    for (const id of ["c-vaca", "c-cerdo", "c-pollo"]) expect(withCategories).toMatch(new RegExp(`checked=""[^>]*value="${id}"|value="${id}"[^>]*checked=""`));
+    expect(withCategories).not.toMatch(/checked=""[^>]*value="c-almacen"|value="c-almacen"[^>]*checked=""/);
+    expect(withCategories).toContain("Excluidas: Cerdo · Pollo · Vaca");
+  });
+
+  it("sin categorías excluidas lo dice: el margen se aplica a todos los productos con costo", () => {
+    const none = renderToStaticMarkup(<PricingConfigForm categories={[{ id: "c-vaca", name: "Vaca" }]} values={configured} />);
+    expect(none).toContain("Ninguna categoría excluida");
+    expect(none).not.toMatch(/checked=""[^>]*value="c-vaca"|value="c-vaca"[^>]*checked=""/);
+  });
+
   it("acepta decimales (margen 32,5 %) y los muestra tal cual", () => {
     const decimal = renderToStaticMarkup(<PricingConfigForm values={{ ...configured, marginBps: 3_250 }} />);
     expect(decimal).toContain('value="32.5"');
