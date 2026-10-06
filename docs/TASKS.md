@@ -2,6 +2,13 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Desactivación masiva de productos: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-06 (`CURRENT_STATE.md`), **sin aplicar**. Orden: `supabase db push` (aplica `202610060064`; antes de desplegar el Admin: la acción llama a la RPC nueva) → `git push` (Vercel).
+
+1. Smoke en `/admin/products`: «Seleccionar» → marcar 2–3 productos → «Desactivar productos» → confirmar; desaparecen de «Activos», aparecen en «Inactivos» con sus precios/código de barras, y el POS los saca del catálogo en el próximo sync.
+2. Probar el checkbox del encabezado (50 filas), «Cancelar», y cambiar de filtro/página con selección activa (se descarta).
+
 ## P0 — Sucursales: ventas por rango y «Qué llevar ahora»: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-06 (D-067, `CURRENT_STATE.md`), **sin aplicar**. Orden: `supabase db push` (aplica `202610060063`; antes de desplegar el Admin: la pantalla llama a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS (no se tocó el POS). Después `pnpm exec supabase gen types typescript --linked` y comparar con la edición manual de `database.types.ts`; donde haya Docker, `pnpm db:reset && pnpm db:test` corre por primera vez `branch_sales_and_carry_plan.test.sql` (84) contra Supabase real.

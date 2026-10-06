@@ -3816,6 +3816,10 @@ export type Database = {
         }
         Returns: string
       }
+      deactivate_products: {
+        Args: { p_product_ids: string[] }
+        Returns: Json
+      }
       delete_branch: { Args: { p_branch_id: string }; Returns: undefined }
       delete_production_batch: {
         Args: { p_batch_id: string }

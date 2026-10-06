@@ -10,6 +10,7 @@ import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageTo
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
 import type { CarryPlanReport } from "../../lib/carry-plan";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
+import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseBranchPromotionForm, parseCurrentPackConfig, parsePackConfigForm } from "../../lib/unit-promotions";
 import type { Database } from "@carnicerias/database";
 
@@ -191,6 +192,28 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
     return { successToken: crypto.randomUUID(), ...(warning ? { warning } : {}) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo guardar el producto" };
+  }
+}
+
+export interface BulkDeactivateState { error?: string; deactivated?: number; alreadyInactive?: number }
+
+/**
+ * Desactivación masiva desde /admin/products. NO borra nada: una sola llamada atómica a
+ * `deactivate_products` (202610060064), que aplica la misma semántica que la acción individual
+ * (`save_product` con active = false) a todos los ids. Si falla, no se desactiva ninguno.
+ */
+export async function deactivateProductsAction(productIds: string[]): Promise<BulkDeactivateState> {
+  const ids = normalizeProductIds(productIds);
+  if (!ids) return { error: `Seleccioná entre 1 y ${String(MAX_BULK_DEACTIVATE)} productos para desactivar.` };
+  try {
+    const result = await rpcOrThrow("deactivate_products", { p_product_ids: ids }) as { deactivated?: number; alreadyInactive?: number } | null;
+    revalidatePath("/admin/catalog");
+    revalidatePath("/admin/products");
+    revalidatePath("/admin/promotions");
+    revalidatePath("/admin/suppliers");
+    return { deactivated: result?.deactivated ?? ids.length, alreadyInactive: result?.alreadyInactive ?? 0 };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudieron desactivar los productos" };
   }
 }
 

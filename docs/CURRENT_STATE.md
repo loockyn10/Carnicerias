@@ -138,6 +138,12 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - `get_replenishment_plan` ahora delega en `app_private.replenishment_rows` (misma base compartida con el informe nuevo); su salida no cambió.
 - **REQUIERE VERIFICACIÓN**: la migración `202610060063` se validó contra Postgres 18 emulado (PGlite) con un shim de pgTAP (`supabase/tests/branch_sales_and_carry_plan.test.sql`, 84 aserciones, con mutaciones); no corrió contra Supabase real. `database.types.ts` se editó a mano.
 
+## Selección y desactivación masiva de productos — implementado 2026-10-06 (sin aplicar a producción)
+
+- `/admin/products`: botón «Seleccionar» después de «Filtrar» activa el modo selección (checkbox por fila + uno en el encabezado, que marca/desmarca sólo los productos **activos de la página cargada**, ≤ 50; no existe «seleccionar todo el negocio»). Barra con «N productos seleccionados / Cancelar / Desactivar productos» → modal de confirmación → éxito. Cambiar filtro o página descarta modo y selección (`ProductSelectionProvider` con `key` por filtros). Fuera del modo no hay checkboxes.
+- Desactivar = **la misma semántica de siempre** (D-005): `public.deactivate_products(uuid[])` (`202610060064`) sólo escribe `products.active = false` en UNA llamada/transacción; mismo permiso `products.write` y aislamiento por organización que `save_product`; atómica (un id ajeno/inexistente rechaza todo), idempotente (los ya inactivos no se tocan y se informan), 1–500 ids. Los triggers de auditoría y de log POS corren por fila como en la baja individual. Jamás DELETE (las FK `RESTRICT` de ventas/stock/precios lo impedirían de todos modos).
+- **REQUIERE VERIFICACIÓN**: la migración se validó con PGlite + shim pgTAP (`supabase/tests/bulk_deactivate_products.test.sql`, 29 aserciones, con mutaciones) y la UI contra un Supabase falso en el navegador integrado (1.861 productos); no corrió contra Supabase real. `database.types.ts` se editó a mano.
+
 ## Rendiciones
 
 - Ruta y modelo implementados con períodos `[inicio, fin)`, snapshots, desglose por pago, empleados y dispositivos.
@@ -640,6 +646,7 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 60. `202610030060_unit_packs_and_branch_promotions.sql`
 61. `202610040061_pack_discount_single_category_threshold_promotions.sql`
 62. `202610050062_import_zero_price_purge.sql`
+64. `202610060064_bulk_deactivate_products.sql` (la `202610060063` existe en el repo pero no estaba listada acá)
 
 ### SQLite POS
 
