@@ -179,7 +179,7 @@ describe("Pack (descuento propio de cada producto, unidades reales)", () => {
     expect(describeUnitLine(packLine(2)).quantityLabel).toBe("2 packs × 8 u = 16 unidades");
     expect(describeUnitLine(packLine(1, "CASH", 8, FROM_3_15, 2_500)).badge).toBe("Pack 25% OFF");
     expect(describeUnitLine(packLine(1, "CASH", 6, FROM_3_15, 1_250)).badge).toBe("Pack 12,5% OFF");
-    expect(describeUnitLine(normal(8)).badge).toBe("Desde 3 u: 15% OFF en 8 u");
+    expect(describeUnitLine(normal(8))).toEqual({ quantityLabel: "8 u", badge: null }); // el ahorro se lee en el precio/u final
     expect(describeUnitLine(normal(2))).toEqual({ quantityLabel: "2 u", badge: null });
   });
 });

@@ -6,7 +6,9 @@ import {
   calculateUnitPackLinePricing,
   calculateUnitPackSalePricing,
   calculateWeightPackSalePricing,
+  divideRoundHalfUp,
   formatBasisPointsPercent,
+  formatCurrency,
   isValidPackDiscountBps,
   packRealUnits,
   sumMoney,
@@ -210,20 +212,20 @@ export function findMergeableUnitLine(ticket: readonly TicketLine[], productId: 
   return ticket.find((line) => line.productId === productId && line.quantityUnits != null && (includeManual || !line.manualPriceApplied) && (line.packCount != null) === packMode);
 }
 
-/** Cómo se lee una línea UNIT en el ticket: la cantidad (con el Pack explícito) y la etiqueta del descuento, si lo hay. */
+/** Cómo se lee una línea UNIT en el ticket: la cantidad (con el Pack explícito) y la etiqueta del Pack, si lo hay. La promoción de
+ * sucursal no lleva etiqueta: su ahorro ya se lee en el precio por unidad final (`finalPricePerUnitCents`). */
 export function describeUnitLine(line: TicketLine): { quantityLabel: string; badge: string | null } {
   const units = line.quantityUnits ?? 0;
   if (line.packCount != null && line.packSizeUnitsSnapshot != null) {
     const quantityLabel = `${String(line.packCount)} pack${line.packCount === 1 ? "" : "s"} × ${String(line.packSizeUnitsSnapshot)} u = ${String(units)} unidades`;
     return { quantityLabel, badge: line.soldAsPack ? `Pack ${formatBasisPointsPercent(line.packDiscountBps ?? 0)}% OFF` : null };
   }
-  if (line.branchPromotionId && line.branchPromotionDiscountedUnits) {
-    return {
-      quantityLabel: `${String(units)} u`,
-      badge: `Desde ${String(line.branchPromotionMinimumUnits ?? 0)} u: ${formatBasisPointsPercent(line.branchPromotionDiscountBps ?? 0)}% OFF en ${String(line.branchPromotionDiscountedUnits)} u`
-    };
-  }
   return { quantityLabel: `${String(units)} u`, badge: null };
+}
+
+/** Precio base que la card ya muestra de una línea: el manual si lo hay, si no el de lista. */
+function shownBasePriceCents(line: TicketLine): bigint {
+  return line.manualPriceApplied ? line.pricePerKgCents : line.originalPricePerKgCents ?? line.pricePerKgCents;
 }
 
 /**
@@ -236,8 +238,47 @@ export function finalPricePerKgCents(line: TicketLine): bigint | null {
   if (line.quantityUnits != null || line.weightGrams <= 0) return null;
   const grams = BigInt(line.weightGrams);
   const perKg = (line.subtotalCents * 2_000n + grams) / (2n * grams);
-  const shownBase = line.manualPriceApplied ? line.pricePerKgCents : line.originalPricePerKgCents ?? line.pricePerKgCents;
-  return perKg === shownBase ? null : perKg;
+  return perKg === shownBasePriceCents(line) ? null : perKg;
+}
+
+/**
+ * Precio efectivo por unidad de una línea UNIT: el mismo concepto que `finalPricePerKgCents`. `subtotalCents` (el total real de la
+ * línea que ya resolvió el motor: promoción de sucursal, Pack, promoción por producto, precio manual, recargo) dividido las
+ * unidades reales, con el mismo redondeo half-up del motor y sin floats. Sólo informa: nunca se usa para cobrar. Null si la línea
+ * no es UNIT, no tiene unidades, o coincide con el precio base/u que ya se muestra (no se duplica el mismo precio).
+ */
+export function finalPricePerUnitCents(line: TicketLine): bigint | null {
+  const units = line.quantityUnits ?? 0;
+  if (units <= 0) return null;
+  const perUnit = divideRoundHalfUp(line.subtotalCents, BigInt(units));
+  return perUnit === shownBasePriceCents(line) ? null : perUnit;
+}
+
+/**
+ * Precio por unidad que paga un cliente que lleva `promotion.minimumUnits` de un producto UNIT (la pregunta "¿en cuánto me queda
+ * llevando 3?"), ANTES de vender. Reusa el motor (`calculateBranchPromotionLinePricing`, efectivo/sin recargo = el precio de lista
+ * que muestra el catálogo), así que redondea igual que la venta. Null si el precio no tiene sentido o la promoción no baja el precio.
+ */
+export function promotedUnitPriceCents(listPriceCents: bigint, promotion: BranchUnitPromotion): bigint | null {
+  if (listPriceCents <= 0n) return null;
+  try {
+    const pricing = calculateBranchPromotionLinePricing({ listPriceCents, quantityUnits: promotion.minimumUnits, promotion, paymentMethod: "CASH", cashDiscountBps: 0n });
+    return pricing && pricing.finalPriceCents < listPriceCents ? pricing.finalPriceCents : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * "$4.590/u desde 3 u": etiqueta de la promoción de sucursal de un producto UNIT en el catálogo (lista Central y grilla). Null si no hay
+ * promoción, el producto no tiene precio o la promoción no le llega: con una promoción por producto `PACK_FIXED_TOTAL` cuyo pack cabe
+ * en el mínimo, la línea usa ese pack (precedencia de `computeUnitLine`) y el precio de la promoción de sucursal no se aplicaría.
+ */
+export function unitPromotionLabel(listPriceCents: bigint, promotion: BranchUnitPromotion | null | undefined, packRule: DiscountRule | null = null): string | null {
+  if (!promotion) return null;
+  if (packRule?.packQuantityUnits != null && packRule.packQuantityUnits <= promotion.minimumUnits) return null;
+  const price = promotedUnitPriceCents(listPriceCents, promotion);
+  return price === null ? null : `${formatCurrency(price)}/u desde ${String(promotion.minimumUnits)} u`;
 }
 
 /** A WEIGHT ticket line for `weightGrams` of `product` (pack toggle + threshold promotions included). */

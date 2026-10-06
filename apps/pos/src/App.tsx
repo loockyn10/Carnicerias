@@ -30,7 +30,7 @@ import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./l
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
   applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findMergeableUnitLine, findPackRule,
-  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule, type PackOffer
+  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, unitPromotionLabel, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
 import { ManualPriceModal } from "./ManualPriceModal";
 import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
@@ -1111,6 +1111,13 @@ export default function App() {
     setError(null);
   }
 
+  // "$4.590/u desde 3 u": el precio unitario que queda llevando el mínimo de la promoción de sucursal (sólo UNIT con precio,
+  // en el POS de escritorio). Mismo helper para la lista de Central y la grilla; el cálculo lo hace el motor de pricing.
+  function unitPromotionBadgeLabel(product: CatalogProduct): string | null {
+    if (product.unitType !== "UNIT" || isPriceMissing(product)) return null;
+    return unitPromotionLabel(product.pricePerKgCents, unitPromotion, findPackRule(discounts, product.productId, branchId));
+  }
+
   // Badges de la fila de Central: la misma regla de promoción que mostraba la card (la primera del producto) y el
   // Pack UNIT si el producto lo ofrece en este POS (mismo texto que el diálogo de cantidad).
   function centralRowBadges(product: CatalogProduct): CentralRowBadge[] {
@@ -1118,6 +1125,8 @@ export default function App() {
     const rule = firstDiscountByProduct.get(product.productId);
     const label = rule ? discountBadgeLabel(rule) : null;
     if (rule && label) badges.push({ kind: rule.promotionMode === "PACK_FIXED_TOTAL" ? "PACK" : "PROMO", label });
+    const unitPromo = unitPromotionBadgeLabel(product);
+    if (unitPromo) badges.push({ kind: "PROMO", label: unitPromo });
     const offer = packOfferOf(product);
     if (offer) badges.push({ kind: "PACK", label: `Pack ${String(offer.packSizeUnits)} u · ${formatBasisPointsPercent(offer.packDiscountBps)}% OFF` });
     return badges;
@@ -1126,6 +1135,7 @@ export default function App() {
   // Mismo markup de card de siempre (el CSS compacto depende del orden name / category / price);
   // una card sin stock es un <button disabled> — no dispara onClick aunque se fuerce el evento.
   function renderProductCard(product: CatalogProduct, outOfStock: boolean) {
+    const unitPromo = unitPromotionBadgeLabel(product);
     return (
       <button
         key={product.productId}
@@ -1143,10 +1153,13 @@ export default function App() {
           : <span className="mt-3 block text-xl font-black text-rose-400">{formatCurrency(product.pricePerKgCents)}<small className="text-xs text-stone-400"> / {product.unitType === "WEIGHT" ? "kg" : "u"}</small></span>}
         {outOfStock
           ? <span className="mt-1 block text-xs font-black uppercase tracking-wide text-stone-400">Sin stock</span>
-          : discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
-              const label = discountBadgeLabel(rule);
-              return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
-            })}
+          : <>
+              {discounts.filter((rule) => rule.productId === product.productId).slice(0, 1).map((rule) => {
+                const label = discountBadgeLabel(rule);
+                return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
+              })}
+              {unitPromo ? <span className="mt-1 block text-xs font-bold text-amber-300">{unitPromo}</span> : null}
+            </>}
       </button>
     );
   }

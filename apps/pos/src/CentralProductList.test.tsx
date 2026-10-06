@@ -50,6 +50,20 @@ describe("CentralProductList rows", () => {
     expect(html).toContain("15% OFF desde 2 kg");
   });
 
+  it("UNIT con promoción: el precio unitario promocional va como badge compacto (misma fila, mismo lenguaje que el de WEIGHT)", () => {
+    const html = renderList([product({ unitType: "UNIT", pricePerKgCents: 540_000n })], () => [{ kind: "PROMO", label: "$ 4.590/u desde 3 u" }]);
+    expect(html).toContain("$ 5.400");
+    expect(html).toContain("$ 4.590/u desde 3 u");
+    expect(html).toContain("bg-amber-950");
+    expect(html.match(/pos-central-row/g)).toHaveLength(1);
+    expect(html).not.toContain("15%");
+  });
+
+  it("WEIGHT conserva su badge de precio/kg promocional", () => {
+    const html = renderList([product({ unitType: "WEIGHT", pricePerKgCents: 1_100_000n })], () => [{ kind: "PROMO", label: "$ 9.000/kg desde 2,000 kg" }]);
+    expect(html).toContain("$ 9.000/kg desde 2,000 kg");
+  });
+
   it("no badges when the product has none", () => {
     expect(renderList([product()])).not.toContain("OFF");
   });
