@@ -2,9 +2,9 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
-## P0 — Desactivación masiva de productos: aplicar y probar (acción del usuario)
+## P0 — Desactivación masiva de productos: desplegar y probar (acción del usuario)
 
-Implementado 2026-10-06 (`CURRENT_STATE.md`), **sin aplicar**. Orden: `supabase db push` (aplica `202610060064`; antes de desplegar el Admin: la acción llama a la RPC nueva) → `git push` (Vercel).
+Implementado 2026-10-06 (`CURRENT_STATE.md`). La migración `202610060064` ya está aplicada en Supabase; falta `git push` (Vercel) y el smoke de UI.
 
 1. Smoke en `/admin/products`: «Seleccionar» → marcar 2–3 productos → «Desactivar productos» → confirmar; desaparecen de «Activos», aparecen en «Inactivos» con sus precios/código de barras, y el POS los saca del catálogo en el próximo sync.
 2. Probar el checkbox del encabezado (50 filas), «Cancelar», y cambiar de filtro/página con selección activa (se descarta).

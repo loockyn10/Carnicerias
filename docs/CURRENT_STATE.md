@@ -138,11 +138,11 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - `get_replenishment_plan` ahora delega en `app_private.replenishment_rows` (misma base compartida con el informe nuevo); su salida no cambió.
 - **REQUIERE VERIFICACIÓN**: la migración `202610060063` se validó contra Postgres 18 emulado (PGlite) con un shim de pgTAP (`supabase/tests/branch_sales_and_carry_plan.test.sql`, 84 aserciones, con mutaciones); no corrió contra Supabase real. `database.types.ts` se editó a mano.
 
-## Selección y desactivación masiva de productos — implementado 2026-10-06 (sin aplicar a producción)
+## Selección y desactivación masiva de productos — implementado 2026-10-06 (migración aplicada al Supabase vinculado; Admin sin desplegar)
 
 - `/admin/products`: botón «Seleccionar» después de «Filtrar» activa el modo selección (checkbox por fila + uno en el encabezado, que marca/desmarca sólo los productos **activos de la página cargada**, ≤ 50; no existe «seleccionar todo el negocio»). Barra con «N productos seleccionados / Cancelar / Desactivar productos» → modal de confirmación → éxito. Cambiar filtro o página descarta modo y selección (`ProductSelectionProvider` con `key` por filtros). Fuera del modo no hay checkboxes.
 - Desactivar = **la misma semántica de siempre** (D-005): `public.deactivate_products(uuid[])` (`202610060064`) sólo escribe `products.active = false` en UNA llamada/transacción; mismo permiso `products.write` y aislamiento por organización que `save_product`; atómica (un id ajeno/inexistente rechaza todo), idempotente (los ya inactivos no se tocan y se informan), 1–500 ids. Los triggers de auditoría y de log POS corren por fila como en la baja individual. Jamás DELETE (las FK `RESTRICT` de ventas/stock/precios lo impedirían de todos modos).
-- **REQUIERE VERIFICACIÓN**: la migración se validó con PGlite + shim pgTAP (`supabase/tests/bulk_deactivate_products.test.sql`, 29 aserciones, con mutaciones) y la UI contra un Supabase falso en el navegador integrado (1.861 productos); no corrió contra Supabase real. `database.types.ts` se editó a mano.
+- **REQUIERE VERIFICACIÓN**: la migración se validó con PGlite + shim pgTAP (`supabase/tests/bulk_deactivate_products.test.sql`, 29 aserciones, con mutaciones) y la UI contra un Supabase falso en el navegador integrado (1.861 productos); y `202610060064` se aplicó al Supabase real el 2026-10-06 (`db push`; `063` ya estaba aplicada). Smoke remoto sin escribir: anon → `permission denied`; admin → lote vacío `22023`, id inexistente `42501`, producto ya inactivo `{deactivated: 0, alreadyInactive: 1}` (activos 1861 antes y después). La UI no se probó contra datos reales. `database.types.ts` se editó a mano (equivalente al generado con `--linked`).
 
 ## Rendiciones
 
