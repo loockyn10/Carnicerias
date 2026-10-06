@@ -59,6 +59,17 @@ export function calculatePriceFormation(costCents: bigint, profitMarkupBps: bigi
 }
 
 /**
+ * List price from a cost and a MARGIN OVER THE SALE PRICE (D-068): `price = cost / (1 - margin)`, half-up, in cents and basis
+ * points. It is the existing gross-up (`calculatePriceFormation` with a 0 markup), never a markup over cost: cost $10.000 and a
+ * 30 % margin -> $14.285,71 (not $13.000). Twin of `app_private.list_price_from_margin` (Postgres), which is what the server uses.
+ */
+export function calculateListPriceFromMargin(costCents: bigint, marginBps: bigint): bigint {
+  if (costCents <= 0n) throw new RangeError("Cost must be positive");
+  if (marginBps < 1n || marginBps > 9_999n) throw new RangeError("Margin must be above 0% and below 100%");
+  return calculatePriceFormation(costCents, 0n, marginBps).listPriceCents;
+}
+
+/**
  * Recalculates from the immutable list price every time; discounts never accumulate.
  *
  * Order (D-044, corrected): list price -> promotion -> card surcharge. A promotion is evaluated

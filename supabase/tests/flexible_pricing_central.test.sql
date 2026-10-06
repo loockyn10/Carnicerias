@@ -222,8 +222,8 @@ select throws_ok($$select public.t_sync('f7000000-0000-4000-8000-000000000002', 
   jsonb_build_array(public.t_flex_item('f5000000-0000-4000-8000-000000000001', 'Coca Cola 2.25 L', 'UNIT', 2, 1200000)), 'CASH', 500, 120000))$$,
   '42501', 'FLEXIBLE_PRICING_NOT_ALLOWED', 'a ticket discount is rejected outside the production branch');
 select lives_ok($$select public.t_sync('f7000000-0000-4000-8000-000000000002', public.t_flex_payload(22, 'f3000000-0000-4000-8000-000000000002', 'f7000000-0000-4000-8000-000000000002',
-  jsonb_build_array(public.t_flex_item('f5000000-0000-4000-8000-000000000001', 'Coca Cola 2.25 L', 'UNIT', 2, 1200000)), 'DEBIT'))$$,
-  'Avenida still syncs a normal sale exactly as before');
+  jsonb_build_array(public.t_flex_item('f5000000-0000-4000-8000-000000000001', 'Coca Cola 2.25 L', 'UNIT', 2, 1200000, null, 1000)), 'DEBIT'))$$,
+  'Avenida still syncs a normal sale exactly as before (a card line now carries its 10 % surcharge: the offline sync validates it, D-068)');
 select is((select ticket_discount_bps from public.sales where id = public.t_sale(22)), 0, 'a normal sale has no ticket discount');
 select is((select manual_price_applied from public.sale_items where sale_id = public.t_sale(22)), false, 'a normal line is not manual');
 select is((select manual_unit_price_cents from public.sale_items where sale_id = public.t_sale(22)), null, 'a normal line has no manual price');

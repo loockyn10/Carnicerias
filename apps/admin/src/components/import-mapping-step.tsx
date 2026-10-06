@@ -86,6 +86,10 @@ export function ImportMappingStep({
       <button className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-bold text-stone-700 hover:bg-stone-50" disabled={busy} onClick={onChooseAnother} type="button">Elegir otro archivo</button>
     </div>
 
+    <p className="mt-3 rounded-lg bg-stone-50 p-3 text-xs text-stone-600" data-testid="import-price-cost-note">
+      Precio y costo: si el archivo trae <strong>costo</strong> y la organización ya tiene un <strong>margen configurado</strong> (Productos → Precios → Configuración de precios), el precio de lista se calcula desde el costo y el precio del archivo se ignora para ese producto. Si una fila trae sólo <strong>precio</strong>, o todavía no hay margen, se usa el precio del archivo como siempre.
+    </p>
+
     <div className="mt-4 overflow-x-auto">
       <table className="w-full min-w-[640px] text-left text-sm">
         <thead className="text-stone-500"><tr><th className="py-2 pr-3">Columna del archivo</th><th className="py-2 pr-3">Se importa como</th><th className="py-2 pr-3">Ejemplos</th></tr></thead>

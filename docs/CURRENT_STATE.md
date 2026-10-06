@@ -580,6 +580,16 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 - **Validación:** `pnpm check` OK (pos 346, business-logic 416, admin 130, sync 18); `cargo test --lib` 147/147 (incluye la enumeración real del spooler de Windows y la impresora inexistente); `pnpm build:pos:desktop` OK (instalador NSIS generado).
 - **Sólo con impresora física:** salida real del RAW ESC/POS, acentos/ñ con la code page elegida, corte y avance de papel, columnas reales (42 vs 48) y velocidad. Ver `TASKS.md`.
 
+## Precio por margen global, dto «llevando 3u»/pack globales y carga masiva de costos — implementado 2026-10-06 (D-068, sin aplicar a producción)
+
+**Antes:** el precio de lista era manual (D-037), el descuento de pack por producto (D-064) y la promoción «desde 3» se editaba por sucursal. **Ahora (D-068, detalle completo allí):** `precio = costo ÷ (1 − margen)` con el gross-up existente; configuración global en `organization_pricing_settings`; costo nuevo ⇒ precio nuevo en la misma transacción; recálculo masivo server-side con vista previa/confirmación; precio manual sólo como fallback (sin costo o sin margen; Quick Create y precio manual por línea de Central se conservan); pack global con **0 % válido** y versionado; «llevando 3u» global; precios por sucursal informados y cerrables (nunca borrados); importación que forma el precio desde costo + margen; recargo de tarjeta offline validado contra la configuración histórica de la venta.
+
+**Migración pendiente: `202610060065_global_pricing_config.sql` (la única; sin aplicar).** Cambios en POS (Rust/TS) sólo para el pack 0 % (labels y rango); el sync del servidor cambió en `sync_offline_sale_core` (pack 0 % y recargo histórico). El POS sigue en 0.1.0.
+
+**Qué NO se recalcula solo:** el costo de Desposte no reprecia; un cambio de margen sí recalcula todo producto activo y vendible con costo > 0, también los cortes de desposte. Hallazgo preexistente (sin cambiar): el sync offline no relee `product_prices`.
+
+**Validación (2026-10-06):** ver «Validación actual». **Pendiente contra Postgres real:** `supabase db push` y el smoke de TASKS.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL
@@ -646,6 +656,7 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 60. `202610030060_unit_packs_and_branch_promotions.sql`
 61. `202610040061_pack_discount_single_category_threshold_promotions.sql`
 62. `202610050062_import_zero_price_purge.sql`
+65. `202610060065_global_pricing_config.sql` (D-068: configuración global de precios; **sin aplicar**)
 64. `202610060064_bulk_deactivate_products.sql` (la `202610060063` existe en el repo pero no estaba listada acá)
 
 ### SQLite POS
@@ -677,6 +688,7 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 
 ## Validación actual
 
+- **Precio por margen global (D-068, 2026-10-06, cierre):** `pnpm check` OK (business-logic 431, admin 256, pos 432, sync 18); `cargo test --lib` 148/148; builds de Admin y POS OK; pgTAP vía PGlite: `global_pricing_config` 331/331, `card_surcharge_discount_precedence` 49/49, `pos_quick_product` 91/91, `flexible_pricing_central` 101/101, `pack_discount_threshold_promotions` 154/154, `unit_packs_and_branch_promotions` 152/152 e importadores sin cambios; suite completa idéntica a la línea base salvo los archivos nuevos/ampliados (los fallos del shim de PGlite en `initial_schema`, `online_pos`, `operational_pilot`, `production_batches`, `promotions_pack`, `shift_heartbeat_lease`, `stock_transfers`, `unit_sale_support` y `card_surcharge_pricing` 31/32 son preexistentes).
 - **Ajuste D-064 (Pack por producto, categoría única, promoción "desde N", 2026-10-04):** ver la sección propia más arriba (`pnpm check` OK, `cargo test --lib` 120/120, `pnpm build:pos:desktop`, pgTAP 154/154, 45/45, 152/152 y 127/127 vía PGlite).
 - **Purga de importados / Pack UNIT / promoción por sucursal (D-062/D-063, 2026-10-03):** ver la sección propia más arriba (`pnpm check` OK, `cargo test --lib` 111/111, `pnpm build:pos:desktop`, pgTAP 64/64 y 150/150 vía PGlite).
 

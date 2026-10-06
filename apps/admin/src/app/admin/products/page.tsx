@@ -1,11 +1,11 @@
 import { formatCurrency } from "@carnicerias/business-logic";
 import Link from "next/link";
 
-import { BulkPriceEditor, type BulkPriceRow } from "../../../components/bulk-price-editor";
+import { BulkCostEditor, type BulkCostRow } from "../../../components/bulk-cost-editor";
 import { ProductCreateModal } from "../../../components/product-create-modal";
 import { ProductManageModal } from "../../../components/product-manage-modal";
 import { ProductBulkBar, ProductSelectableRow, ProductSelectHeaderCell, ProductSelectionProvider, ProductSelectToggle } from "../../../components/product-selection";
-import { PricingSettingsModal } from "../../../components/pricing-settings-modal";
+import { PricingConfigForm } from "../../../components/pricing-config-form";
 import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
@@ -42,14 +42,20 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   // The catalog is filtered and PAGED in SQL (a Central with thousands of products must never be
   // fetched whole: PostgREST silently truncates at max_rows). Everything else (prices, costs,
   // promotions, categories, locks) is then fetched only for the ids of the current page.
-  const [categoriesResult, branchesResult, pageResult, cashResult] = await Promise.all([
+  const [categoriesResult, branchesResult, pageResult, cashResult, pricingSettingsResult, branchOverridesResult] = await Promise.all([
     perf.measure("categories", supabase.from("categories").select("id, name, slug, color_hex, sort_order, active").eq("organization_id", context.organizationId).order("sort_order")),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("productsPage", supabase.rpc("list_products_page", {
       p_status: status, p_limit: PAGE_SIZE, p_offset: (page - 1) * PAGE_SIZE,
       ...(value("q").trim() ? { p_search: value("q").trim() } : {}), ...(category ? { p_category_id: category } : {}), ...(branchFilter ? { p_branch_id: branchFilter } : {})
     })),
-    perf.measure("cashDiscount", supabase.from("organization_cash_discounts").select("cash_discount_bps, valid_from").eq("organization_id", context.organizationId).is("valid_to", null).order("valid_from", { ascending: false }).limit(1).maybeSingle())
+    perf.measure("cashDiscount", supabase.from("organization_cash_discounts").select("cash_discount_bps, valid_from").eq("organization_id", context.organizationId).is("valid_to", null).order("valid_from", { ascending: false }).limit(1).maybeSingle()),
+    // Configuración global de precios (margen, dto llevando 3u, dto por pack). Sin fila = todavía sin configurar.
+    perf.measure("pricingSettings", supabase.from("organization_pricing_settings").select("margin_bps, unit_bulk_discount_bps, pack_discount_bps").eq("organization_id", context.organizationId).maybeSingle()),
+    // Precios VIGENTES por sucursal (en el POS le ganan al global): se informan en la configuración; sólo se mira en la pestaña de precios.
+    pricingTabOpen
+      ? perf.measure("branchOverrides", supabase.from("product_prices").select("id", { count: "exact", head: true }).eq("organization_id", context.organizationId).not("branch_id", "is", null).is("valid_to", null).lte("valid_from", new Date().toISOString()))
+      : Promise.resolve({ count: 0, error: null })
   ]);
   const pageRows = pageResult.data ?? [];
   const totalProducts = pageRows[0]?.total_count ?? 0;
@@ -70,13 +76,16 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   ]);
   perf.flush();
 
-  const error = [categoriesResult.error, branchesResult.error, pageResult.error, unitTypeHistoryResult.error, pricesResult.error, discountsResult.error, costsResult.error, suppliersResult.error, primarySuppliersResult.error, packConfigsResult.error, cashResult.error].find(Boolean);
+  const error = [categoriesResult.error, branchesResult.error, pageResult.error, unitTypeHistoryResult.error, pricesResult.error, discountsResult.error, costsResult.error, suppliersResult.error, primarySuppliersResult.error, packConfigsResult.error, cashResult.error, pricingSettingsResult.error, branchOverridesResult.error].find(Boolean);
+  const branchOverrideCount = branchOverridesResult.count ?? 0;
   const categories = categoriesResult.data ?? [];
   const branches = branchesResult.data ?? [];
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
   const productsWithUnitTypeHistory = new Set(unitTypeHistoryResult.data ?? []);
   const now = Date.now();
-  const cashDiscountBps = cashResult.data?.cash_discount_bps ?? 1000;
+  const cardSurchargeBps = cashResult.data?.cash_discount_bps ?? 1000;
+  const pricingSettings = pricingSettingsResult.data;
+  const marginConfigured = pricingSettings?.margin_bps != null;
   const costByProduct = new Map((costsResult.data ?? []).map((row) => [row.product_id, row.cost_cents]));
   const suppliers = suppliersResult.data;
   const supplierNameById = new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
@@ -99,12 +108,14 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     id: row.product_id, category_id: row.category_id, name: row.product_name, slug: row.slug, sku: row.sku,
     unit_type: row.unit_type, active: row.active, inventory_role: row.inventory_role, barcodes: row.barcodes, branch_ids: row.branch_ids
   }));
-  const bulkPriceRows: BulkPriceRow[] = products
+  const bulkCostRows: BulkCostRow[] = products
     .filter((product) => product.active && (product.inventory_role === "SELLABLE" || product.inventory_role === "BOTH"))
     .map((product) => ({
       id: product.id, name: product.name, categoryName: categoryNames.get(product.category_id ?? "") ?? "Sin categoría",
-      // Un precio 0 es "sin precio definido": se muestra como "sin precio" en el editor masivo, no como $0.
-      unitType: product.unit_type, currentPriceCents: (globalPriceByProduct.get(product.id)?.price_cents ?? 0) > 0 ? globalPriceByProduct.get(product.id)?.price_cents ?? null : null
+      // Costo vigente (ya cargado para esta página): placeholder y detección de cambios. Un costo 0 es "sin costo".
+      unitType: product.unit_type, currentCostCents: (costByProduct.get(product.id) ?? 0) > 0 ? costByProduct.get(product.id) ?? null : null,
+      // Un precio 0 es "sin precio definido": se muestra como "sin precio" en el editor masivo, no como $0. Sólo referencia (sin input).
+      currentPriceCents: (globalPriceByProduct.get(product.id)?.price_cents ?? 0) > 0 ? globalPriceByProduct.get(product.id)?.price_cents ?? null : null
     }));
   const pageHref = (target: number) => {
     const query = new URLSearchParams();
@@ -119,10 +130,10 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   };
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} suppliers={suppliers} /></div>
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} marginBps={pricingSettings?.margin_bps ?? null} suppliers={suppliers} /></div>
     <SectionTabs active={activeTab} tabs={PRODUCTOS_TABS} />
-    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Recargo por tarjeta, aplicado en el POS sobre el precio de lista. Efectivo y transferencia no tienen ajuste.</p><div className="mt-4"><PricingSettingsModal cashDiscountBps={cashDiscountBps} /></div></section> : null}
-    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Precios de venta</h2><p className="mt-1 text-sm text-stone-600">Carga masiva del precio de lista (global, todas las sucursales). Sólo se guardan las filas que cambiaste.</p><BulkPriceEditor rows={bulkPriceRows} /></section> : null}
+    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Valores de toda la organización. El precio de lista se forma desde el costo: costo ÷ (1 − margen).</p><PricingConfigForm branchOverrides={branchOverrideCount} values={{ marginBps: pricingSettings?.margin_bps ?? null, unitBulkDiscountBps: pricingSettings?.unit_bulk_discount_bps ?? null, packDiscountBps: pricingSettings?.pack_discount_bps ?? null, cardSurchargeBps }} /></section> : null}
+    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Costos de los productos</h2><p className="mt-1 text-sm text-stone-600">Actualizá los costos. El precio de venta se recalcula automáticamente según el margen configurado. Sólo se guardan las filas que cambiaste.</p><BulkCostEditor marginConfigured={marginConfigured} rows={bulkCostRows} /></section> : null}
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
     {/* La key deriva de los filtros y la página: cambiar cualquiera remonta el provider y descarta el modo selección y la selección. */}
     <ProductSelectionProvider key={pageHref(page)} selectableIds={products.filter((product) => product.active).map((product) => product.id)}>
@@ -139,7 +150,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
       const priceMissing = price !== undefined && price.price_cents <= 0;
       const pricedNow = price !== undefined && price.price_cents > 0 ? price : null;
       const supplierId = primarySupplierByProduct.get(product.id) ?? null;
-      return <ProductSelectableRow key={product.id} productId={product.id} productName={product.name} selectable={product.active}><td className="px-4 py-3"><strong>{product.name}</strong>{supplierId ? <p className="text-xs text-stone-500">Proveedor: {supplierNameById.get(supplierId) ?? "—"}</p> : null}</td><td className="px-4 py-3 text-stone-600">{categoryNames.get(product.category_id ?? "") ?? "Sin categoría"}</td><td className="px-4 py-3"><strong>{pricedNow ? `${formatCurrency(BigInt(pricedNow.price_cents))} ${unitSuffix}` : priceMissing ? "SIN PRECIO ($0)" : "SIN PRECIO"}</strong><p className="text-xs text-stone-500">{priceMissing ? "La caja de Central lo pide al venderlo" : cost != null ? `${formatCurrency(BigInt(cost))} costo estimado` : pricedNow ? "Costo no disponible" : "No disponible en POS"}</p></td><td className="px-4 py-3 text-xs text-stone-600">{product.branch_ids.length === 0 ? <span className="font-bold text-amber-700">Ninguna sucursal</span> : product.branch_ids.length === branches.length ? "Todas" : product.branch_ids.map((id) => branchNames.get(id) ?? "—").join(", ")}</td><td className="px-2 py-3 text-center"><span aria-label={product.active ? "Activo" : "Inactivo"} className={`inline-flex size-7 items-center justify-center rounded-full text-base font-black leading-none text-white ${product.active ? "bg-emerald-600" : "bg-red-600"}`} role="img" title={product.active ? "Activo" : "Inactivo"}>{product.active ? "✓" : "×"}</span></td><td className="px-4 py-3 text-right"><ProductManageModal branches={branches} categories={categories.filter((item) => item.active || item.id === product.category_id).map((item) => ({ id: item.id, name: item.name }))} costCents={cost} price={pricedNow ? { cents: pricedNow.price_cents } : null} suppliers={suppliers} product={{ id: product.id, categoryId: product.category_id, name: product.name, slug: product.slug, sku: product.sku, unitType: product.unit_type, active: product.active, inventoryRole: product.inventory_role, hasUnitTypeHistory: productsWithUnitTypeHistory.has(product.id), barcodes: product.barcodes, branchIds: product.branch_ids, primarySupplierId: supplierId, packSizeUnits: packByProduct.get(product.id)?.sizeUnits ?? null, packDiscountBps: packByProduct.get(product.id)?.discountBps ?? null }} promotion={promotion && label ? { id: promotion.id, label } : null} /></td></ProductSelectableRow>;
+      return <ProductSelectableRow key={product.id} productId={product.id} productName={product.name} selectable={product.active}><td className="px-4 py-3"><strong>{product.name}</strong>{supplierId ? <p className="text-xs text-stone-500">Proveedor: {supplierNameById.get(supplierId) ?? "—"}</p> : null}</td><td className="px-4 py-3 text-stone-600">{categoryNames.get(product.category_id ?? "") ?? "Sin categoría"}</td><td className="px-4 py-3"><strong>{pricedNow ? `${formatCurrency(BigInt(pricedNow.price_cents))} ${unitSuffix}` : priceMissing ? "SIN PRECIO ($0)" : "SIN PRECIO"}</strong><p className="text-xs text-stone-500">{priceMissing ? "La caja de Central lo pide al venderlo" : cost != null ? `${formatCurrency(BigInt(cost))} costo estimado` : pricedNow ? "Costo no disponible" : "No disponible en POS"}</p></td><td className="px-4 py-3 text-xs text-stone-600">{product.branch_ids.length === 0 ? <span className="font-bold text-amber-700">Ninguna sucursal</span> : product.branch_ids.length === branches.length ? "Todas" : product.branch_ids.map((id) => branchNames.get(id) ?? "—").join(", ")}</td><td className="px-2 py-3 text-center"><span aria-label={product.active ? "Activo" : "Inactivo"} className={`inline-flex size-7 items-center justify-center rounded-full text-base font-black leading-none text-white ${product.active ? "bg-emerald-600" : "bg-red-600"}`} role="img" title={product.active ? "Activo" : "Inactivo"}>{product.active ? "✓" : "×"}</span></td><td className="px-4 py-3 text-right"><ProductManageModal branches={branches} categories={categories.filter((item) => item.active || item.id === product.category_id).map((item) => ({ id: item.id, name: item.name }))} costCents={cost} globalPackDiscountBps={pricingSettings?.pack_discount_bps ?? null} marginConfigured={marginConfigured} price={pricedNow ? { cents: pricedNow.price_cents } : null} suppliers={suppliers} product={{ id: product.id, categoryId: product.category_id, name: product.name, slug: product.slug, sku: product.sku, unitType: product.unit_type, active: product.active, inventoryRole: product.inventory_role, hasUnitTypeHistory: productsWithUnitTypeHistory.has(product.id), barcodes: product.barcodes, branchIds: product.branch_ids, primarySupplierId: supplierId, packSizeUnits: packByProduct.get(product.id)?.sizeUnits ?? null, packDiscountBps: packByProduct.get(product.id)?.discountBps ?? null }} promotion={promotion && label ? { id: promotion.id, label } : null} /></td></ProductSelectableRow>;
     })}</tbody></table></div>{!products.length ? <p className="p-8 text-center text-stone-500">No hay productos para estos filtros.</p> : null}</section>
     </ProductSelectionProvider>
     {totalPages > 1 ? <nav aria-label="Paginación" className="mt-3 flex items-center justify-between text-sm">

@@ -11,6 +11,7 @@ import {
   initialWeightStabilityState,
   sumMoney,
   formatBasisPointsPercent,
+  packDiscountLabel,
   type BranchUnitPromotion,
   type ScaleKind,
   type UnitPackSale,
@@ -1128,7 +1129,7 @@ export default function App() {
     const unitPromo = unitPromotionBadgeLabel(product);
     if (unitPromo) badges.push({ kind: "PROMO", label: unitPromo });
     const offer = packOfferOf(product);
-    if (offer) badges.push({ kind: "PACK", label: `Pack ${String(offer.packSizeUnits)} u · ${formatBasisPointsPercent(offer.packDiscountBps)}% OFF` });
+    if (offer) badges.push({ kind: "PACK", label: `Pack ${String(offer.packSizeUnits)} u · ${packDiscountLabel(offer.packDiscountBps)}` });
     return badges;
   }
 
@@ -2621,7 +2622,7 @@ export default function App() {
                   const preview = computed.pricing;
                   const unitRequest = selectedProduct.unitType === "UNIT" ? unitLineRequest(selectedProduct) : null;
                   const unitPromoLabel = computed.unitDiscount?.kind === "PACK"
-                    ? "Pack " + formatBasisPointsPercent(computed.unitDiscount.discountBps) + "% OFF"
+                    ? "Pack " + packDiscountLabel(computed.unitDiscount.discountBps)
                     : computed.unitDiscount ? "Promo desde " + String(unitPromotion?.minimumUnits ?? 0) + " u · " + formatBasisPointsPercent(unitPromotion?.discountBps ?? 0) + "% OFF" : "Promo";
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>

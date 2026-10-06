@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, DEFAULT_PACK_DISCOUNT_BPS, isValidPackDiscountBps,
-  isValidPackSizeUnits, packRealUnits, promotedUnitsFor, type BranchUnitPromotion
+  isValidPackSizeUnits, packDiscountLabel, packRealUnits, promotedUnitsFor, type BranchUnitPromotion
 } from "./unit-discounts";
 
 const L = 100_000n; // $1.000,00
@@ -161,20 +161,30 @@ describe("Pack: unidades reales con el descuento propio de cada producto", () =>
     expect(card.cardSurchargeCents).toBe(64_000n);
   });
 
-  it("valida el tamaño del pack, el porcentaje (0 < % < 100) y la cantidad", () => {
+  it("valida el tamaño del pack, el porcentaje (0 <= % < 100: 0 % es un pack sin descuento) y la cantidad", () => {
     expect(isValidPackSizeUnits(1)).toBe(false);
     expect(isValidPackSizeUnits(2)).toBe(true);
     expect(isValidPackSizeUnits(8)).toBe(true);
     expect(isValidPackSizeUnits(2.5)).toBe(false);
     expect(isValidPackSizeUnits(null)).toBe(false);
-    expect([0, 1, 2_000, 9_999, 10_000, -5, 12.5, null].map((bps) => isValidPackDiscountBps(bps))).toEqual([false, true, true, true, false, false, false, false]);
+    expect([0, 1, 2_000, 9_999, 10_000, -5, 12.5, null].map((bps) => isValidPackDiscountBps(bps))).toEqual([true, true, true, true, false, false, false, false]);
     expect(packRealUnits(2, 8)).toBe(16);
     expect(() => packRealUnits(0, 8)).toThrow(RangeError);
     expect(() => packRealUnits(1, 1)).toThrow(RangeError);
   });
 
-  it("rechaza un pack sin porcentaje válido (0 %, 100 % o más)", () => {
-    expect(() => pack(1, 8, 0)).toThrow(RangeError);
+  it("un pack de 0 % es un pack válido: 8 unidades reales a precio de lista, con y sin recargo de tarjeta", () => {
+    const cash = pack(1, 8, 0);
+    expect(cash.discountedUnits).toBe(8);
+    expect(cash.unitDiscountCents).toBe(0n);
+    expect(cash.subtotalCents).toBe(800_000n);
+    expect(packDiscountLabel(0)).toBe("sin descuento");
+    expect(packDiscountLabel(2_000)).toBe("20% OFF");
+    expect(packDiscountLabel(1_250)).toBe("12,5% OFF");
+  });
+
+  it("rechaza un pack sin porcentaje válido (100 % o más, negativo o NaN)", () => {
+    expect(() => pack(1, 8, -1)).toThrow(RangeError);
     expect(() => pack(1, 8, 10_000)).toThrow(RangeError);
     expect(() => pack(1, 8, 12_000)).toThrow(RangeError);
     expect(() => pack(1, 8, Number.NaN)).toThrow(RangeError);

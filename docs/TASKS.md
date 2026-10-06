@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Precio por margen global: aplicar, configurar y probar (acción del usuario)
+
+Implementado 2026-10-06 (D-068, `CURRENT_STATE.md`), **sin aplicar**; migración pendiente única: `202610060065_global_pricing_config.sql`. No recalcula nada: hasta que alguien guarde la configuración, el sistema se comporta como hoy.
+
+1. `supabase db push --dry-run` y `supabase db push` (antes de desplegar el Admin: la pantalla llama a RPC nuevas) → `git push` (Vercel). Instalar el POS nuevo sólo si se va a usar **pack global 0 %**; para un % de pack distinto de 20 % alcanza un build con SQLite `019` (commit `31f7b55` o posterior). Un POS anterior vende todo pack al 20 % y su venta se rechazaría si el global es otro.
+2. Antes de configurar, decidir los 4 valores reales y revisar los packs existentes: al guardar, TODOS pasan al «Dto por pack» global (versión nueva en cada uno, precios sin cambio).
+3. Productos → Precios → Configuración de precios: guardar; revisar la vista previa (precios que cambian, productos sin costo, **precios por sucursal que quedarían ganando**; el checkbox para cerrarlos viene marcado) y confirmar. Spot-check de 3–4 productos (costo ÷ (1 − margen)).
+4. Smoke de la carga masiva de costos (2–3 costos → precio recalculado), de un alta con costo (el precio sale solo) y de una importación con costos.
+5. Recargo de tarjeta offline: una caja sin conexión que vende con tarjeta antes y sincroniza después de un cambio de recargo debe quedar válida.
+6. **Decisiones a confirmar (D-068):** (a) un cambio de margen reprecia también los cortes de desposte; el desposte al finalizar NO reprecia; (b) con costo + margen el Admin no deja escribir el precio a mano; (c) la primera configuración reemplaza el % propio de cada pack.
+
 ## P0 — Desactivación masiva de productos: desplegar y probar (acción del usuario)
 
 Implementado 2026-10-06 (`CURRENT_STATE.md`). La migración `202610060064` ya está aplicada en Supabase; falta `git push` (Vercel) y el smoke de UI.

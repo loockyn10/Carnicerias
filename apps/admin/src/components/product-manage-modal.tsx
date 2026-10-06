@@ -21,7 +21,7 @@ interface ProductManageModalProps {
     primarySupplierId: string | null;
     /** Unidades por pack (sólo productos por unidad; null = sin pack). */
     packSizeUnits: number | null;
-    /** Descuento del pack en basis points (null sii no hay pack): cada producto tiene el suyo. */
+    /** Descuento del pack que el producto tiene HOY guardado (basis points; null sii no hay pack). Sólo informativo: el descuento sale de la configuración global. */
     packDiscountBps: number | null;
   };
   price: { cents: number } | null;
@@ -30,9 +30,13 @@ interface ProductManageModalProps {
   branches: { id: string; name: string }[];
   costCents: number | null;
   suppliers: SupplierOption[];
+  /** Descuento de pack global de la organización en basis points (null = todavía sin configurar). */
+  globalPackDiscountBps: number | null;
+  /** ¿Hay un margen global configurado? Con margen, guardar un costo nuevo recalcula el precio de venta. */
+  marginConfigured: boolean;
 }
 
-export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers, globalPackDiscountBps, marginConfigured }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
@@ -98,9 +102,8 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           {/* Un <select> deshabilitado no viaja en el formulario: la forma de venta se manda igual para que el servidor sepa si es por unidad. */}
           {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
           <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
-          <input name="current_pack_discount_bps" type="hidden" value={product.packDiscountBps ?? ""} />
-          {unitType === "UNIT" ? <ProductPackFields packDiscountBps={product.packDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
-          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} unitType={unitType} />
+          {unitType === "UNIT" ? <ProductPackFields currentPackDiscountBps={product.packDiscountBps} globalPackDiscountBps={globalPackDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
+          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} marginConfigured={marginConfigured} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>
             <div className="mt-2 flex flex-wrap gap-4 text-sm">

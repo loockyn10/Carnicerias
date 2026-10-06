@@ -31,9 +31,17 @@ import { divideRoundHalfUp, isCardSurchargePaymentMethod, validateBasisPoints, t
  */
 export const DEFAULT_PACK_DISCOUNT_BPS = 2_000;
 
-/** Límites del descuento de un pack, en basis points: `0 < descuento < 100 %` (0,01 % … 99,99 %). */
-export const MIN_PACK_DISCOUNT_BPS = 1;
+/**
+ * Límites del descuento de un pack, en basis points: `0 <= descuento < 100 %` (0 % … 99,99 %). Un pack con 0 % sigue siendo un pack
+ * (carga rápida de N unidades reales) pero sin descuento: las unidades por pack y el descuento son conceptos independientes (D-068).
+ */
+export const MIN_PACK_DISCOUNT_BPS = 0;
 export const MAX_PACK_DISCOUNT_BPS = 9_999;
+
+/** "20% OFF", o "sin descuento" para un pack de 0 % (nunca "0% OFF"). */
+export function packDiscountLabel(basisPoints: number): string {
+  return basisPoints === 0 ? "sin descuento" : `${formatBasisPointsPercent(basisPoints)}% OFF`;
+}
 
 /** Un pack tiene que agrupar al menos 2 unidades (1 no es un pack). */
 export const MIN_PACK_SIZE_UNITS = 2;

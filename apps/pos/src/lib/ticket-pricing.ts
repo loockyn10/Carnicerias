@@ -7,7 +7,7 @@ import {
   calculateUnitPackSalePricing,
   calculateWeightPackSalePricing,
   divideRoundHalfUp,
-  formatBasisPointsPercent,
+  packDiscountLabel,
   formatCurrency,
   isValidPackDiscountBps,
   packRealUnits,
@@ -218,7 +218,7 @@ export function describeUnitLine(line: TicketLine): { quantityLabel: string; bad
   const units = line.quantityUnits ?? 0;
   if (line.packCount != null && line.packSizeUnitsSnapshot != null) {
     const quantityLabel = `${String(line.packCount)} pack${line.packCount === 1 ? "" : "s"} × ${String(line.packSizeUnitsSnapshot)} u = ${String(units)} unidades`;
-    return { quantityLabel, badge: line.soldAsPack ? `Pack ${formatBasisPointsPercent(line.packDiscountBps ?? 0)}% OFF` : null };
+    return { quantityLabel, badge: line.soldAsPack ? `Pack ${packDiscountLabel(line.packDiscountBps ?? 0)}` : null };
   }
   return { quantityLabel: `${String(units)} u`, badge: null };
 }

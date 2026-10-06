@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(83);
+select plan(91);
 
 -- ---------------------------------------------------------------------------------------------
 -- Shape and hardening
@@ -366,6 +366,48 @@ select throws_ok(
 reset role;
 select is((select count(*) from public.categories where organization_id = 'a2000000-0000-4000-8000-000000000001' and name = 'Almacen'), 1::bigint, 'no duplicate Almacen category was created');
 select is((select count(*) from public.products where name = 'Sin categoria'), 0::bigint, 'and no product');
+
+-- ---------------------------------------------------------------------------------------------
+-- D-068: la creación rápida del POS NO se rompe con el margen global. Puede no conocerse el costo: el precio manual de emergencia sigue
+-- valiendo tal cual (nada se deriva ni se pisa). Cuando después se carga un costo y hay margen configurado, ese costo pasa a formar el
+-- precio de lista con la regla global.
+-- ---------------------------------------------------------------------------------------------
+update public.categories set active = true where organization_id = 'a2000000-0000-4000-8000-000000000001' and name = 'Almacen';
+insert into public.organization_pricing_settings (organization_id, margin_bps, unit_bulk_discount_bps, pack_discount_bps) values ('a2000000-0000-4000-8000-000000000001', 3000, 1500, 2000);
+insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_token, email_change, email_change_token_new, recovery_token)
+values ('00000000-0000-0000-0000-000000000000', 'a1000000-0000-4000-8000-00000000000a', 'authenticated', 'authenticated', 'qp-admin-a@example.test', '', now(), '{"provider":"email","providers":["email"]}', '{"display_name":"QP Admin A"}', now(), now(), '', '', '', '');
+insert into public.pos_operator_grants (organization_id, branch_id, device_id, operator_profile_id, issued_by, token_hash, valid_until) values ('a2000000-0000-4000-8000-000000000001', 'a3000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000001', encode(extensions.digest(convert_to(repeat('d', 64), 'UTF8'), 'sha256'), 'hex'), now() + interval '7 days');
+insert into public.organization_members (organization_id, profile_id, role_id, status) values ('a2000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-00000000000a', '10000000-0000-4000-8000-000000000001', 'ACTIVE');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'a1000000-0000-4000-8000-000000000001', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select is(
+  public.create_pos_quick_product('a4000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000003', repeat('d', 64), '7793333333331', 'Quick con margen', 99900, null) ->> 'status',
+  'CREATED', 'quick create with a margin configured and no cost works (emergency manual price)'
+);
+reset role;
+select is((select price_cents from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen') and valid_to is null), 99900::bigint, 'the typed price is the list price: nothing is derived without a cost');
+select is((select count(*) from public.product_costs where product_id = (select id from public.products where name = 'Quick con margen')), 0::bigint, 'and there is no cost');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'a1000000-0000-4000-8000-000000000001', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select is(
+  public.create_pos_quick_product('a4000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000003', repeat('d', 64), '7793333333332', 'Quick con costo', 120000, 50000) ->> 'status',
+  'CREATED', 'quick create that also reports a cost works'
+);
+reset role;
+select is((select price_cents from public.product_prices where product_id = (select id from public.products where name = 'Quick con costo') and valid_to is null), 120000::bigint, 'the price typed at the register is kept as is (quick create does not derive prices)');
+
+-- Más tarde el Admin carga el costo: desde ahí manda la regla global (costo / (1 - margen)).
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'a1000000-0000-4000-8000-00000000000a', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+select lives_ok($$select public.set_product_cost((select id from public.products where name = 'Quick con margen'), 50000, clock_timestamp())$$, 'the Admin later loads the cost of the quick-created product');
+select is((select price_cents from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen') and valid_to is null order by valid_from desc limit 1), 71429::bigint, 'the list price is now formed by the global rule: $500 / 0,70 = $714,29');
+select is((select count(*) from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen')), 2::bigint, 'the emergency price stays in the history (2 vigencias)');
+reset role;
 
 select * from finish();
 rollback;

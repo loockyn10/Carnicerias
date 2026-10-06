@@ -375,8 +375,21 @@ describe("flujo del modal de cantidad (grilla, escáner y edición comparten el 
 
   it("sin la versión del pack o con un % inválido (servidor anterior) no hay Pack: la venta no podría validarse", () => {
     expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
-    expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: 0, packConfigId: "cfg-8" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
     expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: 10_000, packConfigId: "cfg-8" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
+    expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: -1, packConfigId: "cfg-8" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
+  });
+
+  it("un Pack con 0 % (D-068) sí se ofrece: carga 2 packs de 8 = 16 unidades reales a precio de lista, sin descuento", () => {
+    const offer = { packSizeUnits: 8, packDiscountBps: 0, packConfigId: "cfg-8-0" };
+    const req = request([], { packOffer: offer, packMode: true, quantity: 2 });
+    expect(req).toMatchObject({ units: 16, packSale: { packCount: 2, packSizeUnits: 8, packDiscountBps: 0 } });
+    const line = buildUnitTicketLine(leche, req.units, "x", null, "CASH", CARD_BPS, { packSale: req.packSale });
+    expect(line.subtotalCents).toBe(1_600_000n);
+    expect(line.promotionDiscountCents).toBe(0n);
+    expect(line.soldAsPack).toBe(true);
+    expect(line.packDiscountBps).toBe(0);
+    // Con tarjeta el recargo sigue aplicando sobre el total de la línea (D-044), también sin descuento.
+    expect(buildUnitTicketLine(leche, req.units, "x", null, "DEBIT", CARD_BPS, { packSale: req.packSale }).subtotalCents).toBe(1_760_000n);
   });
 
   it("el Pack del modal lleva el % del producto: 25 % → 2 packs de 8 son 16 unidades reales y $12.000", () => {
@@ -421,5 +434,56 @@ describe("flujo del modal de cantidad (grilla, escáner y edición comparten el 
     const manual = applyManualPrice(normal(2), 90_000n);
     expect(findMergeableUnitLine([packLine(1), manual], "leche", false, true)?.id).toBe(manual.id);
     expect(findMergeableUnitLine([packLine(1)], "leche", false, true)).toBeUndefined();
+  });
+});
+
+// D-044 + D-061 + D-068: el recargo por tarjeta NO es una promoción de línea. Una línea tiene a lo sumo UN descuento (pack o «desde 3») y,
+// además, el recargo del medio de pago una sola vez sobre el total ya descontado. El precio MANUAL de Central es la excepción: es el precio final.
+describe("recargo de tarjeta combinado con descuentos (no compite, no se pierde)", () => {
+  it("precio normal + tarjeta: 2 × $1.000 → $2.200 (recargo $200, sin descuento)", () => {
+    const line = normal(2, "DEBIT");
+    expect(line.subtotalCents).toBe(220_000n);
+    expect(line.cardSurchargeCents).toBe(20_000n);
+    expect(line.promotionDiscountCents ?? 0n).toBe(0n);
+    expect(normal(2, "CASH").subtotalCents).toBe(200_000n);
+  });
+
+  it("«desde 3» 15 % + tarjeta: $3.000 − $450 = $2.550 y después +10 % = $2.805 (descuento Y recargo)", () => {
+    const line = normal(3, "DEBIT");
+    expect(line.promotionDiscountCents).toBe(45_000n);
+    expect(line.subtotalCents).toBe(280_500n);
+    expect(line.cardSurchargeCents).toBe(25_500n);
+    expect(normal(3, "CASH").subtotalCents).toBe(255_000n);
+  });
+
+  it("pack de 8 al 20 % + tarjeta: $8.000 − $1.600 = $6.400 y después +10 % = $7.040 (descuento Y recargo)", () => {
+    const line = packLine(1, "DEBIT");
+    expect(line.promotionDiscountCents).toBe(160_000n);
+    expect(line.subtotalCents).toBe(704_000n);
+    expect(line.cardSurchargeCents).toBe(64_000n);
+    expect(packLine(1, "CASH").subtotalCents).toBe(640_000n);
+  });
+
+  it("pack al 0 % + tarjeta: sin descuento, el recargo sigue aplicando ($6.000 → $6.600)", () => {
+    const zero = packLine(1, "DEBIT", 6, FROM_3_15, 0);
+    expect(zero.promotionDiscountCents ?? 0n).toBe(0n);
+    expect(zero.packDiscountBps).toBe(0);
+    expect(zero.subtotalCents).toBe(660_000n);
+    expect(zero.cardSurchargeCents).toBe(60_000n);
+    expect(packLine(1, "CASH", 6, FROM_3_15, 0).subtotalCents).toBe(600_000n);
+  });
+
+  it("precio manual + tarjeta: el precio fijado es el final, SIN recargo y sin descuento (D-061), con cualquier medio de pago", () => {
+    const manual = applyManualPrice(normal(2, "DEBIT"), 90_000n);
+    expect(manual.subtotalCents).toBe(180_000n);
+    expect(manual.cardSurchargeCents ?? 0n).toBe(0n);
+    expect(repriceTicketLine(manual, context("CREDIT")).subtotalCents).toBe(180_000n);
+    expect(repriceTicketLine(manual, context("CASH")).subtotalCents).toBe(180_000n);
+  });
+
+  it("el recargo no suma ni resta descuento: pack + «desde 3» siguen sin acumularse al pagar con tarjeta", () => {
+    const pack = packLine(1, "DEBIT");
+    expect(pack.branchPromotionId).toBeUndefined();
+    expect(pack.subtotalCents).toBe(704_000n); // $6.400 + 10 %, no $6.800 (15 %) ni un 25 % combinado
   });
 });

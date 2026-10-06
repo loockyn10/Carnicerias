@@ -466,8 +466,8 @@ insert into public.product_pack_versions (organization_id, product_id, pack_size
 values ('a2000000-0000-4000-8000-000000000001', 'a5000000-0000-4000-8000-000000000001', 6, 2000, now() - interval '10 days', now() - interval '3 days');
 select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to) select organization_id, id, 9, 10000, now() - interval '30 days', now() - interval '20 days' from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
   '23514', null, 'the table itself refuses a pack version with a 100 % discount');
-select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to) select organization_id, id, 9, 0, now() - interval '30 days', now() - interval '20 days' from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
-  '23514', null, 'the table itself refuses a pack version with a 0 % discount');
+select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps, valid_from, valid_to) select organization_id, id, 9, -1, now() - interval '30 days', now() - interval '20 days' from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
+  '23514', null, 'the table itself refuses a pack version with a negative discount (0 % is valid since D-068)');
 select throws_ok($$insert into public.product_pack_versions (organization_id, product_id, pack_size_units, discount_bps) select organization_id, id, 9, 2000 from public.products where id = 'a5000000-0000-4000-8000-000000000001'$$,
   '23505', null, 'the table itself refuses a second open version for the same product');
 set local role authenticated;

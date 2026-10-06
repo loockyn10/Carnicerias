@@ -12,7 +12,7 @@ export {
 } from "./stock-quantity";
 export type { ParseStockQuantityOptions, StockUnit } from "./stock-quantity";
 export {
-  calculatePriceFormation, calculateSalePricing, calculateWeightPackSalePricing,
+  calculateListPriceFromMargin, calculatePriceFormation, calculateSalePricing, calculateWeightPackSalePricing,
   calculateUnitPackSalePricing, divideRoundHalfUp, validateBasisPoints
 } from "./pricing";
 export type { QuantityDiscount, SalePricing, UnitPackPromotion } from "./pricing";
@@ -95,7 +95,7 @@ export type {
   SourceQuantityVerdict
 } from "./catalog-import";
 export {
-  calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, DEFAULT_PACK_DISCOUNT_BPS, formatBasisPointsPercent, isValidPackDiscountBps,
+  calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, DEFAULT_PACK_DISCOUNT_BPS, formatBasisPointsPercent, isValidPackDiscountBps, packDiscountLabel,
   isValidPackSizeUnits, MAX_PACK_DISCOUNT_BPS, MAX_PACK_SIZE_UNITS, MIN_PACK_DISCOUNT_BPS, MIN_PACK_SIZE_UNITS, packRealUnits,
   promotedUnitsFor, unitDiscountCents
 } from "./unit-discounts";

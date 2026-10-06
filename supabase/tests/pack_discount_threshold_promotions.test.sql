@@ -155,7 +155,8 @@ select is((select pack_size_units || '/' || pack_discount_bps from public.produc
 select is((select pack_size_units || '/' || pack_discount_bps from public.products where sku = 'PK-5'), '12/1500', 'C stores 12 units and 1500 bps');
 select is((select count(*) from public.product_pack_versions where product_id = 'a5000000-0000-4000-8000-000000000004' and valid_to is null and discount_bps = 2500 and pack_size_units = 8), 1::bigint, 'B has one open version with 8 / 25 %');
 
-select throws_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000001', 8, 0)$$, '22023', null, '0 % is not a pack discount');
+-- D-068: 0 % ya es un descuento de pack válido (el pack existe pero no descuenta); se prueba en un producto aparte y se deja sin pack.
+select lives_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000002', 6, 0), public.set_product_pack_size('a5000000-0000-4000-8000-000000000002', null)$$, '0 % is a valid pack discount (pack without discount)');
 select throws_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000001', 8, 10000)$$, '22023', null, '100 % is not a pack discount (the pack would be free)');
 select throws_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000001', 8, 12000)$$, '22023', null, 'more than 100 % is rejected');
 select throws_ok($$select public.set_product_pack_size('a5000000-0000-4000-8000-000000000001', 8, -500)$$, '22023', null, 'a negative pack discount is rejected');
@@ -175,7 +176,7 @@ reset role;
 select throws_ok($$update public.products set pack_size_units = 6, pack_discount_bps = null where sku = 'PK-2'$$, '23514', null, 'the table refuses a pack with no discount');
 select throws_ok($$update public.products set pack_discount_bps = 2000 where sku = 'PK-2'$$, '23514', null, 'the table refuses a discount with no pack');
 select throws_ok($$update public.products set pack_discount_bps = 10000 where sku = 'PK-1'$$, '23514', null, 'the table refuses a 100 % pack discount');
-select throws_ok($$update public.products set pack_discount_bps = 0 where sku = 'PK-1'$$, '23514', null, 'the table refuses a 0 % pack discount');
+select throws_ok($$update public.products set pack_discount_bps = -1 where sku = 'PK-1'$$, '23514', null, 'the table refuses a negative pack discount');
 select throws_ok($$update public.products set pack_size_units = null where sku = 'PK-1'$$, '23514', null, 'removing the size while keeping the discount is refused');
 select lives_ok($$update public.products set pack_size_units = null, pack_discount_bps = null where sku = 'PK-5'$$, 'removing both at once is allowed (no pack, no discount)');
 select is((select pack_size_units is null and pack_discount_bps is null from public.products where sku = 'PK-5'), true, 'a product without pack has no active discount configuration');

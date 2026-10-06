@@ -6,12 +6,14 @@ import { redirect } from "next/navigation";
 import { createClient } from "../../lib/supabase/server";
 import { requireAdminContext } from "../../lib/admin";
 import { parsePesosToCents } from "../../lib/settlements";
-import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
+import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
 import type { CarryPlanReport } from "../../lib/carry-plan";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
-import { parseBranchPromotionForm, parseCurrentPackConfig, parsePackConfigForm } from "../../lib/unit-promotions";
+import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
+import { resolveNewProductPricing } from "../../lib/new-product-pricing";
+import { parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
 import type { Database } from "@carnicerias/database";
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
@@ -103,6 +105,15 @@ export async function saveCategoryAction(formData: FormData) {
   revalidatePath("/admin/products");
 }
 
+/** Margen global vigente de la organización (basis points), o null si todavía no se configuró. */
+async function currentMarginBps(): Promise<number | null> {
+  const context = await requireAdminContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("organization_pricing_settings").select("margin_bps").eq("organization_id", context.organizationId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.margin_bps ?? null;
+}
+
 export async function saveProductAction(formData: FormData) {
   const name = text(formData, "name");
   await rpcOrThrow("save_product", {
@@ -140,15 +151,14 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
   try {
     const name = text(formData, "name");
     const productId = text(formData, "product_id");
-    // Pack (sólo productos por unidad): unidades por pack Y descuento del pack, siempre juntos (vacío = sin pack). Quitar el pack va ANTES de
-    // guardar el producto (si pasa a «por kg» no puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). Cambiar
-    // cualquiera de los dos valores abre una versión nueva del pack en el servidor. No es una promoción ni toca precios.
-    const wantedPack = text(formData, "unit_type") === "UNIT"
-      ? parsePackConfigForm(text(formData, "pack_size_units"), text(formData, "pack_discount_percent"))
-      : { packSizeUnits: null, packDiscountBps: null };
-    const currentPack = parseCurrentPackConfig(text(formData, "current_pack_size_units"), text(formData, "current_pack_discount_bps"));
-    if (wantedPack.packSizeUnits === null && currentPack.packSizeUnits !== null) {
-      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: null, p_pack_discount_bps: null });
+    // Pack (sólo productos por unidad): SÓLO las unidades por pack (vacío = sin pack). El descuento del pack ya no es del producto: sale
+    // de la configuración global de precios (D-068), así que este formulario no lo envía. Quitar el pack va ANTES de guardar el producto
+    // (si pasa a «por kg» no puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). Cambiar las unidades abre
+    // una versión nueva del pack en el servidor. No es una promoción ni toca precios.
+    const wantedPackSize = text(formData, "unit_type") === "UNIT" ? parsePackSizeUnits(text(formData, "pack_size_units")) : null;
+    const currentPackSize = parseCurrentPackSize(text(formData, "current_pack_size_units"));
+    if (wantedPackSize === null && currentPackSize !== null) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: null });
     }
     await rpcOrThrow("save_product", {
       p_product_id: productId, p_category_id: text(formData, "category_id"),
@@ -156,29 +166,33 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
       p_active: formData.get("active") === "on"
     });
-    if (wantedPack.packSizeUnits !== null && (wantedPack.packSizeUnits !== currentPack.packSizeUnits || wantedPack.packDiscountBps !== currentPack.packDiscountBps)) {
-      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPack.packSizeUnits, p_pack_discount_bps: wantedPack.packDiscountBps });
+    if (wantedPackSize !== null && wantedPackSize !== currentPackSize) {
+      await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPackSize });
     }
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: inventoryRole(formData) });
     // Una sola categoría por producto: la que guarda save_product (products.category_id). No hay categorías adicionales.
 
-    // Precio de venta = decisión manual: se guarda directo, nunca derivado de costo+margen. Sólo
-    // escribe si cambió respecto al valor vigente (hidden input), igual que el patrón anterior.
-    const rawPrice = text(formData, "price");
-    if (rawPrice) {
-      const priceCents = pesosToCents(rawPrice);
-      if (priceCents !== Number(text(formData, "current_price_cents") || 0)) {
-        await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: priceCents });
-      }
-    }
     // Costo directo (productos comprados ya terminados, no producidos por desposte). Un producto
     // producido por desposte tiene su costo alimentado automáticamente al finalizar el lote; este
-    // campo permite corregirlo o cargarlo a mano para lo que no sale de desposte.
+    // campo permite corregirlo o cargarlo a mano para lo que no sale de desposte. Con el margen global
+    // configurado, guardar un costo nuevo recalcula el precio de lista en la misma operación (D-068).
     const rawDirectCost = text(formData, "direct_cost");
     if (rawDirectCost) {
       const costCents = pesosToCents(rawDirectCost);
       if (costCents !== Number(text(formData, "current_cost_cents") || 0)) {
         await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: costCents });
+      }
+    }
+    // Precio de lista escrito a mano: sólo es el FALLBACK cuando el precio no puede derivarse (sin costo o sin margen configurado, o
+    // producto inactivo / materia prima). Con costo y margen el precio se forma desde el costo y un precio escrito no gana (el formulario
+    // ni lo envía). Sólo se escribe si el admin lo CAMBIÓ respecto al vigente.
+    const rawPrice = text(formData, "price");
+    const costKnown = Boolean(rawDirectCost) || Number(text(formData, "current_cost_cents") || 0) > 0;
+    const derivedPrice = costKnown && inventoryRole(formData) !== "RAW_MATERIAL" && formData.get("active") === "on" && (await currentMarginBps()) !== null;
+    if (rawPrice && !derivedPrice) {
+      const priceCents = pesosToCents(rawPrice);
+      if (priceCents !== Number(text(formData, "current_price_cents") || 0)) {
+        await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: priceCents });
       }
     }
 
@@ -225,20 +239,26 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     const role = inventoryRole(formData);
     const rawPrice = text(formData, "price");
     const rawDirectCost = text(formData, "direct_cost");
-    // A pure raw material (Desposte input, never sold directly) has no list price to form: its
-    // cost is captured per Desposte batch instead. Any sellable role still needs a manual price.
-    if (role !== "RAW_MATERIAL" && !rawPrice) throw new Error("Completá el precio de venta");
+    // Una materia prima pura (insumo de Desposte, nunca se vende directo) no tiene precio de lista: su costo se registra en cada desposte.
+    // Un producto de venta necesita precio, pero NO hace falta escribirlo si hay un costo válido y un margen global configurado: entonces
+    // lo forma el servidor (D-068, misma función que set_product_cost). Sin margen o sin costo hace falta el precio manual: si no se puede
+    // formar ningún precio, el error dice por qué y NO se crea nada.
+    const pricing = resolveNewProductPricing({
+      sellable: role !== "RAW_MATERIAL", active: formData.get("active") === "on", marginBps: await currentMarginBps(), costRaw: rawDirectCost, priceRaw: rawPrice
+    });
     // create_product_with_pricing (202609130012) is called purely as "create the product row"
     // here: cost/markup are always omitted, so its optional save_product_pricing branch never
-    // fires — this sprint's manual price/cost are set separately right below, never derived.
+    // fires — the cost (which derives the price when there is a margin) and the manual price are set separately right below.
     const productId = await rpcOrThrow("create_product_with_pricing", {
       p_category_id: text(formData, "category_id"), p_name: name,
       p_slug: text(formData, "slug") || slugify(name), p_sku: text(formData, "sku"),
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT", p_active: formData.get("active") === "on"
     });
     await rpcOrThrow("set_product_inventory_role", { p_product_id: productId, p_inventory_role: role });
-    if (rawPrice) await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
+    // El costo se guarda primero (con el margen global configurado deriva el precio: pricing === "DERIVED"); el precio escrito a mano sólo se
+    // usa como fallback (pricing === "MANUAL": sin costo o sin margen) y NUNCA le gana a costo + margen.
     if (rawDirectCost) await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: pesosToCents(rawDirectCost) });
+    if (pricing === "MANUAL") await rpcOrThrow("set_product_price", { p_product_id: productId, p_branch_id: null, p_price_cents: pesosToCents(rawPrice) });
     await saveProductBranchesAndBarcodes(productId, formData);
     await savePrimarySupplier(productId, formData);
     revalidatePath("/admin/products");
@@ -287,22 +307,40 @@ export async function setSupplierActiveFormAction(_: SupplierFormState, formData
   }
 }
 
-export interface PricingSettingsState { error?: string; successToken?: string }
-export async function saveCashDiscountAction(_: PricingSettingsState, formData: FormData): Promise<PricingSettingsState> {
+export interface PricingConfigState {
+  error?: string;
+  successToken?: string;
+  /** Firma de los valores del formulario con los que se pidió (la UI sólo muestra la vista previa si siguen siendo los mismos). */
+  signature?: string;
+  /** Margen cambiado sin confirmar: no se escribió nada; cuántos precios se recalcularían. */
+  preview?: PricingConfigOutcome;
+  result?: PricingConfigOutcome;
+}
+
+/**
+ * Guarda la configuración global de precios (margen, dto llevando 3u, dto por pack, recargo por tarjeta) con UNA llamada atómica a
+ * save_pricing_config (202610060065). Cambiar el margen recalcula los precios de lista de todos los productos con costo (en el
+ * servidor, nunca en el navegador), así que sin confirmación el servidor sólo devuelve la vista previa y no escribe nada.
+ * El recargo por tarjeta conserva su nombre histórico en la base (cash_discount_bps, D-044): CASH/TRANSFER/OTHER no tienen ajuste.
+ */
+export async function savePricingConfigAction(_: PricingConfigState, formData: FormData): Promise<PricingConfigState> {
+  const signature = text(formData, "signature");
   try {
-    // set_cash_discount (202609220030) only writes the percentage — it never repriced any
-    // product, unlike set_cash_discount_and_reprice (left untouched in the database, unused by
-    // this UI): a manual price must never change on its own when this percentage changes. Kept
-    // under its legacy name (see D-044): it now configures the card surcharge percentage, not a
-    // cash discount — CASH/TRANSFER/OTHER get no adjustment at all, DEBIT/CREDIT pay list price
-    // plus this percentage.
-    await rpcOrThrow("set_cash_discount", {
-      p_cash_discount_bps: percentageToBasisPointsAllowZero(text(formData, "cash_discount"), "Recargo por tarjeta", 9_999n)
+    const input = parsePricingConfigForm(formData);
+    const data = await rpcOrThrow("save_pricing_config", {
+      p_margin_bps: input.marginBps, p_unit_bulk_discount_bps: input.unitBulkDiscountBps,
+      p_pack_discount_bps: input.packDiscountBps, p_card_surcharge_bps: input.cardSurchargeBps,
+      p_confirm: formData.get("confirm") === "1",
+      // Cerrar (nunca borrar) los precios por sucursal de los productos que se reprecian, para que no le ganen al global. Sólo aplica con confirmación.
+      p_close_branch_overrides: formData.get("close_overrides") === "on"
     });
+    const outcome = parsePricingConfigOutcome(data);
+    if (outcome.requiresConfirmation) return { signature, preview: outcome };
     revalidatePath("/admin/products");
-    return { successToken: crypto.randomUUID() };
+    revalidatePath("/admin/promotions");
+    return { signature, successToken: crypto.randomUUID(), result: outcome };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "No se pudo actualizar la configuración" };
+    return { signature, error: error instanceof Error ? error.message : "No se pudo guardar la configuración de precios" };
   }
 }
 
@@ -317,25 +355,52 @@ export async function setPriceAction(formData: FormData) {
   revalidatePath("/admin/products");
 }
 
-export interface BulkPriceState { error?: string; successToken?: string; applied?: number }
+export interface BulkCostState {
+  error?: string;
+  successToken?: string;
+  applied?: number;
+  repriced?: number;
+  scheduledPrice?: number;
+  marginConfigured?: boolean;
+  /** Productos guardados que tienen un precio vigente de sucursal que le gana al precio global recién formado. */
+  branchOverrides?: number;
+}
+
+export interface CloseOverridesState { error?: string; successToken?: string; closed?: number }
 
 /**
- * Carga masiva de "Productos → Precios": recibe sólo las filas que el cliente marcó como
- * modificadas (ver bulk-price-editor.tsx) y las aplica en una única llamada atómica a
- * bulk_set_product_prices (202609220030) — precio global (sin sucursal) para esta primera carga;
- * los overrides por sucursal existentes siguen editables uno por uno vía setPriceAction.
+ * Cierra (nunca borra) todos los precios vigentes por sucursal de la organización, para que valga el precio global. La fila conserva su
+ * precio y queda en el historial. Server-side y atómico (close_branch_price_overrides, 202610060065).
  */
-export async function bulkSetProductPricesAction(_: BulkPriceState, formData: FormData): Promise<BulkPriceState> {
+export async function closeBranchPriceOverridesAction(): Promise<CloseOverridesState> {
+  try {
+    const result = await rpcOrThrow("close_branch_price_overrides", {}) as { closed?: number } | null;
+    revalidatePath("/admin/products");
+    return { successToken: crypto.randomUUID(), closed: result?.closed ?? 0 };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudieron cerrar los precios por sucursal" };
+  }
+}
+
+/**
+ * Carga masiva de COSTOS de "Productos → Precios": recibe sólo las filas que el cliente marcó como modificadas (ver
+ * bulk-cost-editor.tsx) y las aplica en una única llamada atómica a bulk_set_product_costs (202610060065). Cada costo guardado abre
+ * su vigencia de costo y, con el margen global configurado, recalcula el precio de lista en la misma transacción. Un precio de venta
+ * nunca viaja desde acá; los precios manuales se cargan en la ficha del producto.
+ */
+export async function bulkSetProductCostsAction(_: BulkCostState, formData: FormData): Promise<BulkCostState> {
   try {
     const raw = text(formData, "items");
-    const items = raw ? (JSON.parse(raw) as { productId: string; priceCents: number }[]) : [];
+    const items = raw ? (JSON.parse(raw) as { productId: string; costCents: number }[]) : [];
     if (!items.length) throw new Error("No hay cambios para guardar");
-    const result = await rpcOrThrow("bulk_set_product_prices", { p_items: items });
+    const result = await rpcOrThrow("bulk_set_product_costs", { p_items: items }) as { applied?: number; repriced?: number; scheduledPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null;
     revalidatePath("/admin/products");
-    const applied = result && typeof result === "object" && "applied" in result ? Number((result as { applied: unknown }).applied) : items.length;
-    return { successToken: crypto.randomUUID(), applied };
+    return {
+      successToken: crypto.randomUUID(), applied: result?.applied ?? items.length, repriced: result?.repriced ?? 0,
+      scheduledPrice: result?.scheduledPrice ?? 0, marginConfigured: result?.marginConfigured ?? false, branchOverrides: result?.branchOverrides ?? 0
+    };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "No se pudieron guardar los precios" };
+    return { error: error instanceof Error ? error.message : "No se pudieron guardar los costos" };
   }
 }
 
@@ -369,21 +434,6 @@ export async function saveWeightDiscountFormAction(_: PromotionFormState, formDa
     return { successToken: crypto.randomUUID() };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo guardar la promoción" };
-  }
-}
-
-/** Promoción global de una sucursal ("desde N unidades del mismo producto, X % sobre toda la línea"): crea, edita o la desactiva. Editarla crea una versión nueva (las ventas conservan la que usaron). */
-export async function saveBranchPromotionFormAction(_: PromotionFormState, formData: FormData): Promise<PromotionFormState> {
-  try {
-    const input = parseBranchPromotionForm(formData);
-    await rpcOrThrow("save_branch_promotion", {
-      // p_every_units conserva el nombre público de 060 (compatibilidad con el Admin ya desplegado); desde 061 es la cantidad mínima ("desde N").
-      p_branch_id: input.branchId, p_every_units: input.minimumUnits, p_discount_bps: input.discountBps, p_active: input.active
-    });
-    revalidatePath("/admin/promotions");
-    return { successToken: crypto.randomUUID() };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : "No se pudo guardar la promoción de la sucursal" };
   }
 }
 

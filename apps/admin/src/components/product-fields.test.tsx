@@ -51,43 +51,93 @@ describe("ProductCategoryField: una sola categoría por producto", () => {
   });
 });
 
-describe("ProductPackFields: unidades por pack y descuento del pack, juntos", () => {
-  it("muestra las dos cosas con los valores del producto (8 unidades, 25 %)", () => {
-    const html = renderToStaticMarkup(<ProductPackFields packDiscountBps={2_500} packSizeUnits={8} />);
+describe("ProductPackFields: sólo las unidades por pack (el descuento es global)", () => {
+  it("muestra únicamente las unidades por pack, con el valor del producto", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={2_500} globalPackDiscountBps={2_000} packSizeUnits={8} />);
     expect(html).toContain("Unidades por pack");
-    expect(html).toContain("Descuento del pack (%)");
     expect(html).toContain('name="pack_size_units"');
-    expect(html).toContain('name="pack_discount_percent"');
     expect(html).toContain('value="8"');
-    expect(html).toContain('value="25"');
-    expect(html).toContain("hoy: 25% OFF");
   });
 
-  it("soporta porcentajes decimales (12,5 %) y no muestra un 20 % fijo", () => {
-    const html = renderToStaticMarkup(<ProductPackFields packDiscountBps={1_250} packSizeUnits={6} />);
-    expect(html).toContain('value="12.5"');
-    expect(html).toContain("hoy: 12,5% OFF");
-    expect(html).not.toContain("20% OFF");
+  it("NO tiene ningún campo de descuento (ni visible ni oculto)", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={2_500} globalPackDiscountBps={2_000} packSizeUnits={8} />);
+    expect(html).not.toContain("pack_discount");
+    expect(html).not.toContain("Descuento del pack (%)");
+    expect(html.match(/<input/g)).toHaveLength(1);
+    expect(html).not.toContain('type="hidden"');
   });
 
-  it("sin pack las dos casillas están vacías", () => {
-    const html = renderToStaticMarkup(<ProductPackFields packDiscountBps={null} packSizeUnits={null} />);
+  it("con el descuento global configurado, lo muestra como global (no el propio del producto)", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={2_500} globalPackDiscountBps={2_000} packSizeUnits={8} />);
+    expect(html).toContain("El descuento del pack es global: 20% OFF");
+    expect(html).not.toContain("25% OFF");
+  });
+
+  it("sin descuento global todavía, avisa del descuento que el pack conserva y de dónde configurarlo", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={1_250} globalPackDiscountBps={null} packSizeUnits={6} />);
+    expect(html).toContain("Descuento actual de este pack: 12,5% OFF");
+    expect(html).toContain("Dto por pack");
+  });
+
+  it("con el descuento global en 0 % lo explica: el pack sigue cargando N unidades, sin descuento", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={0} globalPackDiscountBps={0} packSizeUnits={6} />);
+    expect(html).toContain("hoy es 0 %");
+    expect(html).toContain("sin descuento");
+    expect(html).toContain('value="6"');
+    expect(html).not.toContain("0% OFF");
+  });
+
+  it("sin pack la casilla está vacía", () => {
+    const html = renderToStaticMarkup(<ProductPackFields currentPackDiscountBps={null} globalPackDiscountBps={2_000} packSizeUnits={null} />);
     expect(html).toContain('placeholder="Sin pack"');
-    expect(html).not.toContain("hoy:");
     expect(html).toMatch(/name="pack_size_units" value=""/);
-    expect(html).toMatch(/name="pack_discount_percent" value=""/);
   });
 
-  it("la ficha del producto las muestra juntas sólo para productos por unidad", () => {
+  it("la ficha del producto las muestra sólo para productos por unidad y no envía el descuento del pack", () => {
     expect(source("./product-manage-modal.tsx")).toMatch(/unitType === "UNIT" \? <ProductPackFields/);
     expect(source("./product-create-modal.tsx")).not.toContain("ProductPackFields");
+    expect(source("./product-manage-modal.tsx")).not.toContain("current_pack_discount_bps");
+    expect(source("./product-manage-modal.tsx")).not.toContain("pack_discount_percent");
+  });
+
+  it("la acción del producto sólo manda las unidades por pack al servidor (nunca un descuento)", () => {
+    const actions = source("../app/admin/actions.ts");
+    expect(actions).toContain('"set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPackSize }');
+    const packCalls = actions.match(/"set_product_pack_size", \{[^}]*\}/g) ?? [];
+    expect(packCalls).toHaveLength(2);
+    for (const call of packCalls) expect(call).not.toContain("discount");
+    expect(actions).not.toContain("pack_discount_percent");
   });
 });
 
-describe("compatibilidad del Admin con el servidor", () => {
-  it("la promoción por sucursal se guarda con el nombre público de parámetro de 060 (p_every_units), que también usa el Admin ya desplegado", () => {
+describe("Productos → Precios (D-068)", () => {
+  it("la acción de la carga masiva sólo envía costos al servidor (el precio lo recalcula el servidor)", () => {
     const actions = source("../app/admin/actions.ts");
-    expect(actions).toContain("p_every_units: input.minimumUnits");
-    expect(actions).not.toContain("p_minimum_units");
+    expect(actions).toContain('rpcOrThrow("bulk_set_product_costs"');
+    expect(actions).not.toContain("bulk_set_product_prices");
+    expect(actions).not.toContain("bulkSetProductPricesAction");
+  });
+
+  it("la configuración de precios se guarda con una sola llamada atómica (no hay requests por producto)", () => {
+    const actions = source("../app/admin/actions.ts");
+    expect(actions).toContain('rpcOrThrow("save_pricing_config"');
+    expect(actions).not.toContain("saveCashDiscountAction");
+  });
+
+  it("el costo de la ficha del producto se guarda ANTES que el precio manual (el precio escrito gana sobre el derivado)", () => {
+    const actions = source("../app/admin/actions.ts");
+    const manage = actions.slice(actions.indexOf("export async function manageProductAction"), actions.indexOf("export interface BulkDeactivateState"));
+    expect(manage.indexOf('"set_product_cost"')).toBeGreaterThan(-1);
+    expect(manage.indexOf('"set_product_cost"')).toBeLessThan(manage.indexOf('"set_product_price"'));
+    const create = actions.slice(actions.indexOf("export async function createProductModalAction"), actions.indexOf("// ---- Proveedores"));
+    expect(create.indexOf('"set_product_cost"')).toBeLessThan(create.indexOf('"set_product_price"'));
+  });
+
+  it("el editor por sucursal de la promoción desapareció: el panel es de sólo lectura y apunta a la configuración global", () => {
+    const panel = source("./branch-promotions-panel.tsx");
+    expect(panel).not.toContain("useActionState");
+    expect(panel).not.toContain("<form");
+    expect(panel).toContain("Configuración de precios");
+    expect(source("../app/admin/actions.ts")).not.toContain("save_branch_promotion");
   });
 });

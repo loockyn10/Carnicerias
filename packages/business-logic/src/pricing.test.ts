@@ -1,8 +1,76 @@
 import { describe, expect, it } from "vitest";
 import {
-  calculatePriceFormation, calculateSalePricing, calculateUnitPackSalePricing,
+  calculateListPriceFromMargin, calculatePriceFormation, calculateSalePricing, calculateUnitPackSalePricing,
   calculateWeightPackSalePricing, isCardSurchargePaymentMethod
 } from "./pricing";
+import { calculateBranchPromotionLinePricing, calculateUnitPackLinePricing } from "./unit-discounts";
+
+// D-068: margin over the SALE price (gross-up), not a markup over cost.
+describe("list price from margin", () => {
+  it.each([
+    [1_000_000n, 3_000n, 1_428_571n], // $10.000 at 30 % -> $14.285,71 (NOT $13.000)
+    [400_000n, 3_000n, 571_429n], // $4.000 at 30 % -> $5.714,29
+    [1_000_000n, 5_000n, 2_000_000n], // $10.000 at 50 % -> exactly $20.000
+    [1_000_000n, 3_500n, 1_538_462n], // $10.000 at 35 % -> $15.384,62
+    [350_000n, 3_000n, 500_000n], // $3.500 at 30 % -> $5.000
+    [1n, 5_000n, 2n], // half-up
+    [10_000n, 1n, 10_001n] // never below the cost
+  ])("cost %s at margin %s bps -> %s", (cost, margin, price) => {
+    expect(calculateListPriceFromMargin(cost, margin)).toBe(price);
+  });
+
+  it("is not a markup: $10.000 at 30 % is not $13.000", () => {
+    expect(calculateListPriceFromMargin(1_000_000n, 3_000n)).not.toBe(1_300_000n);
+  });
+
+  it("the realised margin over the sale price is the configured one", () => {
+    const price = calculateListPriceFromMargin(1_000_000n, 3_000n);
+    expect(Number(price - 1_000_000n) / Number(price)).toBeCloseTo(0.3, 5);
+  });
+
+  it("is the existing gross-up with a 0 markup (no parallel formula)", () => {
+    expect(calculateListPriceFromMargin(1_234_567n, 2_750n)).toBe(calculatePriceFormation(1_234_567n, 0n, 2_750n).listPriceCents);
+  });
+
+  it("rejects a 100 % / 0 % margin and a missing cost", () => {
+    expect(() => calculateListPriceFromMargin(1_000_000n, 10_000n)).toThrow(RangeError);
+    expect(() => calculateListPriceFromMargin(1_000_000n, 0n)).toThrow(RangeError);
+    expect(() => calculateListPriceFromMargin(0n, 3_000n)).toThrow(RangeError);
+  });
+});
+
+// D-068: the 3u and pack percentages are global; the formulas themselves did not change.
+describe("global unit discounts (worked examples)", () => {
+  it("\"llevando 3u\" at 15 %: $5.400 stays for 1-2 units and is $4.590 each from 3 (every unit, FROM_MINIMUM)", () => {
+    const promotion = { id: "global", minimumUnits: 3, discountBps: 1_500 };
+    const price = (quantityUnits: number) => calculateBranchPromotionLinePricing({ listPriceCents: 540_000n, quantityUnits, promotion, paymentMethod: "CASH", cashDiscountBps: 0n });
+    expect(price(1)).toBeNull();
+    expect(price(2)).toBeNull();
+    expect(price(3)?.finalPriceCents).toBe(459_000n);
+    expect(price(3)?.subtotalCents).toBe(1_377_000n);
+    expect(price(5)?.subtotalCents).toBe(2_295_000n); // all 5 units, not just the group of 3
+  });
+
+  it("pack of 6 at the global 20 %: $2.000 each -> $12.000 -> $9.600 -> $1.600 per unit", () => {
+    const pricing = calculateUnitPackLinePricing({
+      listPriceCents: 200_000n, pack: { packCount: 1, packSizeUnits: 6, packDiscountBps: 2_000 }, paymentMethod: "CASH", cashDiscountBps: 0n
+    });
+    expect(pricing.listSubtotalCents).toBe(1_200_000n);
+    expect(pricing.subtotalCents).toBe(960_000n);
+    expect(pricing.finalPriceCents).toBe(160_000n);
+  });
+
+  it("a pack and the 3u promotion never stack: the pack wins with its own percentage over all its units", () => {
+    const pack = calculateUnitPackLinePricing({
+      listPriceCents: 100_000n, pack: { packCount: 1, packSizeUnits: 8, packDiscountBps: 2_500 }, paymentMethod: "CASH", cashDiscountBps: 0n
+    });
+    const loose = calculateBranchPromotionLinePricing({
+      listPriceCents: 100_000n, quantityUnits: 8, promotion: { id: "global", minimumUnits: 3, discountBps: 1_500 }, paymentMethod: "CASH", cashDiscountBps: 0n
+    });
+    expect(pack.subtotalCents).toBe(600_000n);
+    expect(loose?.subtotalCents).toBe(680_000n);
+  });
+});
 
 describe("price formation", () => {
   it("inverts a 10% cash discount after a 30% markup", () => {

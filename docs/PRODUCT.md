@@ -13,7 +13,7 @@ Necesita una visión rápida del negocio y acceso a:
 - Stock por sucursal (consulta rápida de un producto entre sucursales).
 - Reposición.
 - Productos y categorías.
-- Formación de precios.
+- Formación de precios (margen global sobre el precio de venta, dto «llevando 3u», dto de pack y recargo de tarjeta; costos en carga masiva).
 - Promociones.
 - Avisos.
 - Rendiciones.

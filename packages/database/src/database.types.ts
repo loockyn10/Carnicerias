@@ -1362,6 +1362,54 @@ export type Database = {
           },
         ]
       }
+      organization_pricing_settings: {
+        Row: {
+          created_at: string
+          id: string
+          margin_bps: number | null
+          organization_id: string
+          pack_discount_bps: number | null
+          unit_bulk_discount_bps: number | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          margin_bps?: number | null
+          organization_id: string
+          pack_discount_bps?: number | null
+          unit_bulk_discount_bps?: number | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          margin_bps?: number | null
+          organization_id?: string
+          pack_discount_bps?: number | null
+          unit_bulk_discount_bps?: number | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_pricing_settings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_pricing_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organizations: {
         Row: {
           active: boolean
@@ -3666,6 +3714,10 @@ export type Database = {
         Args: { p_batch_id: string; p_skip_errors?: boolean }
         Returns: Json
       }
+      bulk_set_product_costs: {
+        Args: { p_effective_at?: string; p_items: Json }
+        Returns: Json
+      }
       bulk_set_product_prices: {
         Args: { p_branch_id?: string; p_effective_at?: string; p_items: Json }
         Returns: Json
@@ -3689,6 +3741,10 @@ export type Database = {
       }
       cancel_sale: {
         Args: { p_idempotency_key: string; p_reason: string; p_sale_id: string }
+        Returns: Json
+      }
+      close_branch_price_overrides: {
+        Args: { p_product_ids?: string[] }
         Returns: Json
       }
       complete_discounted_sale: {
@@ -3816,10 +3872,7 @@ export type Database = {
         }
         Returns: string
       }
-      deactivate_products: {
-        Args: { p_product_ids: string[] }
-        Returns: Json
-      }
+      deactivate_products: { Args: { p_product_ids: string[] }; Returns: Json }
       delete_branch: { Args: { p_branch_id: string }; Returns: undefined }
       delete_production_batch: {
         Args: { p_batch_id: string }
@@ -4366,6 +4419,17 @@ export type Database = {
             }
             Returns: string
           }
+      save_pricing_config: {
+        Args: {
+          p_card_surcharge_bps: number
+          p_close_branch_overrides?: boolean
+          p_confirm?: boolean
+          p_margin_bps: number
+          p_pack_discount_bps: number
+          p_unit_bulk_discount_bps: number
+        }
+        Returns: Json
+      }
       save_product: {
         Args: {
           p_active?: boolean

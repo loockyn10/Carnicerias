@@ -388,7 +388,10 @@ function percentLabel(bps: number): string {
 
 function unitDiscountLabelOf(item: TicketSourceItem): string | undefined {
   if (item.packCount != null && item.packSizeUnits != null && item.packDiscountBps != null) {
-    return `pack ${String(item.packCount)}x${String(item.packSizeUnits)} u -${percentLabel(item.packDiscountBps)}%`;
+    // Un pack con 0 % no tiene descuento que mostrar.
+    return item.packDiscountBps === 0
+      ? `pack ${String(item.packCount)}x${String(item.packSizeUnits)} u`
+      : `pack ${String(item.packCount)}x${String(item.packSizeUnits)} u -${percentLabel(item.packDiscountBps)}%`;
   }
   if (item.branchPromotionMinimumUnits != null && item.branchPromotionDiscountedUnits != null && item.branchPromotionDiscountBps != null) {
     return `promo desde ${String(item.branchPromotionMinimumUnits)}: ${String(item.branchPromotionDiscountedUnits)} u -${percentLabel(item.branchPromotionDiscountBps)}%`;

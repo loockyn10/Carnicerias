@@ -1,4 +1,4 @@
-import { formatBasisPointsPercent } from "@carnicerias/business-logic";
+import { packDiscountLabel } from "@carnicerias/business-logic";
 
 interface UnitQuantityFieldsProps {
   /** Cantidad que tipea el operador: unidades, o packs si `packMode` está activo. */
@@ -20,7 +20,7 @@ export function UnitQuantityFields({ quantity, onQuantityChange, pack, packMode,
   const packSizeUnits = pack?.packSizeUnits ?? 0;
   const packEnabled = pack != null;
   const inPackMode = packEnabled && packMode;
-  const discountLabel = pack ? formatBasisPointsPercent(pack.packDiscountBps) + "% OFF" : "";
+  const discountLabel = pack ? packDiscountLabel(pack.packDiscountBps) : "";
   return (
     <>
       {/* UNIT: cantidad entera con [-] [+] + input manual — nunca balanza ni gramos. */}

@@ -1005,13 +1005,13 @@ fn apply_catalog_pull_inner(
 
         // Pack: valor único por producto (None = sin pack), reemplazado en cada pull que lo toca. Se guarda junto con el id de su
         // versión y su porcentaje; sin ese id (un servidor anterior) no se ofrece Pack, porque la venta no podría validarse en el
-        // servidor. Sin porcentaje (servidor anterior a 202610040061) el pack era 20 %; un porcentaje fuera de 0 < % < 100 no se ofrece.
+        // servidor. Sin porcentaje (servidor anterior a 202610040061) el pack era 20 %; un porcentaje fuera de 0 <= % < 100 no se ofrece (0 % = pack sin descuento, D-068).
         transaction
             .execute("delete from catalog_product_packs where product_id = ?1", params![row.product_id])
             .map_err(|error| error.to_string())?;
         if let (Some(pack_size), Some(pack_config_id)) = (row.pack_size_units, row.pack_config_id.as_deref().filter(|id| !id.is_empty())) {
             let pack_discount_bps = row.pack_discount_bps.unwrap_or(DEFAULT_PACK_DISCOUNT_BPS);
-            if row.unit_type == "UNIT" && pack_size >= 2 && (1..=9_999).contains(&pack_discount_bps) {
+            if row.unit_type == "UNIT" && pack_size >= 2 && (0..=9_999).contains(&pack_discount_bps) {
                 transaction
                     .execute(
                         "insert into catalog_product_packs(product_id, pack_size_units, pack_config_id, pack_discount_bps) values (?1, ?2, ?3, ?4)",
@@ -1592,7 +1592,7 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                             let pack_size = item.pack_size_units_snapshot.ok_or_else(|| "A pack line is missing its pack size".to_string())?;
                             let pack_bps = item.pack_discount_bps.ok_or_else(|| "A pack line is missing its discount".to_string())?;
                             let declared = item.pack_discount_cents.as_deref().ok_or_else(|| "A pack line is missing its discount amount".to_string()).and_then(|value| parse_i64(value, "packDiscountCents"))?;
-                            if pack_count < 1 || !(2..=10_000).contains(&pack_size) || pack_count.checked_mul(pack_size) != Some(quantity_units) || !(1..=9_999).contains(&pack_bps) {
+                            if pack_count < 1 || !(2..=10_000).contains(&pack_size) || pack_count.checked_mul(pack_size) != Some(quantity_units) || !(0..=9_999).contains(&pack_bps) {
                                 return Err("Offline pack line is inconsistent".to_string());
                             }
                             // El dispositivo sólo vende el pack (versión y tamaño) que su catálogo local conoce, el mismo que mostró la UI y
@@ -4163,6 +4163,27 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_with_a_zero_percent_discount_sells_at_list_price_keeps_its_snapshot_and_still_takes_the_card_surcharge() {
+        // D-068: las unidades por pack y el descuento son independientes; con 0 % el pack sigue siendo una carga rápida de 8 unidades reales.
+        let (mut cash, cash_device) = pack_fixture();
+        cash.execute("update catalog_product_packs set pack_discount_bps = 0 where product_id = 'hamburguesa'", []).unwrap();
+        try_insert(&mut cash, &flex_payload(cash_device, "CASH", vec![pack_line_at("hamburguesa", 800, 1, 8, 0, 0)], None)).unwrap();
+        assert_eq!(
+            (unit_row(&cash, "subtotal_cents"), unit_row(&cash, "pack_discount_bps"), unit_row(&cash, "pack_discount_cents"), unit_row(&cash, "sold_as_pack"), unit_row(&cash, "quantity_units")),
+            (6_400, 0, 0, 1, 8)
+        );
+        // Con tarjeta (10 %) el recargo sigue aplicando sobre el total de la línea: $64,00 -> $70,40.
+        let (mut card, card_device) = pack_fixture();
+        card.execute("update catalog_product_packs set pack_discount_bps = 0 where product_id = 'hamburguesa'", []).unwrap();
+        try_insert(&mut card, &flex_payload(card_device, "DEBIT", vec![pack_line_at("hamburguesa", 800, 1, 8, 1_000, 0)], None)).unwrap();
+        assert_eq!((unit_row(&card, "subtotal_cents"), unit_row(&card, "card_surcharge_cents")), (7_040, 640));
+        // Un pack vendido al 20 % contra un catálogo que hoy dice 0 % se rechaza (el porcentaje es el de la versión que el dispositivo tiene).
+        let (mut mismatch, mismatch_device) = pack_fixture();
+        mismatch.execute("update catalog_product_packs set pack_discount_bps = 0 where product_id = 'hamburguesa'", []).unwrap();
+        assert!(try_insert(&mut mismatch, &flex_payload(mismatch_device, "CASH", vec![pack_line("hamburguesa", 800, 1, 8, 0)], None)).is_err());
+    }
+
+    #[test]
     fn a_pack_line_is_rejected_when_it_is_not_exactly_the_pack_rule() {
         let (mut connection, device_id) = pack_fixture();
         let mutations: Vec<(&str, fn(&mut OfflineSaleItem))> = vec![
@@ -4344,6 +4365,7 @@ mod tests {
 
     #[test]
     fn a_pack_without_a_percentage_is_a_20_percent_pack_from_an_older_server_and_an_invalid_one_is_not_offered() {
+        // D-068: un pack con 0 % SÍ se ofrece (pack sin descuento); lo que no se ofrece es un 100 % o más.
         let mut connection = catalog_fixture();
         let mut legacy = catalog_row("legacy", "Legacy", "UNIT", &[]);
         legacy.pack_size_units = Some(8);
@@ -4357,11 +4379,13 @@ mod tests {
         hundred.pack_config_id = Some("cfg-hundred".into());
         hundred.pack_discount_bps = Some(10_000);
         apply_catalog_pull_inner(&mut connection, &pull(vec![legacy, zero, hundred], &[]), "profile", "a@b.c").unwrap();
-        assert_eq!(count(&connection, "catalog_product_packs"), 1);
+        assert_eq!(count(&connection, "catalog_product_packs"), 2);
         let rows = local_catalog_inner(&connection, "central").unwrap();
+        let zero_row = rows.iter().find(|row| row.product_id == "zero").unwrap();
+        assert_eq!((zero_row.pack_size_units, zero_row.pack_discount_bps), (Some(8), Some(0)));
         let legacy_row = rows.iter().find(|row| row.product_id == "legacy").unwrap();
         assert_eq!((legacy_row.pack_size_units, legacy_row.pack_discount_bps), (Some(8), Some(2_000)));
-        assert!(rows.iter().filter(|row| row.product_id == "zero" || row.product_id == "hundred").all(|row| row.pack_size_units.is_none()));
+        assert!(rows.iter().filter(|row| row.product_id == "hundred").all(|row| row.pack_size_units.is_none()));
     }
 
     #[test]

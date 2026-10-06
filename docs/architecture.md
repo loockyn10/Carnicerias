@@ -81,8 +81,9 @@ Los roles son filas, los permisos son capacidades y `role_permissions` los vincu
 
 ## Precio e historia
 
-- `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal. **Es la única fuente del precio de venta**, cargado manualmente (`set_product_price`/`bulk_set_product_prices`, migración `202609220030`) — no se deriva de costo+markup (ver D-037, `docs/DECISIONS.md`).
+- `product_prices`: historial del precio de lista con vigencias y alcance global/sucursal. **Es la única fuente del precio de venta**: manual (`set_product_price`, migración `202609220030`) o derivado del costo con el margen global (`save_pricing_config`/`set_product_cost`/`bulk_set_product_costs`, migración `202610060065`, D-068: `costo ÷ (1 − margen)`; el POS recibe el precio ya formado, nunca costo ni margen). Cada cambio abre una vigencia nueva.
 - `product_costs`: historial de costo, alimentado automáticamente al finalizar un desposte (`complete_production_batch`, migración `202609220029`) o cargado directo (`set_product_cost`) para productos comprados ya terminados.
+- `organization_pricing_settings` (D-068): una fila por organización con `margin_bps`, `unit_bulk_discount_bps` (dto «llevando 3u», materializado como regla `FROM_MINIMUM` mínimo 3 en `branch_promotions` de cada sucursal) y `pack_discount_bps` (materializado en `products.pack_discount_bps`; cada cambio versiona `product_pack_versions`; 0 % = pack sin descuento). NULL = sin configurar. Sólo se escribe con `save_pricing_config`.
 - `organization_cash_discounts`: historial de recargo por tarjeta (D-044, columna `cash_discount_bps` conservada por nombre), configurado vía `set_cash_discount` (sin reprecio). CASH/TRANSFER/OTHER pagan el precio cargado sin ajuste; DEBIT/CREDIT pagan ese precio más el porcentaje configurado.
 - `product_pricing_settings` (markup) y el flujo `save_product_pricing`/`calculate_product_price`/`set_cash_discount_and_reprice` (D-006) quedan en la base intactos (historial) pero ninguna UI vigente los vuelve a escribir.
 
