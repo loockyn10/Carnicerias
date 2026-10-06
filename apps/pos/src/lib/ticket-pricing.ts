@@ -226,6 +226,20 @@ export function describeUnitLine(line: TicketLine): { quantityLabel: string; bad
   return { quantityLabel: `${String(units)} u`, badge: null };
 }
 
+/**
+ * Precio efectivo por kg de una línea WEIGHT: lo que realmente se cobra (`subtotalCents`, ya resuelto por el motor:
+ * promoción, pack, precio manual, recargo) dividido el peso real, en centavos enteros con redondeo half-up (sin floats).
+ * Sólo informa: nunca se usa para cobrar. Null si la línea no es WEIGHT, no tiene peso, o el resultado coincide con el
+ * precio base/kg que ya se muestra (no se duplica el mismo precio).
+ */
+export function finalPricePerKgCents(line: TicketLine): bigint | null {
+  if (line.quantityUnits != null || line.weightGrams <= 0) return null;
+  const grams = BigInt(line.weightGrams);
+  const perKg = (line.subtotalCents * 2_000n + grams) / (2n * grams);
+  const shownBase = line.manualPriceApplied ? line.pricePerKgCents : line.originalPricePerKgCents ?? line.pricePerKgCents;
+  return perKg === shownBase ? null : perKg;
+}
+
 /** A WEIGHT ticket line for `weightGrams` of `product` (pack toggle + threshold promotions included). */
 export function buildWeightTicketLine(
   product: LineProduct, weightGrams: number, id: string, sellAsPack: boolean, pack: DiscountRule | null,

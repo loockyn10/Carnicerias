@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyScanBuffer, feedScanKey, isEditableTarget, SCAN_MAX_KEY_GAP_MS, type ScanBuffer } from "./scanner";
+import { emptyScanBuffer, feedScanKey, flushTypeAhead, isEditableTarget, routeKey, SCAN_MAX_KEY_GAP_MS, type ScanBuffer } from "./scanner";
 
 function type(keys: string, startAt: number, gapMs: number, from: ScanBuffer = emptyScanBuffer()) {
   let buffer = from;
@@ -61,5 +61,68 @@ describe("isEditableTarget", () => {
     expect(isEditableTarget({ tagName: "textarea" } as unknown as EventTarget)).toBe(true);
     expect(isEditableTarget({ tagName: "BUTTON" } as unknown as EventTarget)).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
+  });
+});
+
+describe("routeKey (scanner vs. escribir para buscar)", () => {
+  const base = { ctrlKey: false, altKey: false, metaKey: false, repeat: false, editableTarget: false, typeAheadAllowed: true };
+  function press(keys: string[], startAt: number, gapMs: number, extra: Partial<typeof base> = {}) {
+    let buffer = emptyScanBuffer();
+    let now = startAt;
+    let last = { buffer, scan: null as string | null, pending: false };
+    for (const key of keys) {
+      last = routeKey(buffer, { ...base, ...extra, key }, now);
+      buffer = last.buffer;
+      now += gapMs;
+    }
+    return last;
+  }
+
+  it("un barcode (ráfaga + Enter rápido) es un scan y nunca queda pendiente para el buscador", () => {
+    const result = press([...Array.from("7790895000010"), "Enter"], 1_000, 10);
+    expect(result.scan).toBe("7790895000010");
+    expect(result.pending).toBe(false);
+  });
+
+  it("mientras la ráfaga sigue está pendiente, sin escribirse en ningún lado", () => {
+    const result = press(Array.from("779089"), 1_000, 10);
+    expect(result.scan).toBeNull();
+    expect(result.pending).toBe(true);
+  });
+
+  it("una persona escribiendo 'moli' queda pendiente y flushTypeAhead entrega el texto completo (no se pierde la primera letra)", () => {
+    const result = press(Array.from("moli"), 1_000, 40);
+    expect(result.pending).toBe(true);
+    const flushed = flushTypeAhead(result.buffer);
+    expect(flushed.text).toBe("moli");
+    expect(flushed.buffer).toEqual(emptyScanBuffer());
+  });
+
+  it("no hay type-ahead si la pantalla no lo permite (modal abierto)", () => {
+    expect(press(Array.from("moli"), 1_000, 40, { typeAheadAllowed: false }).pending).toBe(false);
+  });
+
+  it("escribir dentro de otro input no roba foco ni deja nada retenido", () => {
+    const result = press(Array.from("moli"), 1_000, 40, { editableTarget: true });
+    expect(result).toEqual({ buffer: emptyScanBuffer(), scan: null, pending: false });
+  });
+
+  it("Escape, Tab, Enter, F-keys, flechas, Shift y Backspace no inician una búsqueda", () => {
+    for (const key of ["Escape", "Tab", "Enter", "F5", "ArrowDown", "Shift", "Backspace"]) {
+      expect(press([key], 1_000, 10).pending).toBe(false);
+    }
+  });
+
+  it("atajos con Ctrl/Alt/Meta y teclas repetidas se ignoran", () => {
+    expect(press(["a"], 1_000, 10, { ctrlKey: true }).pending).toBe(false);
+    expect(press(["a"], 1_000, 10, { altKey: true }).pending).toBe(false);
+    expect(press(["a"], 1_000, 10, { metaKey: true }).pending).toBe(false);
+    expect(press(["a"], 1_000, 10, { repeat: true }).pending).toBe(false);
+  });
+
+  it("un espacio solo no abre el buscador y los espacios iniciales se descartan", () => {
+    expect(press([" "], 1_000, 10).pending).toBe(false);
+    expect(flushTypeAhead({ chars: "  vacio", lastKeyAt: 1 }).text).toBe("vacio");
+    expect(flushTypeAhead({ chars: "  ", lastKeyAt: 1 }).text).toBeNull();
   });
 });

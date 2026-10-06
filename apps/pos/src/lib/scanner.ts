@@ -46,3 +46,42 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   const tag = element.tagName.toUpperCase();
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable === true;
 }
+
+export interface RoutedKey {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  repeat: boolean;
+  /** The event target is a field where the user is typing on purpose (see `isEditableTarget`). */
+  editableTarget: boolean;
+  /** "Type to search" may take the focus now (main screen: no modal, no other field in use). */
+  typeAheadAllowed: boolean;
+}
+
+export interface RoutedKeyResult {
+  buffer: ScanBuffer;
+  scan: string | null;
+  /** True when `buffer.chars` may be a person starting to type: the caller arms a `SCAN_MAX_KEY_GAP_MS` timer and,
+   * if no further key arrives, hands `flushTypeAhead(buffer)` to the search box. Any other result cancels that timer. */
+  pending: boolean;
+}
+
+/**
+ * The single router for keys that land outside an input. A burst of printable keys is held back (never typed
+ * anywhere) until it is known whether it is a scanner: a burst ended by a fast Enter is a scan; one that just stops
+ * is a person typing, and `flushTypeAhead` gives the held text to the search box so no first letter is lost.
+ */
+export function routeKey(buffer: ScanBuffer, input: RoutedKey, now: number): RoutedKeyResult {
+  if (input.ctrlKey || input.altKey || input.metaKey || input.repeat) return { buffer, scan: null, pending: false };
+  if (input.editableTarget) return { buffer: emptyScanBuffer(), scan: null, pending: false };
+  const result = feedScanKey(buffer, input.key, now);
+  const pending = input.typeAheadAllowed && input.key.length === 1 && result.buffer.chars.trim() !== "";
+  return { buffer: result.buffer, scan: result.scan, pending };
+}
+
+/** The text a person typed on the main screen (leading spaces dropped), or null when there is nothing to hand over. */
+export function flushTypeAhead(buffer: ScanBuffer): { text: string | null; buffer: ScanBuffer } {
+  const text = buffer.chars.replace(/^\s+/, "");
+  return { text: text === "" ? null : text, buffer: emptyScanBuffer() };
+}

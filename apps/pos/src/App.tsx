@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { flushSync } from "react-dom";
 
 import {
   formatCurrency,
@@ -22,11 +23,13 @@ import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, parti
 import { CategoryPicker } from "./CategoryPicker";
 import { CentralProductList, type CentralRowBadge } from "./CentralProductList";
 import { catalogViewMode } from "./lib/central-list";
-import { emptyScanBuffer, feedScanKey, isEditableTarget } from "./lib/scanner";
+import { emptyScanBuffer, flushTypeAhead, isEditableTarget, routeKey, SCAN_MAX_KEY_GAP_MS } from "./lib/scanner";
+import { resetSearchForNextProduct } from "./lib/search-focus";
+import { TicketLineDetail } from "./TicketLineDetail";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
-  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, describeUnitLine, findMergeableUnitLine, findPackRule,
+  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findMergeableUnitLine, findPackRule,
   repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
 import { ManualPriceModal } from "./ManualPriceModal";
@@ -338,6 +341,9 @@ export default function App() {
   const [cashDiscountBps, setCashDiscountBps] = useState(0);
   const [categoryId, setCategoryId] = useState("ALL");
   const [search, setSearch] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  /** Producto agregado: búsqueda vacía y enfocada para el siguiente (después de que cierre el modal de peso/cantidad/precio). */
+  const focusSearchForNextProduct = () => resetSearchForNextProduct(() => setSearch(""), () => searchInputRef.current, (callback) => { window.setTimeout(callback, 30); });
   const [ticket, setTicket] = useState<TicketLine[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(null);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -1238,6 +1244,7 @@ export default function App() {
       setQuantityInput(1);
       setSellAsPack(false);
       setPackMode(false);
+      focusSearchForNextProduct();
     } catch (weightError) {
       setError(weightError instanceof Error ? weightError.message : "Cantidad inválida");
     }
@@ -1255,6 +1262,7 @@ export default function App() {
       setTicket((current) => current.map((line) => line.id === lineId ? applyManualPrice(line, priceCents) : line));
       setManualPriceLineId(null);
       setError(null);
+      focusSearchForNextProduct();
     } catch {
       setError("Con ese precio la línea queda en $0.");
     }
@@ -1285,6 +1293,7 @@ export default function App() {
     ticketRef.current = next;
     setTicket(next);
     setError(null);
+    focusSearchForNextProduct();
     setScanFeedback({ tone: "ok", text: `${note?.created ? "Producto creado: " : note?.priceSet ? `Precio guardado (${formatCurrency(product.pricePerKgCents)}): ` : ""}${product.productName} ×${String(quantity)}` });
   }
 
@@ -1446,23 +1455,45 @@ export default function App() {
   const scannerEnabled = Boolean(user && branchId) && (!desktop || Boolean(operator)) && !clockInRequired
     && !selectedProduct && quickCreateCode === null && pricePromptProduct === null && !exitModalOpen && !cancelTicketModalOpen && !diagnosticsOpen && !recentSalesOpen && !printerModalOpen && mpPanelSale === null && whatsappSaleId === null && !loading;
 
+  // "Escribir para buscar": se decide en el MISMO listener que el scanner (un único routing de teclado). Una ráfaga de
+  // teclas fuera de un input se retiene hasta saber qué es: Enter rápido = barcode (se resuelve como scan, nunca llega
+  // al buscador); si la ráfaga se corta sin Enter es una persona tipeando y el texto retenido pasa al buscador.
+  const typeAheadEnabled = scannerEnabled && manualPriceLineId === null;
+  const typeAheadEnabledRef = useRef(typeAheadEnabled);
+  typeAheadEnabledRef.current = typeAheadEnabled;
   useEffect(() => {
     if (!scannerEnabled) return;
     let buffer = emptyScanBuffer();
+    let flushTimer: number | undefined;
+    const cancelFlush = () => { if (flushTimer !== undefined) { window.clearTimeout(flushTimer); flushTimer = undefined; } };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
       // Somebody typing in a field on purpose (search box, weight, PIN…) is never a scan here;
       // the search box has its own Enter handling below.
-      if (isEditableTarget(event.target)) { buffer = emptyScanBuffer(); return; }
-      const result = feedScanKey(buffer, event.key, event.timeStamp);
+      const typeAheadAllowed = typeAheadEnabledRef.current && document.querySelector('[role="dialog"]') === null;
+      const result = routeKey(buffer, {
+        key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, repeat: event.repeat,
+        editableTarget: isEditableTarget(event.target), typeAheadAllowed
+      }, event.timeStamp);
+      if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
       buffer = result.buffer;
+      cancelFlush();
       if (result.scan !== null) {
         event.preventDefault(); // the terminating Enter must not activate a focused button
         scanHandlerRef.current(result.scan);
+      } else if (result.pending) {
+        flushTimer = window.setTimeout(() => {
+          flushTimer = undefined;
+          const flushed = flushTypeAhead(buffer);
+          buffer = flushed.buffer;
+          const input = searchInputRef.current;
+          if (flushed.text === null || !input || !typeAheadEnabledRef.current) return;
+          flushSync(() => setSearch(flushed.text ?? ""));
+          input.focus();
+        }, SCAN_MAX_KEY_GAP_MS + 20);
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => { cancelFlush(); window.removeEventListener("keydown", onKeyDown); };
   }, [scannerEnabled]);
 
   useEffect(() => {
@@ -2124,6 +2155,7 @@ export default function App() {
             </div>
           )}
           <input
+            ref={searchInputRef}
             className="pos-search mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-4 py-3 text-lg outline-none focus:border-rose-500"
             placeholder="Buscar producto o SKU…"
             value={search}
@@ -2194,28 +2226,7 @@ export default function App() {
                     <div className="min-w-0">
                       <h3 className="font-black">{line.productName}</h3>
                       {shouldDisplayTicketAmounts(paymentMethod) ? (
-                        <>
-                          {line.manualPriceApplied ? (
-                            <>
-                              <p className="mt-1 text-sm text-stone-400" data-testid="manual-price-line">
-                                {line.quantityUnits != null ? `${String(line.quantityUnits)} u × ` : `${formatWeight(line.weightGrams)} × `}
-                                <span className="text-stone-500 line-through">{formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}</span>
-                                {" → "}
-                                <strong className="text-amber-300">{formatCurrency(line.pricePerKgCents)}</strong>/{line.quantityUnits != null ? "u" : "kg"}
-                              </p>
-                              <p className="mt-1 text-xs font-bold text-amber-300">Precio manual</p>
-                            </>
-                          ) : (
-                            <p className="mt-1 text-sm text-stone-400">
-                              {line.quantityUnits != null
-                                ? `${describeUnitLine(line).quantityLabel} · ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/u`
-                                : `${formatWeight(line.weightGrams)} × ${formatCurrency(line.originalPricePerKgCents ?? line.pricePerKgCents)}/kg`}
-                            </p>
-                          )}
-                          {line.quantityUnits != null && !line.manualPriceApplied && describeUnitLine(line).badge ? <p className="mt-1 text-xs font-bold text-emerald-400" data-testid="unit-discount-badge">{describeUnitLine(line).badge}</p> : null}
-                          {line.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 text-xs font-bold text-amber-300">Promo pack</p> : null}
-                          {(line.discountCents ?? 0n) > 0n ? <p className="mt-1 text-xs font-bold text-emerald-400">Descuento: -{formatCurrency(line.discountCents ?? 0n)}</p> : null}
-                        </>
+                        <TicketLineDetail line={line} />
                       ) : (
                         <p className="mt-1 text-sm text-stone-400">{line.quantityUnits != null ? `${String(line.quantityUnits)} u` : formatWeight(line.weightGrams)}</p>
                       )}
