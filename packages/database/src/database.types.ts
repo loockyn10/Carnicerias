@@ -3822,6 +3822,34 @@ export type Database = {
         Returns: undefined
       }
       get_admin_dashboard: { Args: { p_branch_id?: string }; Returns: Json }
+      get_branch_carry_plan: {
+        Args: { p_branch_id?: string }
+        Returns: {
+          branch_id: string
+          branch_name: string
+          calculated_at: string
+          current_quantity: number
+          product_id: string
+          product_name: string
+          sold_quantity: number
+          suggested_quantity: number
+          unit_type: Database["public"]["Enums"]["unit_type"]
+          window_days: number
+          window_start: string
+        }[]
+      }
+      get_branch_sales_summary: {
+        Args: { p_branch_id?: string; p_from: string; p_to: string }
+        Returns: {
+          branch_id: string
+          branch_name: string
+          previous_total_cents: number
+          sales_count: number
+          total_cents: number
+          units: number
+          weight_grams: number
+        }[]
+      }
       get_branch_stock_status: {
         Args: {
           p_branch_id?: string

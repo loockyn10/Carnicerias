@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Sucursales: ventas por rango y «Qué llevar ahora»: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-06 (D-067, `CURRENT_STATE.md`), **sin aplicar**. Orden: `supabase db push` (aplica `202610060063`; antes de desplegar el Admin: la pantalla llama a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS (no se tocó el POS). Después `pnpm exec supabase gen types typescript --linked` y comparar con la edición manual de `database.types.ts`; donde haya Docker, `pnpm db:reset && pnpm db:test` corre por primera vez `branch_sales_and_carry_plan.test.sql` (84) contra Supabase real.
+
+1. **Confirmar que `organizations.production_branch_id` apunta a Central**: sin eso «Qué llevar ahora» responde «Configurá la sucursal productiva…» (fail-closed).
+2. Smoke en Admin → Sucursales: Hoy/Ayer a las 21:00–23:59 hora local (no deben correrse por UTC), un rango de varios días, comparar el total de una sucursal con Ventas; una venta cancelada/pendiente de pago no suma.
+3. Smoke de «Calcular qué llevar ahora» en Avenida con ventas reales de la semana: comparar 3–4 productos a mano (vendido 7d, stock, sugerido); probar editar «A llevar ahora» (coma decimal, valor inválido, 0) y «Mostrar sin necesidad». Confirmar que en Admin → Distribución y Stock no aparece ningún movimiento nuevo.
+4. Confirmar las decisiones de D-067: ventana = 7 días calendario con hoy incluido; stock negativo cuenta como 0; orden pesados → unidades; sin tope por stock de Central.
+- Pendiente a futuro (no hecho a propósito): botón «Crear transferencia con estas cantidades» (la estructura de cantidades `carry-plan.ts` ya valida kg/unidades; falta decidir cómo se registra la transferencia y qué pasa si Central no tiene lo sugerido); `/admin/sales` usa un offset fijo `-03:00` en vez de la zona de la organización.
+
 ## P0 — Ticket impreso no fiscal: smoke con la impresora física en Central (acción del usuario)
 
 Implementado 2026-10-04 (D-065, `CURRENT_STATE.md`); la salida real nunca se probó. `pnpm build:pos:desktop`, instalar el POS en Central, instalar el driver de la térmica de 80 mm (queda como impresora de Windows) y:

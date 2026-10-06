@@ -1,9 +1,11 @@
 import { formatCurrency, formatWeight } from "@carnicerias/business-logic";
 import Link from "next/link";
 
+import { CarryPlanPanel } from "../../../components/carry-plan-panel";
 import { StatusBadge } from "../../../components/admin-ui";
+import { SalesRangeFilter } from "../../../components/sales-range-filter";
 import { requireAdminContext } from "../../../lib/admin";
-import { localDayStart } from "../../../lib/multibranch";
+import { comparisonLabel, periodLabel, rangeQuery, resolveSalesRange } from "../../../lib/date-range";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
 
@@ -20,22 +22,24 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const q = value("q").trim().toLocaleLowerCase("es");
   const filter: Filter = ["alerts", "critical"].includes(value("filter")) ? value("filter") as Filter : "all";
   const sort: Sort = ["revenue", "alerts"].includes(value("sort")) ? value("sort") as Sort : "name";
-  const today = localDayStart(context.timezone);
+  // Días calendario de la ORGANIZACIÓN (nunca UTC): "hoy" y "ayer" salen de su zona horaria.
+  const range = resolveSalesRange({ preset: value("preset"), from: value("from"), to: value("to") }, context.timezone);
   const supabase = await createClient();
   const [branchesResult, salesResult, stockResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).eq("active", true).order("name")),
-    perf.measure("sales", supabase.from("sales").select("branch_id, total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1))),
+    // Agregado en el servidor (get_branch_sales_summary): sólo ventas COMPLETED del rango, una fila por sucursal.
+    perf.measure("sales", supabase.rpc("get_branch_sales_summary", { p_from: range.from, p_to: range.to })),
     perf.measure("stock", supabase.rpc("get_branch_stock_summary"))
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error].find(Boolean);
   if (error) { perf.flush(); return <main className="mx-auto max-w-6xl p-8 text-red-800">No se pudieron cargar las sucursales: {error.message}</main>; }
 
   const transformStartedAt = performance.now();
-  const rows = new Map((branchesResult.data ?? []).map((branch) => [branch.id, { id: branch.id, name: branch.name, active: branch.active, revenue: 0, previous: 0, grams: 0, tickets: 0, out: 0, low: 0 }]));
+  const rows = new Map((branchesResult.data ?? []).map((branch) => [branch.id, { id: branch.id, name: branch.name, active: branch.active, revenue: 0, previous: 0, grams: 0, units: 0, tickets: 0, out: 0, low: 0 }]));
   for (const sale of salesResult.data ?? []) {
     const row = rows.get(sale.branch_id);
     if (!row) continue;
-    if ((sale.completed_at ?? "") >= today) { row.revenue += sale.total_cents; row.grams += sale.total_weight_grams; row.tickets += 1; } else row.previous += sale.total_cents;
+    row.revenue = sale.total_cents; row.previous = sale.previous_total_cents; row.grams = sale.weight_grams; row.units = sale.units; row.tickets = sale.sales_count;
   }
   for (const stock of stockResult.data ?? []) {
     const row = rows.get(stock.branch_id);
@@ -50,29 +54,39 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   perf.mark("transform", transformStartedAt);
   perf.flush();
 
+  const keep = { q: value("q"), filter: filter === "all" ? "" : filter, sort: sort === "name" ? "" : sort };
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-center justify-end gap-4">
       <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches/compare">Comparar sucursales →</Link>
       <Link className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white" href="/admin/branches/new">+ Nueva sucursal</Link>
     </div>
+    <SalesRangeFilter error={range.error} preserve={keep} range={range} />
     <form className="mt-3 grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-[1fr_12rem_13rem_auto]">
+      <input name="from" type="hidden" value={range.from} /><input name="to" type="hidden" value={range.to} />
       <input className="rounded-lg border border-stone-300 px-3 py-2" defaultValue={value("q")} name="q" placeholder="Buscar sucursal…" />
       <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={filter} name="filter"><option value="all">Todas</option><option value="alerts">Con alertas</option><option value="critical">Stock crítico</option></select>
       <select className="rounded-lg border border-stone-300 bg-white px-3 py-2" defaultValue={sort} name="sort"><option value="name">Nombre</option><option value="revenue">Mayor facturación</option><option value="alerts">Más alertas</option></select>
       <button className="rounded-lg border px-4 py-2 font-bold">Aplicar</button>
     </form>
-    <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <p className="mt-3 text-sm text-stone-500">Ventas completadas · {periodLabel(range)} · zona horaria {context.timezone}</p>
+    <section className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {visible.map((row) => {
         const alerts = row.out + row.low;
         const change = row.previous ? ((row.revenue - row.previous) / row.previous) * 100 : null;
-        return <Link aria-label={`Ver sucursal ${row.name}`} className={`block cursor-pointer rounded-xl border border-transparent bg-white p-4 shadow-sm transition-shadow hover:border-rose-200 hover:bg-rose-50/30 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800 ${row.active ? "" : "opacity-60"}`} href={`/admin/branches/${row.id}`} key={row.id}>
+        return <Link aria-label={`Ver sucursal ${row.name}`} className={`block cursor-pointer rounded-xl border border-transparent bg-white p-4 shadow-sm transition-shadow hover:border-rose-200 hover:bg-rose-50/30 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-800 ${row.active ? "" : "opacity-60"}`} href={`/admin/branches/${row.id}?${rangeQuery(range)}`} key={row.id}>
           <div className="flex items-start justify-between gap-3"><h2 className="text-lg font-black">{row.name}</h2>{!row.active ? <StatusBadge tone="neutral">Inactiva</StatusBadge> : alerts ? <StatusBadge tone={row.out ? "critical" : "warning"}>{alerts} alertas</StatusBadge> : <StatusBadge tone="success">Sin alertas</StatusBadge>}</div>
-          <p className="mt-4 text-2xl font-black text-rose-800">{formatCurrency(BigInt(row.revenue))}</p>
-          <p className={`text-sm font-bold ${change !== null && change < 0 ? "text-red-700" : "text-emerald-700"}`}>{change === null ? "Sin comparación previa" : `${change >= 0 ? "+" : ""}${change.toFixed(1)}% vs ayer`}</p>
-          <p className="mt-2 text-sm text-stone-600">{formatWeight(row.grams)} · {row.tickets} tickets</p>
+          <p className="mt-4 text-xs font-bold uppercase tracking-wider text-stone-500">Total vendido</p>
+          <p className="text-2xl font-black text-rose-800">{formatCurrency(BigInt(row.revenue))}</p>
+          <p className={`text-sm font-bold ${change !== null && change < 0 ? "text-red-700" : "text-emerald-700"}`}>{change === null ? "Sin comparación previa" : `${change >= 0 ? "+" : ""}${change.toFixed(1)}% vs ${comparisonLabel(range)}`}</p>
+          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-stone-600">
+            <div><dt className="inline">Tickets: </dt><dd className="inline font-bold text-stone-900">{row.tickets}</dd></div>
+            <div><dt className="inline">Kg: </dt><dd className="inline font-bold text-stone-900">{formatWeight(row.grams)}</dd></div>
+            {row.units > 0 ? <div><dt className="inline">Unidades: </dt><dd className="inline font-bold text-stone-900">{new Intl.NumberFormat("es-AR").format(row.units)}</dd></div> : null}
+          </dl>
         </Link>;
       })}
     </section>
     {!visible.length ? <p className="mt-5 rounded-xl bg-white p-8 text-center text-stone-500">No hay sucursales para los filtros elegidos.</p> : null}
+    <CarryPlanPanel branchId={null} timeZone={context.timezone} />
   </main>;
 }

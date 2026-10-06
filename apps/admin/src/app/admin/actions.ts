@@ -8,6 +8,7 @@ import { requireAdminContext } from "../../lib/admin";
 import { parsePesosToCents } from "../../lib/settlements";
 import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, percentageToBasisPointsAllowZero, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
+import type { CarryPlanReport } from "../../lib/carry-plan";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { parseBranchPromotionForm, parseCurrentPackConfig, parsePackConfigForm } from "../../lib/unit-promotions";
 import type { Database } from "@carnicerias/database";
@@ -386,6 +387,32 @@ export async function searchProductsAction(query: string, branchId: string | nul
   });
   if (error) throw new Error(error.message);
   return data.map((row) => ({ id: row.product_id, name: row.product_name, sku: row.sku, unitType: row.unit_type, barcodes: row.barcodes }));
+}
+
+export type CarryPlanResult = { report: CarryPlanReport; error?: undefined } | { error: string; report?: undefined };
+
+/**
+ * "Qué llevar ahora": calcula en el momento, desde `get_branch_carry_plan` (sólo lectura: no crea
+ * movimientos ni transferencias). `branchId` null = todas las sucursales no productivas accesibles.
+ * La organización, los permisos y el acceso por sucursal los resuelve la RPC desde la sesión.
+ */
+export async function calculateCarryPlanAction(branchId: string | null): Promise<CarryPlanResult> {
+  await requireAdminContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_branch_carry_plan", branchId ? { p_branch_id: branchId } : {});
+  if (error) return { error: error.message };
+  const first = data[0];
+  return {
+    report: {
+      calculatedAt: first?.calculated_at ?? new Date().toISOString(),
+      windowStart: first?.window_start ?? "",
+      windowDays: first?.window_days ?? 7,
+      rows: data.map((row) => ({
+        branchId: row.branch_id, branchName: row.branch_name, productId: row.product_id, productName: row.product_name,
+        unitType: row.unit_type, soldQuantity: row.sold_quantity, currentQuantity: row.current_quantity, suggestedQuantity: row.suggested_quantity
+      }))
+    }
+  };
 }
 
 /** Converts what the operator typed into the raw ledger quantity using each product REAL unit type

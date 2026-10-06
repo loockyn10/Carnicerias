@@ -10,7 +10,10 @@ import { ForceHardNavigation } from "./force-hard-navigation";
 import { BranchSummary } from "./branch-summary";
 import { BRANCH_STOCK_PAGE_SIZE, BranchStockPanel, type BranchStockFilter } from "./branch-stock-panel";
 import { BranchTabs } from "./branch-tabs";
+import { CarryPlanPanel } from "./carry-plan-panel";
+import { SalesRangeFilter } from "./sales-range-filter";
 import { requireAdminContext } from "../lib/admin";
+import { comparisonLabel, periodLabel, rangeQuery, resolveSalesRange } from "../lib/date-range";
 import { localDayStart, stockPriority } from "../lib/multibranch";
 import { createClient } from "../lib/supabase/server";
 
@@ -23,16 +26,22 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const context = await requireAdminContext();
   const requestedTab = typeof query.tab === "string" ? query.tab : "";
   const tab: Tab = ["stock", "sales"].includes(requestedTab) ? requestedTab as Tab : "summary";
+  const queryValue = (key: string) => typeof query[key] === "string" ? query[key] : "";
+  // Período de las métricas del Resumen: días calendario de la organización (el mismo rango que se eligió en Sucursales).
+  const range = resolveSalesRange({ preset: queryValue("preset"), from: queryValue("from"), to: queryValue("to") }, context.timezone);
   const supabase = await createClient();
-  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult] = await Promise.all([
+  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult, rangeSummaryResult, organizationResult] = await Promise.all([
     supabase.from("branches").select("id, name, code, address, active").eq("organization_id", context.organizationId).eq("id", id).maybeSingle(),
     supabase.rpc("get_admin_dashboard", { p_branch_id: id }),
     // Alerts only (most urgent first): the whole branch catalog is never fetched for the summary.
     supabase.rpc("get_branch_stock_status", { p_branch_id: id, p_status: "ALERTS", p_limit: 50 }),
-    supabase.from("sales").select("id, completed_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 6)),
+    supabase.from("sales").select("id, total_cents, completed_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 6)),
     supabase.from("sales").select("id, total_cents, total_weight_grams, completed_at, created_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").order("completed_at", { ascending: false }).limit(6),
     supabase.from("stock_movements").select("product_id, type, quantity_grams, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).in("type", ["PURCHASE", "RETURN", "ADJUSTMENT_POSITIVE", "TRANSFER_IN"]).order("occurred_at", { ascending: false }).limit(6),
-    supabase.from("stock_operations").select("id, waste_reason, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("operation_type", "WASTE").order("occurred_at", { ascending: false }).limit(6)
+    supabase.from("stock_operations").select("id, waste_reason, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("operation_type", "WASTE").order("occurred_at", { ascending: false }).limit(6),
+    // Totales del período en el servidor (sólo ventas COMPLETED); también trae el período anterior para la variación.
+    supabase.rpc("get_branch_sales_summary", { p_from: range.from, p_to: range.to, p_branch_id: id }),
+    supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle()
   ]);
   if (!branchResult.data) {
     // Reached with modal=true when Next's route interception (see
@@ -42,11 +51,9 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     if (modal) return <ForceHardNavigation />;
     notFound();
   }
-  const error = [branchResult.error, dashboardResult.error, stockResult.error, weekSalesResult.error, recentSalesResult.error, restocksResult.error, wasteResult.error].find(Boolean);
+  const error = [branchResult.error, dashboardResult.error, stockResult.error, weekSalesResult.error, recentSalesResult.error, restocksResult.error, wasteResult.error, rangeSummaryResult.error, organizationResult.error].find(Boolean);
   if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la sucursal: {error.message}</main>;
   const todayStart = localDayStart(context.timezone);
-  const metricsSalesResult = await supabase.from("sales").select("total_cents, total_weight_grams, completed_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("status", "COMPLETED").gte("completed_at", localDayStart(context.timezone, 1));
-  if (metricsSalesResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudieron cargar las métricas: {metricsSalesResult.error.message}</main>;
   const settingsResult = await supabase.from("branch_product_stock_settings").select("product_id").eq("organization_id", context.organizationId).eq("branch_id", id);
   if (settingsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la configuración de stock: {settingsResult.error.message}</main>;
   const summaryResult = await supabase.rpc("get_branch_stock_summary");
@@ -67,11 +74,12 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   if (itemsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar el detalle comercial: {itemsResult.error.message}</main>;
 
   const dashboard = dashboardResult.data as unknown as DashboardData;
-  const todayRows = metricsSalesResult.data.filter((sale) => (sale.completed_at ?? "") >= todayStart);
-  const previousRows = metricsSalesResult.data.filter((sale) => (sale.completed_at ?? "") < todayStart);
-  const grossCents = todayRows.reduce((sum, sale) => sum + sale.total_cents, 0);
-  const previousGrossCents = previousRows.reduce((sum, sale) => sum + sale.total_cents, 0);
-  const today = { grossCents, previousGrossCents, salesCount: todayRows.length, averageTicketCents: todayRows.length ? Math.round(grossCents / todayRows.length) : 0, kilograms: todayRows.reduce((sum, sale) => sum + sale.total_weight_grams, 0) / 1000 };
+  const periodRow = rangeSummaryResult.data?.[0];
+  const periodMetrics = {
+    grossCents: periodRow?.total_cents ?? 0, previousGrossCents: periodRow?.previous_total_cents ?? 0, salesCount: periodRow?.sales_count ?? 0,
+    averageTicketCents: periodRow?.sales_count ? Math.round(periodRow.total_cents / periodRow.sales_count) : 0, kilograms: (periodRow?.weight_grams ?? 0) / 1000, units: periodRow?.units ?? 0
+  };
+  const todayGrossCents = (weekSalesResult.data ?? []).filter((sale) => (sale.completed_at ?? "") >= todayStart).reduce((sum, sale) => sum + sale.total_cents, 0);
   const stock = (stockResult.data ?? []).map((row) => ({
     ...row, current: row.current_stock_grams, minimum: row.minimum_stock_grams, target: row.target_stock_grams,
     suggested: row.suggested_replenishment_grams, priority: stockPriority(row.stock_status, row.current_stock_grams, row.minimum_stock_grams)
@@ -98,18 +106,21 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const restocks = (restocksResult.data ?? []).map((movement) => ({ ...movement, productName: restockProductNames.get(movement.product_id) ?? "Producto" }));
   const recentSales = recentSalesResult.data ?? [];
   const recentWaste = wasteResult.data ?? [];
-  const change = today.previousGrossCents ? ((today.grossCents - today.previousGrossCents) / today.previousGrossCents) * 100 : null;
+  const change = periodMetrics.previousGrossCents ? ((periodMetrics.grossCents - periodMetrics.previousGrossCents) / periodMetrics.previousGrossCents) * 100 : null;
+  const isProductionBranch = organizationResult.data?.production_branch_id === id;
+  const rangeParams = rangeQuery(range);
 
   return <BranchDetailFrame modal={modal} status={branchResult.data.active ? "ACTIVA" : "INACTIVA"} subtitle={`${branchResult.data.code}${branchResult.data.address ? ` · ${branchResult.data.address}` : ""}`} title={branchResult.data.name}><main className="mx-auto max-w-7xl p-5 sm:p-10">{!modal ? <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches">← Volver a sucursales</Link> : null}<div className={modal ? "hidden" : "mt-4 flex flex-wrap items-start justify-between gap-3"}><div><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Sucursal</p><h1 className="mt-1 text-3xl font-black">{branchResult.data.name}</h1><p className="mt-1 text-stone-600">{branchResult.data.code}{branchResult.data.address ? ` · ${branchResult.data.address}` : ""}</p></div><StatusBadge tone={branchResult.data.active ? "success" : "neutral"}>{branchResult.data.active ? "ACTIVA" : "INACTIVA"}</StatusBadge></div>
-    <BranchTabs active={tab} branchId={id} />
-    {tab === "summary" ? <><BranchSummary alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={today} products={topProducts} stockCounts={stockCounts} />
+    <BranchTabs active={tab} branchId={id} rangeParams={rangeParams} />
+    {tab === "summary" ? <><SalesRangeFilter error={range.error} range={range} /><BranchSummary comparisonLabel={comparisonLabel(range)} periodLabel={periodLabel(range)} alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={periodMetrics} products={topProducts} stockCounts={stockCounts} />
+      {isProductionBranch ? null : <CarryPlanPanel branchId={id} branchName={branchResult.data.name} timeZone={context.timezone} />}
       <section className="mt-7"><SectionHeader description="Nombre, código y dirección de esta sucursal." title="Editar datos" /><div className="mt-3 rounded-xl border bg-white p-4"><BranchForm branch={{ id, name: branchResult.data.name, code: branchResult.data.code, address: branchResult.data.address, active: branchResult.data.active }} /></div>
         <SectionHeader description="Desactivar conserva todo el historial; eliminar sólo es posible si la sucursal nunca operó." title="Estado de la sucursal" />
         <div className="mt-3"><BranchLifecyclePanel active={branchResult.data.active} branchId={id} /></div>
       </section></> : null}
     {tab === "stock" ? <><BranchStockPanel branchId={id} filter={stockFilter} page={stockPage} rows={stockPageResult.data.map((row) => { const priority = stockPriority(row.stock_status, row.current_stock_grams, row.minimum_stock_grams); return { productId: row.product_id, productName: row.product_name, sku: row.sku, unitType: row.unit_type, current: row.current_stock_grams, minimum: row.minimum_stock_grams, target: row.target_stock_grams, suggested: row.suggested_replenishment_grams, configured: configuredProducts.has(row.product_id), rank: priority.rank, label: priority.label, daily: (soldQuantityByProduct.get(row.product_id) ?? 0) / 7 }; })} search={stockSearch} totalRows={stockPageResult.data[0]?.total_count ?? 0} />
       <div className="mt-7 grid gap-7 lg:grid-cols-2"><section><SectionHeader title="Mermas recientes" action={<Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/stock">Ver movimientos →</Link>} /><div className="mt-3 divide-y rounded-xl border bg-white">{recentWaste.map((waste) => <div className="flex justify-between gap-3 px-4 py-3 text-sm" key={waste.id}><span>{new Date(waste.occurred_at).toLocaleString("es-AR", { timeZone: context.timezone })}</span><strong>{waste.waste_reason ?? "Merma"}</strong></div>)}{!recentWaste.length ? <p className="px-4 py-5 text-stone-500">Sin mermas recientes.</p> : null}</div></section><section><SectionHeader title="Reingresos recientes" /><div className="mt-3 divide-y rounded-xl border bg-white">{restocks.map((movement) => <div className="flex justify-between gap-3 px-4 py-3 text-sm" key={`${movement.product_id}-${movement.occurred_at}`}><span>{movement.productName} · {movement.type}</span><strong>+{formatWeight(Math.abs(movement.quantity_grams))}</strong></div>)}{!restocks.length ? <p className="px-4 py-5 text-stone-500">Sin reingresos recientes.</p> : null}</div></section></div></> : null}
-    {tab === "sales" ? <div className="mt-6 grid gap-7 lg:grid-cols-2"><section><SectionHeader title="Ventas recientes" action={<Link className="text-sm font-bold text-rose-800 hover:underline" href={`/admin/sales?preset=today&branch=${id}`}>Ver ventas →</Link>} /><div className="mt-3 divide-y rounded-xl border bg-white">{recentSales.map((sale) => <div className="flex justify-between gap-4 px-4 py-3 text-sm" key={sale.id}><span>{new Date(sale.completed_at ?? sale.created_at).toLocaleString("es-AR", { timeZone: context.timezone })}</span><strong>{formatCurrency(BigInt(sale.total_cents))} · {formatWeight(sale.total_weight_grams)}</strong></div>)}{!recentSales.length ? <p className="px-4 py-5 text-stone-500">Sin ventas recientes.</p> : null}</div><SectionHeader title="Productos vendidos" description="Últimos 7 días" /><div className="mt-3 divide-y rounded-xl border bg-white">{topProducts.map((product) => <div className="flex justify-between gap-3 px-4 py-3" key={product.name}><strong>{product.name}</strong><span>{formatWeight(product.grams)} · {formatCurrency(BigInt(product.cents))}</span></div>)}</div></section><section><SectionHeader title="Métricas comerciales" /><div className="mt-3 grid gap-3 sm:grid-cols-2"><MetricCard label="Descuentos hoy" value={formatCurrency(BigInt(todayDiscounts))} /><MetricCard label="Facturación hoy" value={formatCurrency(BigInt(today.grossCents))} /></div><SectionHeader title="Medios de pago" description="Mes actual" /><div className="mt-3 divide-y rounded-xl border bg-white">{dashboard.paymentsThisMonth.map((payment) => <div className="flex justify-between px-4 py-3" key={payment.method}><span>{paymentLabels[payment.method] ?? payment.method}</span><strong>{formatCurrency(BigInt(payment.amountCents))}</strong></div>)}</div></section></div> : null}
+    {tab === "sales" ? <div className="mt-6 grid gap-7 lg:grid-cols-2"><section><SectionHeader title="Ventas recientes" action={<Link className="text-sm font-bold text-rose-800 hover:underline" href={`/admin/sales?preset=today&branch=${id}`}>Ver ventas →</Link>} /><div className="mt-3 divide-y rounded-xl border bg-white">{recentSales.map((sale) => <div className="flex justify-between gap-4 px-4 py-3 text-sm" key={sale.id}><span>{new Date(sale.completed_at ?? sale.created_at).toLocaleString("es-AR", { timeZone: context.timezone })}</span><strong>{formatCurrency(BigInt(sale.total_cents))} · {formatWeight(sale.total_weight_grams)}</strong></div>)}{!recentSales.length ? <p className="px-4 py-5 text-stone-500">Sin ventas recientes.</p> : null}</div><SectionHeader title="Productos vendidos" description="Últimos 7 días" /><div className="mt-3 divide-y rounded-xl border bg-white">{topProducts.map((product) => <div className="flex justify-between gap-3 px-4 py-3" key={product.name}><strong>{product.name}</strong><span>{formatWeight(product.grams)} · {formatCurrency(BigInt(product.cents))}</span></div>)}</div></section><section><SectionHeader title="Métricas comerciales" /><div className="mt-3 grid gap-3 sm:grid-cols-2"><MetricCard label="Descuentos hoy" value={formatCurrency(BigInt(todayDiscounts))} /><MetricCard label="Facturación hoy" value={formatCurrency(BigInt(todayGrossCents))} /></div><SectionHeader title="Medios de pago" description="Mes actual" /><div className="mt-3 divide-y rounded-xl border bg-white">{dashboard.paymentsThisMonth.map((payment) => <div className="flex justify-between px-4 py-3" key={payment.method}><span>{paymentLabels[payment.method] ?? payment.method}</span><strong>{formatCurrency(BigInt(payment.amountCents))}</strong></div>)}</div></section></div> : null}
   </main></BranchDetailFrame>;
 }
 

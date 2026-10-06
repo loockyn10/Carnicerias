@@ -131,6 +131,13 @@ Corrige una regla de negocio que estaba invertida: el precio cargado en Producto
 
 Limitación pendiente de evidencia real: productos con sólo 1–2 días de historia se dividen por los 7 días completos y pueden subestimar demanda.
 
+## Sucursales: ventas por rango y «Qué llevar ahora» — implementado 2026-10-06 (D-067)
+
+- **Rango de fechas** en `/admin/branches` y en el Resumen del detalle (presets Hoy/Ayer/7 días/30 días + Desde/Hasta): `get_branch_sales_summary` agrega en el servidor sólo ventas `COMPLETED` por días calendario de la organización (tickets, total, kg, unidades y variación contra el período anterior). Las tarjetas y el link «Ver sucursal» conservan el rango.
+- **«Calcular qué llevar ahora»** (Resumen de cada sucursal no productiva) y **«Calcular carga de sucursales»** (`/admin/branches`, todas las no productivas): informe bajo demanda de `get_branch_carry_plan`, `sugerido = max(vendido 7d − stock actual, 0)`, con «A llevar ahora» editable sólo en pantalla. **No crea transferencias ni movimientos.** No usa el stock de Central como tope. Detalle y decisiones a revisar en D-067.
+- `get_replenishment_plan` ahora delega en `app_private.replenishment_rows` (misma base compartida con el informe nuevo); su salida no cambió.
+- **REQUIERE VERIFICACIÓN**: la migración `202610060063` se validó contra Postgres 18 emulado (PGlite) con un shim de pgTAP (`supabase/tests/branch_sales_and_carry_plan.test.sql`, 84 aserciones, con mutaciones); no corrió contra Supabase real. `database.types.ts` se editó a mano.
+
 ## Rendiciones
 
 - Ruta y modelo implementados con períodos `[inicio, fin)`, snapshots, desglose por pago, empleados y dispositivos.
