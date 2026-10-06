@@ -9,7 +9,7 @@ Implementado 2026-10-04 (D-065, `CURRENT_STATE.md`); la salida real nunca se pro
 1. Header «🖨 Impresora» → elegir la térmica → «Imprimir prueba»: deben salir `ñ á é í ó ú`, `$ %` y cortar. Si las tildes salen mal, Opciones avanzadas → «Windows-1252» y repetir. Si no corta o corta mal, probar con «Cortar papel automáticamente» apagado y revisar el avance (`escpos.rs`: `FEED_LINES_*`).
 2. Ancho: el ticket usa 42 columnas; si la impresora imprime 48, queda margen (ajustar `columnsForPaperWidth`).
 3. Vender en efectivo con «Imprimir automáticamente» activado: un solo ticket; con Mercado Pago, que no imprima mientras está pendiente y sí (una vez) al confirmarse; cancelar/vencer un cobro MP no debe imprimir.
-4. Probar un ticket con Pack, promoción «15% OFF desde 3», producto por peso, precio manual y descuento general; reimprimirlo desde Ventas recientes (`*** REIMPRESION ***`).
+4. Probar un ticket con Pack, promoción «15% OFF desde 3», producto por peso y precio manual; reimprimirlo desde Ventas recientes (`*** REIMPRESION ***`).
 5. **Sin Internet** (cortar la red antes de abrir el POS): vender e imprimir/reimprimir.
 6. Apagar/desconectar la impresora y vender: la venta queda completada y la barra ofrece «Reintentar impresión». Desinstalar la impresora configurada: el modal avisa y permite elegir otra.
 - Pendiente a futuro (no hecho a propósito): otras sucursales, logo, cajón de dinero, QR, impresora Linux/CUPS (hoy `PRINTER_UNSUPPORTED`).

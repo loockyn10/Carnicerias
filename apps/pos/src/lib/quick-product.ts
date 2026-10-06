@@ -1,6 +1,6 @@
 /**
  * Alta rápida de producto desde el scanner (POS de Central). Lógica pura: validación del formulario
- * mínimo (nombre, costo opcional, precio) y lectura tipada de la respuesta de la RPC
+ * mínimo (código si se escribe a mano, nombre, costo opcional, precio) y lectura tipada de la respuesta de la RPC
  * `create_pos_quick_product`. Nada acá toca red ni SQLite.
  */
 
@@ -23,7 +23,18 @@ export function parsePesosToCents(raw: string): bigint | null {
   return cents > MAX_PRICE_CENTS ? null : cents;
 }
 
+/** Mismo formato que acepta el servidor (`create_pos_quick_product`): 3 a 64 caracteres, letras/números y `. _ -`, sin espacios. */
+const BARCODE_FORMAT = /^[A-Z0-9][A-Z0-9._-]{2,63}$/;
+
+/** Código tipeado o escaneado en el modal -> código normalizado (sin espacios, en mayúsculas). `null` si no es un código válido. */
+export function normalizeQuickProductCode(raw: string): string | null {
+  const code = raw.replace(/\s+/g, "").toUpperCase();
+  return BARCODE_FORMAT.test(code) ? code : null;
+}
+
 export interface QuickProductForm {
+  /** Sólo cuando el código se escribe en el modal (alta manual con «+»); si viene de un scan se pasa aparte y no se valida acá. */
+  code?: string;
   name: string;
   /** Texto del campo "Costo" (opcional: vacío = sin costo). */
   cost: string;
@@ -31,17 +42,25 @@ export interface QuickProductForm {
 }
 
 export interface QuickProductFieldErrors {
+  code?: string;
   name?: string;
   cost?: string;
   price?: string;
 }
 
 export type QuickProductValidation =
-  | { ok: true; name: string; priceCents: bigint; costCents: bigint | null }
+  | { ok: true; code?: string; name: string; priceCents: bigint; costCents: bigint | null }
   | { ok: false; errors: QuickProductFieldErrors };
 
 export function validateQuickProduct(form: QuickProductForm): QuickProductValidation {
   const errors: QuickProductFieldErrors = {};
+  let code: string | undefined;
+  if (form.code !== undefined) {
+    const normalized = normalizeQuickProductCode(form.code);
+    if (form.code.trim() === "") errors.code = "Escaneá o escribí el código de barras";
+    else if (normalized === null) errors.code = "Código inválido (3 a 64 letras, números, . _ -)";
+    else code = normalized;
+  }
   const name = form.name.trim().replace(/\s+/g, " ");
   if (name === "") errors.name = "Escribí el nombre del producto";
   else if (name.length > 120) errors.name = "El nombre es demasiado largo (máx. 120)";
@@ -56,8 +75,8 @@ export function validateQuickProduct(form: QuickProductForm): QuickProductValida
     if (costCents === null || costCents <= 0n) errors.cost = "Costo inválido (o dejalo vacío)";
   }
 
-  if (errors.name || errors.price || errors.cost || priceCents === null) return { ok: false, errors };
-  return { ok: true, name, priceCents, costCents };
+  if (errors.code || errors.name || errors.price || errors.cost || priceCents === null) return { ok: false, errors };
+  return { ok: true, ...(code === undefined ? {} : { code }), name, priceCents, costCents };
 }
 
 /** Fila de catálogo tal como la devuelve la RPC (misma forma que `pull_pos_state`). */

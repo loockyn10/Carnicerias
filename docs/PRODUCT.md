@@ -90,7 +90,7 @@ Principios:
 - venta completa actual de productos `WEIGHT`;
 - soporte de dominio, pricing y analytics para `UNIT`, con venta POS todavía parcial;
 - precio/promociones configuradas desde servidor;
-- POS de Central: cada ticket arranca en Efectivo, precio manual por línea y descuento general del ticket (D-061);
+- POS de Central: cada ticket arranca en Efectivo y permite precio manual por línea (D-061); el descuento general manual del ticket ya no se ofrece (D-066);
 - operación offline;
 - sync idempotente;
 - historial local relevante;

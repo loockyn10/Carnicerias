@@ -686,3 +686,7 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 - La suite pgTAP se ejecutó por primera vez el 2026-09-16 (Docker disponible): `branch_stock_status_rpc.test.sql` (nuevo, 28/28 OK), `initial_schema`, `offline_sync`, `price_formation`, `profitability_analytics`, `settlements` OK. `internal_pos_employees`, `online_pos` y `operational_pilot` tienen fallos preexistentes no relacionados con este sprint (reproducidos con y sin la migración nueva, contra `pnpm db:reset` limpio) — ver "Performance Admin" arriba y la tarea de seguimiento creada.
 - SQL remoto: no ejecutado; migraciones 022–023 pendientes de dry-run/push autenticado.
 - `/admin/branch-stock`: validado por typecheck/lint/build/tests unitarios; **no verificado visualmente contra datos Supabase reales de producción** (sí contra Supabase local con datos sintéticos, sesión 2026-09-16). `REQUIERE VERIFICACIÓN`: smoke manual con sesión admin real de producción, varias sucursales y productos WEIGHT/UNIT.
+
+## POS de Central: segunda pasada de simplificación — implementado 2026-10-06 (D-066, sin tocar Supabase)
+
+Aviso de venta como toast de 5 s (`PostSaleToast`, `lib/toast-timer.ts`), botón «+» de alta rápida reutilizando `QuickProductModal` (código obligatorio; sólo Central), descuento general manual eliminado del ticket (siempre 0), columna del ticket al 40 % y footer compacto con scroll interno de artículos. Pendiente de producto: crear un producto **sin** código de barras requeriría cambiar `create_pos_quick_product` (hoy exige un código válido) — no hecho.

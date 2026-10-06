@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildClaimLink } from "@carnicerias/business-logic";
 
-import { PostSaleBar } from "./PostSaleBar";
+import { PostSaleToast } from "./PostSaleToast";
 import { buildQrMatrix, qrPath } from "./lib/qr";
 import {
   isWhatsAppLink,
@@ -86,29 +86,30 @@ describe("WhatsAppQrModal", () => {
   });
 });
 
-describe("PostSaleBar", () => {
-  const props = { saleLabel: "f7000000", totalLabel: "$ 16.500", print: null, onNewSale: () => undefined, onSendTicket: () => undefined, onPrint: () => undefined, onConfigurePrinter: () => undefined };
+describe("PostSaleToast", () => {
+  const props = { notification: {}, saleLabel: "f7000000", totalLabel: "$ 16.500", print: null, onDismiss: () => undefined, onSendTicket: () => undefined, onPrint: () => undefined, onConfigurePrinter: () => undefined };
 
-  it("shows 'Venta completada' with Nueva venta and Ticket por WhatsApp, without blocking the screen", () => {
-    const html = renderToStaticMarkup(<PostSaleBar {...props} availability={{ visible: true, usable: true }} />);
+  it("shows 'Venta completada' with the × and Ticket por WhatsApp, without blocking the screen", () => {
+    const html = renderToStaticMarkup(<PostSaleToast {...props} availability={{ visible: true, usable: true }} />);
     expect(html).toContain("Venta completada");
-    expect(html).toContain("Nueva venta");
+    expect(html).toContain('aria-label="Cerrar aviso"');
+    expect(html).not.toContain("Nueva venta");
     expect(html).toContain("Ticket por WhatsApp");
     expect(html).not.toContain("aria-modal");
     expect(html).not.toMatch(/<button[^>]*\sdisabled=""[^>]*>[^<]*Ticket por WhatsApp/);
     expect(html).not.toMatch(/Enviar ticket/);
   });
 
-  it("offline: the WhatsApp button is disabled and explains why; Nueva venta still works", () => {
-    const html = renderToStaticMarkup(<PostSaleBar {...props} availability={{ visible: true, usable: false, message: WHATSAPP_QR_OFFLINE_MESSAGE }} />);
+  it("offline: the WhatsApp button is disabled and explains why; the × still works", () => {
+    const html = renderToStaticMarkup(<PostSaleToast {...props} availability={{ visible: true, usable: false, message: WHATSAPP_QR_OFFLINE_MESSAGE }} />);
     expect(html).toContain("Ticket por WhatsApp requiere conexión a Internet.");
     expect(html).toMatch(/<button[^>]*\sdisabled=""[^>]*>Ticket por WhatsApp/);
-    expect(html).not.toMatch(/<button[^>]*\sdisabled=""[^>]*>Nueva venta/);
+    expect(/<button[^>]*aria-label="Cerrar aviso"[^>]*>/.exec(html)?.[0]).not.toContain("disabled");
   });
 
   it("hides the WhatsApp button when it is not available on this device", () => {
-    const html = renderToStaticMarkup(<PostSaleBar {...props} availability={{ visible: false }} />);
-    expect(html).toContain("Nueva venta");
+    const html = renderToStaticMarkup(<PostSaleToast {...props} availability={{ visible: false }} />);
+    expect(html).toContain('aria-label="Cerrar aviso"');
     expect(html).not.toContain("WhatsApp");
   });
 });
