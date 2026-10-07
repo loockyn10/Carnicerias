@@ -259,6 +259,15 @@ export interface RpcNullOverrides {
       unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
     }[]
   }
+  // p_margin_bps null = quitar el margen personalizado del producto (vuelve a la regla general).
+  set_product_custom_margin: {
+    Args: {
+      p_margin_bps: number | null
+      p_product_id: string
+      p_reprice?: boolean
+    }
+    Returns: Json
+  }
   set_product_price: {
     Args: {
       p_branch_id: string | null

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { manageProductAction, type ProductManageState } from "../app/admin/actions";
+import { bpsToPercentField } from "../lib/product-margin";
+import { ProductMarginField, type MarginMode } from "./product-margin-field";
 import { ProductPricingFields } from "./product-pricing-fields";
 import { ProductCategoryField } from "./product-category-field";
 import { ProductPackFields } from "./product-pack-fields";
@@ -36,15 +38,21 @@ interface ProductManageModalProps {
   marginConfigured: boolean;
   /** Categorías excluidas del margen automático (D-069): sus productos tienen precio manual aunque haya costo y margen. */
   excludedCategoryIds?: string[];
+  /** Margen global de la organización en basis points (null = sin configurar): sólo para mostrar «Margen actual». */
+  globalMarginBps?: number | null;
+  /** Margen personalizado del producto en basis points (null = usa la configuración general) (D-070). */
+  customMarginBps?: number | null;
 }
 
-export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers, globalPackDiscountBps, marginConfigured, excludedCategoryIds = [] }: ProductManageModalProps) {
+export function ProductManageModal({ product, price, promotion, categories, branches, costCents, suppliers, globalPackDiscountBps, marginConfigured, excludedCategoryIds = [], globalMarginBps = null, customMarginBps = null }: ProductManageModalProps) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(manageProductAction, {} as ProductManageState);
   const formRef = useRef<HTMLFormElement>(null);
   const activeRef = useRef<HTMLInputElement>(null);
   const [categoryId, setCategoryId] = useState(product.categoryId ?? "");
   const [unitType, setUnitType] = useState(product.unitType);
+  const [marginMode, setMarginMode] = useState<MarginMode>(customMarginBps !== null ? "custom" : "default");
+  const [marginPercent, setMarginPercent] = useState(bpsToPercentField(customMarginBps));
 
   useEffect(() => {
     if (!open) return;
@@ -105,7 +113,8 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
           <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
           {unitType === "UNIT" ? <ProductPackFields currentPackDiscountBps={product.packDiscountBps} globalPackDiscountBps={globalPackDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
-          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} excludedCategory={excludedCategoryIds.includes(categoryId)} marginConfigured={marginConfigured} unitType={unitType} />
+          <ProductMarginField currentCostCents={costCents} currentCustomMarginBps={customMarginBps} excludedCategory={excludedCategoryIds.includes(categoryId)} globalMarginBps={globalMarginBps} mode={marginMode} onModeChange={setMarginMode} onPercentChange={setMarginPercent} percent={marginPercent} unitType={unitType} />
+          <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} customMargin={marginMode === "custom" && marginPercent.trim() !== ""} excludedCategory={excludedCategoryIds.includes(categoryId)} marginConfigured={marginConfigured} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">
             <p className="text-sm font-bold">Se usa como</p>
             <div className="mt-2 flex flex-wrap gap-4 text-sm">

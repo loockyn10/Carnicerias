@@ -5,6 +5,7 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 
 import { bulkSetProductCostsAction, type BulkCostState } from "../app/admin/actions";
 import { changedCostItems, costPlaceholder, parseCostCents } from "../lib/bulk-costs";
+import { describeMarginRule, type MarginRule } from "../lib/product-margin";
 import { normalizeSearchText } from "../lib/text-search";
 
 const input = "w-32 rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm";
@@ -20,6 +21,8 @@ export interface BulkCostRow {
   currentPriceCents: number | null;
   /** Categoría excluida del margen automático (D-069): el costo se guarda pero el precio NO se recalcula (precio manual). */
   manualPrice: boolean;
+  /** Regla de margen que aplica el servidor a este producto (D-070): propio > precio manual > global. Sólo informativa (acá nunca se edita). */
+  marginRule?: MarginRule;
 }
 
 /**
@@ -72,6 +75,8 @@ export function BulkCostEditor({ rows, marginConfigured, marginBps = null }: { r
           <tbody>{visibleRows.map((row) => {
             const suffix = row.unitType === "WEIGHT" ? "/kg" : "/u";
             const raw = edits[row.id] ?? "";
+            // Margen que va a usar el servidor para esta fila: el de la regla (propio/global) o, sin regla (compatibilidad), el global salvo precio manual.
+            const rule: MarginRule = row.marginRule ?? (row.manualPrice ? { kind: "MANUAL", bps: null } : marginBps !== null ? { kind: "GLOBAL", bps: marginBps } : { kind: "NONE", bps: null });
             return <tr className={`border-t ${dirtyIds.has(row.id) ? "bg-amber-50" : ""}`} key={row.id}>
               <td className="p-3 font-bold">{row.name}</td>
               <td className="p-3 text-stone-600">{row.categoryName}</td>
@@ -90,8 +95,12 @@ export function BulkCostEditor({ rows, marginConfigured, marginBps = null }: { r
               </td>
               <td className="p-3">
                 {row.currentPriceCents !== null ? `${formatCurrency(BigInt(row.currentPriceCents))} ${suffix}` : "SIN PRECIO"}
-                {dirtyIds.has(row.id) && !row.manualPrice && marginBps !== null && parseCostCents(raw) !== null ? <span className="ml-2 font-bold text-emerald-800" data-testid="projected-price">{`→ ${formatCurrency(calculateListPriceFromMargin(BigInt(parseCostCents(raw) ?? 0), BigInt(marginBps)))}`}</span> : null}
-                {row.manualPrice ? <span className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs font-bold text-sky-900" data-testid="manual-price-badge" title="Categoría excluida del margen automático: el costo se guarda y el precio queda igual">Precio manual</span> : null}
+                {dirtyIds.has(row.id) && rule.bps !== null && parseCostCents(raw) !== null ? <span className="ml-2 font-bold text-emerald-800" data-testid="projected-price">{`→ ${formatCurrency(calculateListPriceFromMargin(BigInt(parseCostCents(raw) ?? 0), BigInt(rule.bps)))}`}</span> : null}
+                {rule.kind === "MANUAL"
+                  ? <span className="mt-0.5 block"><span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs font-bold text-sky-900" data-testid="manual-price-badge" title="Categoría excluida del margen automático: el costo se guarda y el precio queda igual">{describeMarginRule(rule)}</span></span>
+                  : rule.kind === "CUSTOM" || rule.kind === "GLOBAL"
+                  ? <span className="mt-0.5 block"><span className={`rounded px-1.5 py-0.5 text-xs font-bold ${rule.kind === "CUSTOM" ? "bg-violet-100 text-violet-900" : "bg-stone-100 text-stone-700"}`} data-testid="margin-rule-badge" title={rule.kind === "CUSTOM" ? "Margen personalizado de este producto (se edita desde Administrar)" : "Margen general de la organización"}>{describeMarginRule(rule)}</span></span>
+                  : null}
               </td>
             </tr>;
           })}</tbody>

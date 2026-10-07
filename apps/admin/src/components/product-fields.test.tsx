@@ -133,6 +133,22 @@ describe("Productos → Precios (D-068)", () => {
     expect(create.indexOf('"set_product_cost"')).toBeLessThan(create.indexOf('"set_product_price"'));
   });
 
+  it("D-070: el margen personalizado se guarda con set_product_custom_margin ANTES del costo, y sin repreciar si en la misma edición hay costo nuevo", () => {
+    const actions = source("../app/admin/actions.ts");
+    const manage = actions.slice(actions.indexOf("export async function manageProductAction"), actions.indexOf("export interface BulkDeactivateState"));
+    expect(manage.indexOf('"set_product_custom_margin"')).toBeGreaterThan(-1);
+    expect(manage.indexOf('"set_product_custom_margin"')).toBeLessThan(manage.indexOf('"set_product_cost"'));
+    expect(manage).toContain("p_reprice: costToSave === null");
+    // El margen se valida antes de escribir cualquier cosa (primer rpc: set_product_pack_size / save_product).
+    expect(manage.indexOf("parseCustomMarginForm")).toBeLessThan(manage.indexOf("rpcOrThrow("));
+    // Ni la carga masiva ni la importación del Admin envían un margen: sólo costos.
+    const bulk = actions.slice(actions.indexOf("export async function bulkSetProductCostsAction"), actions.indexOf("async function commercialRpc"));
+    expect(bulk).not.toMatch(/p_margin|custom_margin|marginBps/);
+    expect(source("./bulk-cost-editor.tsx")).not.toContain('name="margin');
+    // Un margen propio nunca viaja al POS: el modal sólo lo manda a la acción del Admin.
+    expect(source("./product-manage-modal.tsx")).toContain("ProductMarginField");
+  });
+
   it("el editor por sucursal de la promoción desapareció: el panel es de sólo lectura y apunta a la configuración global", () => {
     const panel = source("./branch-promotions-panel.tsx");
     expect(panel).not.toContain("useActionState");

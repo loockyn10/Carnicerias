@@ -1977,6 +1977,58 @@ export type Database = {
           },
         ]
       }
+      product_custom_margins: {
+        Row: {
+          created_at: string
+          custom_margin_bps: number
+          id: string
+          organization_id: string
+          product_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          custom_margin_bps: number
+          id?: string
+          organization_id: string
+          product_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          custom_margin_bps?: number
+          id?: string
+          organization_id?: string
+          product_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_custom_margins_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_custom_margins_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "product_custom_margins_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_pack_versions: {
         Row: {
           created_at: string
@@ -4644,6 +4696,14 @@ export type Database = {
           p_product_id: string
         }
         Returns: string
+      }
+      set_product_custom_margin: {
+        Args: {
+          p_margin_bps: number
+          p_product_id: string
+          p_reprice?: boolean
+        }
+        Returns: Json
       }
       set_product_inventory_role: {
         Args: { p_inventory_role: string; p_product_id: string }

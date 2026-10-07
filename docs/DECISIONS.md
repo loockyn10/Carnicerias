@@ -921,3 +921,18 @@ SimplyGest tiene productos válidos con precio 0 (ya no se usan, o "Fran les pon
 - **Para operar el primer margen:** configurar las categorías excluidas **en el mismo guardado** que el margen (la primera configuración recalcula todo producto automático con costo).
 
 **Motivo:** carnicería tiene otra lógica de precios (Vaca/Cerdo/Pollo no deben repreciarse por costo + margen), y la exclusión tiene que ser configurable y persistida por ID, no por nombre.
+
+## D-070 — Margen de ganancia personalizado por producto (excepción opcional al margen global)
+
+**Status:** Active (implementado 2026-10-07; migración `202610070067` **sin aplicar**; completa D-068/D-069, que no se tocaron).
+
+- **Prioridad del margen efectivo** (helper único `app_private.effective_margin`, usado por costo nuevo, carga masiva, importación y edición del margen): 1) margen propio del producto → ese margen, **incluso en categoría excluida**; 2) sin propio y sin margen global → sin margen (el costo se guarda, el precio no cambia); 3) sin propio y categoría excluida → precio manual (D-069); 4) sin propio y categoría normal → margen global. Misma fórmula gross-up `costo ÷ (1 − margen)` (`list_price_from_margin`): no hay un segundo motor.
+- **Modelo.** Tabla `product_custom_margins (product_id unique, custom_margin_bps 1..9999)`, **ausencia de fila = sin override** (se eligió tabla y no columna en `products` para que el margen no viaje en ninguna lectura de `products` ni al catálogo del POS: RLS `prices.write`, auditada, sólo se escribe con `set_product_custom_margin`). Basis points enteros, mismos límites que el global; nunca se copia el global al producto.
+- **Poner/cambiar el margen propio** recalcula ese producto con su costo vigente (nueva vigencia de `product_prices`, historial append-only). **Quitarlo:** categoría normal → vuelve al global y recalcula; categoría excluida → vuelve a precio manual y **no** recalcula ni borra el precio vigente (`MANUAL_PRICE`). Sin costo (`NO_COST`), no vendible (`NOT_SELLABLE`) o precio futuro programado (`SCHEDULED`): se guarda el margen y no se inventa un precio.
+- **Cambio de costo:** propio → `costo ÷ (1 − propio)`; sin propio normal → global; sin propio excluido → sólo el costo. **Cambio del margen global:** `recalculate_prices_from_margin` sólo toca a quien usa el global (excluye los de margen propio; informa `customMargin` aparte de `excludedByCategory`). `save_pricing_config` no cambió.
+- **UI.** Se edita **sólo** desde «Administrar producto» (selector «Usar configuración general · Margen actual: X %» / «Precio manual» si la categoría está excluida / «Usar margen personalizado [ ] %»). La carga masiva de costos **no** tiene input de margen: sólo muestra la regla bajo el precio (`Global 40%` / `Propio 30%` / `Precio manual`). El alta de producto no tiene el selector (se edita después). Con margen propio el precio de la ficha se deriva del costo (campo deshabilitado), como con el global.
+- **Sin cambios:** POS (recibe sólo el precio de lista; ni margen ni costo), analytics/snapshots de venta, promos, pack, dto 3u, recargo de tarjeta, precio manual por línea de Central.
+- **Limitaciones conocidas:** `newlyAutomatic` de la vista previa al sacar una categoría de la exclusión también cuenta productos con margen propio (ya eran automáticos), porque `save_pricing_config` no se reescribió.
+
+**Motivo:** que algunos productos (p. ej. yerba al 30 %, o un corte de Vaca al 25 %) tengan su propio margen sin romper la regla general ni la exclusión de carnicería.
+

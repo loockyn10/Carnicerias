@@ -72,8 +72,10 @@ export interface PricingConfigOutcome {
   branchOverridesOther: number;
   /** Precios por sucursal que se cerraron (conservan su historial). */
   branchOverridesClosed: number;
-  /** Productos de venta activos de una categoría excluida: conservan su precio (precio manual). */
+  /** Productos de venta activos de una categoría excluida (sin margen propio): conservan su precio (precio manual). */
   excludedByCategory: number;
+  /** Productos de venta activos con margen personalizado (D-070): no dependen del margen global, así que este recálculo no los toca. */
+  customMargin: number;
   /** ¿Cambió el margen? (si no, la confirmación se pide porque se sacó una categoría de la exclusión). */
   marginChanged: boolean;
   /** Productos que empezarían a ser automáticos porque su categoría sale de la exclusión. */
@@ -123,6 +125,7 @@ export function parsePricingConfigOutcome(data: unknown): PricingConfigOutcome {
     branchOverridesOther: count(record.branchOverridesOther),
     branchOverridesClosed: count(record.branchOverridesClosed),
     excludedByCategory: count(record.excludedByCategory),
+    customMargin: count(record.customMargin),
     marginChanged: record.marginChanged === true,
     newlyAutomatic: count(record.newlyAutomatic),
     excludedCategoryIds: ids(record.excludedCategoryIds),
@@ -151,6 +154,9 @@ export function describePricingConfigOutcome(outcome: PricingConfigOutcome, marg
   if ((marginChanged || recalculatedByRemoval) && outcome.excludedByCategory > 0) {
     lines.push(`Productos con precio manual (categorías excluidas, no se tocan): ${outcome.excludedByCategory.toLocaleString("es-AR")}`);
   }
+  if ((marginChanged || recalculatedByRemoval) && outcome.customMargin > 0) {
+    lines.push(`Productos con margen personalizado (no dependen del margen global, no se tocan): ${outcome.customMargin.toLocaleString("es-AR")}`);
+  }
   if (outcome.branchOverridesClosed > 0) lines.push(`Precios por sucursal cerrados (rige el precio global; el historial se conserva): ${outcome.branchOverridesClosed.toLocaleString("es-AR")}`);
   if (outcome.branchOverrides > outcome.branchOverridesClosed) {
     lines.push(`ATENCIÓN: ${plural(outcome.branchOverrides - outcome.branchOverridesClosed, "precio por sucursal sigue vigente y le gana", "precios por sucursal siguen vigentes y le ganan")} al precio global en el POS`);
@@ -170,8 +176,9 @@ export function describePricingConfigPreview(outcome: PricingConfigOutcome, cate
   const names = (list: string[]) => list.map((id) => categoryNames[id] ?? "Categoría").join(" · ");
   const lines: string[] = [];
   lines.push(outcome.marginChanged ? `Margen nuevo: ${formatBasisPointsPercent(outcome.marginBps)}%` : `Margen: ${formatBasisPointsPercent(outcome.marginBps)}% (sin cambios)`);
-  lines.push(`Se recalcularán: ${plural(outcome.recalculated, "producto", "productos")}`);
-  lines.push(`Excluidos por categoría (conservan su precio): ${n(outcome.excludedByCategory)}`);
+  lines.push(`Se recalcularán (automáticos con margen global): ${plural(outcome.recalculated, "producto", "productos")}`);
+  lines.push(`Margen personalizado (no se tocan): ${n(outcome.customMargin)}`);
+  lines.push(`Excluidos / precio manual (conservan su precio): ${n(outcome.excludedByCategory)}`);
   lines.push(`Sin costo (conservan su precio): ${n(outcome.withoutCost)}`);
   lines.push(`Ya tienen ese precio: ${n(outcome.unchanged)}`);
   if (outcome.scheduledPrice > 0) lines.push(`Con precio programado (no se tocan): ${n(outcome.scheduledPrice)}`);

@@ -62,6 +62,28 @@ describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio ac
     expect(manual.match(/manual-price-badge/g)).toHaveLength(1);
   });
 
+  it("D-070: debajo del precio actual muestra la regla de margen de cada fila (Global 40% / Propio 30% / Precio manual), sin ningún input de margen", () => {
+    const ruled: BulkCostRow[] = [
+      { id: "aceite", name: "Aceite", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 450_000, currentPriceCents: 750_000, manualPrice: false, marginRule: { kind: "GLOBAL", bps: 4_000 } },
+      { id: "yerba", name: "Yerba", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 378_000, currentPriceCents: 540_000, manualPrice: false, marginRule: { kind: "CUSTOM", bps: 3_000 } },
+      { id: "vacio", name: "Vacío manual", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 800_000, currentPriceCents: 1_100_000, manualPrice: true, marginRule: { kind: "MANUAL", bps: null } },
+      { id: "costilla", name: "Costilla propia", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 900_000, currentPriceCents: 1_200_000, manualPrice: false, marginRule: { kind: "CUSTOM", bps: 2_500 } }
+    ];
+    const out = renderToStaticMarkup(<BulkCostEditor marginBps={4_000} marginConfigured rows={ruled} />);
+    const row = (name: string) => out.split("<tr").find((chunk) => chunk.includes(name)) ?? "";
+    expect(row("Aceite")).toContain("Global 40%");
+    expect(row("Yerba")).toContain("Propio 30%");
+    expect(row("Vacío manual")).toContain("Precio manual");
+    expect(row("Costilla propia")).toContain("Propio 25%");
+    expect(out.match(/data-testid="margin-rule-badge"/g)).toHaveLength(3);
+    expect(out.match(/manual-price-badge/g)).toHaveLength(1);
+    // La carga masiva es para costos de boletas: ningún input de margen ni de precio.
+    expect(out).not.toContain("custom_margin");
+    expect(out).not.toContain("margin_mode");
+    expect(out).not.toContain('name="price"');
+    expect(out.match(/<input[^>]*type="number"/g)).toHaveLength(4);
+  });
+
   it("sin filas lo dice", () => {
     expect(renderToStaticMarkup(<BulkCostEditor marginConfigured rows={[]} />)).toContain("No hay productos de venta para cargar costos.");
   });

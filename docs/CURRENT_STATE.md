@@ -596,6 +596,12 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 
 **Migración pendiente: `202610070066_pricing_excluded_categories.sql` (la única; sin aplicar).** Reemplaza `apply_product_cost`, `bulk_set_product_costs`, `recalculate_prices_from_margin`, `save_pricing_config` (6 argumentos siguen válidos) e `import_apply_product`; no mueve datos ni recalcula nada.
 
+## Margen personalizado por producto — implementado 2026-10-07 (D-070, sin aplicar)
+
+`product_custom_margins` (override opcional en basis points) + `app_private.effective_margin` (prioridad: propio > categoría excluida = manual > global) + `set_product_custom_margin(producto, bps|null, reprice)`. Se edita en «Administrar producto»; la carga masiva sólo muestra la regla (`Global 40%` / `Propio 30%` / `Precio manual`). Cambio de costo, carga masiva e importación usan el mismo margen efectivo; el cambio de margen global no toca a los productos con margen propio. Detalle en D-070.
+
+**Migración pendiente: `202610070067_product_custom_margin.sql`** (incremental sobre 066; no recalcula nada: la tabla nace vacía). Reemplaza `apply_product_cost`, `bulk_set_product_costs` (sólo el flag `marginConfigured`), `recalculate_prices_from_margin` e `import_apply_product`. `database.types.ts` se completó a mano en el formato del generador (tabla + RPC): correr `pnpm db:types` tras aplicar debería dar el mismo contenido; el override `p_margin_bps: number | null` vive en `database.rpc-null-overrides.ts`.
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL

@@ -75,7 +75,7 @@ describe("resultado del guardado de la configuración", () => {
 
   it("la vista previa dice cuántos precios cambian, cuántos no tienen costo y cuántos no cambian", () => {
     const lines = describePricingConfigPreview(preview);
-    expect(lines).toContain("Se recalcularán: 1.843 productos");
+    expect(lines).toContain("Se recalcularán (automáticos con margen global): 1.843 productos");
     expect(lines).toContain("Sin costo (conservan su precio): 27");
     expect(lines).toContain("Ya tienen ese precio: 54");
     expect(describePricingConfigPreviewNotes(preview).join(" ")).toContain("historial");
@@ -84,12 +84,13 @@ describe("resultado del guardado de la configuración", () => {
   it("la vista previa muestra los excluidos por categoría y los nombres de las categorías excluidas (Vaca · Cerdo · Pollo)", () => {
     const withExclusions = parsePricingConfigOutcome({
       requiresConfirmation: true, marginChanged: true, previousMarginBps: 2500, marginBps: 3000, recalculated: 1742, unchanged: 0, withoutCost: 21, excludedByCategory: 83,
-      branchOverrides: 4, excludedCategoryIds: ["c1", "c2", "c3"]
+      branchOverrides: 4, customMargin: 12, excludedCategoryIds: ["c1", "c2", "c3"]
     });
     expect(describePricingConfigPreview(withExclusions, { c1: "Vaca", c2: "Cerdo", c3: "Pollo" })).toEqual([
       "Margen nuevo: 30%",
-      "Se recalcularán: 1.742 productos",
-      "Excluidos por categoría (conservan su precio): 83",
+      "Se recalcularán (automáticos con margen global): 1.742 productos",
+      "Margen personalizado (no se tocan): 12",
+      "Excluidos / precio manual (conservan su precio): 83",
       "Sin costo (conservan su precio): 21",
       "Ya tienen ese precio: 0",
       "Con precio por sucursal: 4",
@@ -119,6 +120,13 @@ describe("resultado del guardado de la configuración", () => {
   it("el resultado de un cambio de margen informa los productos con precio manual que no se tocaron", () => {
     const lines = describePricingConfigOutcome(parsePricingConfigOutcome({ marginBps: 3500, previousMarginBps: 3000, recalculated: 9, excludedByCategory: 83 }), true);
     expect(lines).toContain("Productos con precio manual (categorías excluidas, no se tocan): 83");
+  });
+
+  it("el resultado de un cambio de margen informa los productos con margen personalizado que no se tocaron (D-070)", () => {
+    const lines = describePricingConfigOutcome(parsePricingConfigOutcome({ marginBps: 3500, previousMarginBps: 3000, recalculated: 9, customMargin: 4 }), true);
+    expect(lines).toContain("Productos con margen personalizado (no dependen del margen global, no se tocan): 4");
+    expect(describePricingConfigOutcome(parsePricingConfigOutcome({ marginBps: 3500, previousMarginBps: 3000, recalculated: 9 }), true).join(" ")).not.toContain("personalizado");
+    expect(parsePricingConfigOutcome({}).customMargin).toBe(0);
   });
 
   it("el resultado informa recalculados / sin costo / sin cambios, y packs y promociones actualizados", () => {

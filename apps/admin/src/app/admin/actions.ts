@@ -13,6 +13,7 @@ import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
 import { resolveNewProductPricing } from "../../lib/new-product-pricing";
+import { parseCurrentCustomMargin, parseCustomMarginForm } from "../../lib/product-margin";
 import { parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
 import type { Database } from "@carnicerias/database";
 
@@ -162,6 +163,9 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
   try {
     const name = text(formData, "name");
     const productId = text(formData, "product_id");
+    // Margen personalizado (D-070): se valida ANTES de escribir nada. `undefined` = el formulario no trae el selector (no se toca).
+    const wantedCustomMargin = formData.has("margin_mode") ? parseCustomMarginForm(formData) : undefined;
+    const currentCustomMargin = parseCurrentCustomMargin(text(formData, "current_custom_margin_bps"));
     // Pack (sólo productos por unidad): SÓLO las unidades por pack (vacío = sin pack). El descuento del pack ya no es del producto: sale
     // de la configuración global de precios (D-068), así que este formulario no lo envía. Quitar el pack va ANTES de guardar el producto
     // (si pasa a «por kg» no puede conservarlo); fijarlo va DESPUÉS (el producto tiene que ser por unidad ya). Cambiar las unidades abre
@@ -185,23 +189,28 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
 
     // Costo directo (productos comprados ya terminados, no producidos por desposte). Un producto
     // producido por desposte tiene su costo alimentado automáticamente al finalizar el lote; este
-    // campo permite corregirlo o cargarlo a mano para lo que no sale de desposte. Con el margen global
-    // configurado, guardar un costo nuevo recalcula el precio de lista en la misma operación (D-068).
+    // campo permite corregirlo o cargarlo a mano para lo que no sale de desposte. Con margen efectivo (propio o global),
+    // guardar un costo nuevo recalcula el precio de lista en la misma operación (D-068 / D-070).
     const rawDirectCost = text(formData, "direct_cost");
-    if (rawDirectCost) {
-      const costCents = pesosToCents(rawDirectCost);
-      if (costCents !== Number(text(formData, "current_cost_cents") || 0)) {
-        await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: costCents });
-      }
+    const costToSave = rawDirectCost && pesosToCents(rawDirectCost) !== Number(text(formData, "current_cost_cents") || 0) ? pesosToCents(rawDirectCost) : null;
+    // Margen personalizado (D-070): se guarda ANTES del costo, así un costo nuevo en la misma edición ya se forma con el margen nuevo. Si además
+    // se guarda un costo, el margen no reprecia por su cuenta (el costo lo hace una sola vez). Poner/quitar el margen reprecia ese producto.
+    if (wantedCustomMargin !== undefined && wantedCustomMargin !== currentCustomMargin) {
+      await rpcOrThrow("set_product_custom_margin", { p_product_id: productId, p_margin_bps: wantedCustomMargin, p_reprice: costToSave === null });
     }
-    // Precio de lista escrito a mano: sólo es el FALLBACK cuando el precio no puede derivarse (sin costo o sin margen configurado, o
+    if (costToSave !== null) {
+      await rpcOrThrow("set_product_cost", { p_product_id: productId, p_cost_cents: costToSave });
+    }
+    // Precio de lista escrito a mano: sólo es el FALLBACK cuando el precio no puede derivarse (sin costo o sin margen efectivo, o
     // producto inactivo / materia prima). Con costo y margen el precio se forma desde el costo y un precio escrito no gana (el formulario
     // ni lo envía). Sólo se escribe si el admin lo CAMBIÓ respecto al vigente.
     const rawPrice = text(formData, "price");
     const costKnown = Boolean(rawDirectCost) || Number(text(formData, "current_cost_cents") || 0) > 0;
-    // Una categoría excluida del margen automático (D-069, carnicería) nunca deriva el precio: el costo se guarda y el precio sigue siendo manual.
-    const derivedPrice = costKnown && inventoryRole(formData) !== "RAW_MATERIAL" && formData.get("active") === "on" && (await currentMarginBps()) !== null
-      && !(await isCategoryExcludedFromMargin(text(formData, "category_id")));
+    // Margen efectivo (D-070): el propio gana siempre; si no hay, una categoría excluida (D-069, carnicería) no deriva el precio y sin margen
+    // global tampoco. Si el formulario no trae el selector, vale el margen propio que ya tenía el producto.
+    const hasCustomMargin = (wantedCustomMargin === undefined ? currentCustomMargin : wantedCustomMargin) !== null;
+    const derivedPrice = costKnown && inventoryRole(formData) !== "RAW_MATERIAL" && formData.get("active") === "on"
+      && (hasCustomMargin || ((await currentMarginBps()) !== null && !(await isCategoryExcludedFromMargin(text(formData, "category_id")))));
     if (rawPrice && !derivedPrice) {
       const priceCents = pesosToCents(rawPrice);
       if (priceCents !== Number(text(formData, "current_price_cents") || 0)) {

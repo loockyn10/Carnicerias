@@ -28,11 +28,13 @@ function formatBps(bps: bigint | null) {
  * fallback cuando falta el costo o el margen. Ganancia/rentabilidad son métricas informativas (precio − costo vigente, sólo lectura).
  */
 export function ProductPricingFields({
-  unitType, currentPriceCents, currentCostCents, required = false, marginConfigured = false, creationMarginBps, excludedCategory = false
+  unitType, currentPriceCents, currentCostCents, required = false, marginConfigured = false, creationMarginBps, excludedCategory = false, customMargin = false
 }: {
   unitType: "WEIGHT" | "UNIT"; currentPriceCents: number | null; currentCostCents: number | null; required?: boolean; marginConfigured?: boolean;
   /** La categoría elegida está excluida del margen automático (D-069): el precio es manual aunque haya costo y margen. */
   excludedCategory?: boolean;
+  /** El producto tiene (o se está eligiendo) un margen personalizado (D-070): gana sobre el margen global y sobre la exclusión de categoría. */
+  customMargin?: boolean;
   /** Sólo en el ALTA: margen global en basis points (null = sin configurar). Con costo + margen el precio no hace falta escribirlo. */
   creationMarginBps?: number | null;
 }) {
@@ -45,7 +47,8 @@ export function ProductPricingFields({
   const creation = creationMarginBps !== undefined ? newProductPricingState({ marginBps: creationMarginBps, costRaw: directCost, priceRaw: price, excludedCategory }) : null;
   // ¿El precio se deriva del costo? Alta: costo válido + margen. Producto existente: margen + costo vigente o un costo nuevo escrito.
   // Nunca en una categoría excluida del margen automático: ahí el precio es manual y un costo nuevo sólo se guarda.
-  const derived = creation ? !creation.priceRequired : marginConfigured && !excludedCategory && ((currentCostCents !== null && currentCostCents > 0) || parseCostCents(directCost) !== null);
+  // Con margen propio (D-070) se deriva aunque la categoría esté excluida o no haya margen global.
+  const derived = creation ? !creation.priceRequired : (customMargin || (marginConfigured && !excludedCategory)) && ((currentCostCents !== null && currentCostCents > 0) || parseCostCents(directCost) !== null);
   const margin = useMemo(() => {
     if (parsedPrice === null || parsedPrice <= 0n || currentCostCents === null) return null;
     const costCents = BigInt(currentCostCents);
@@ -58,7 +61,7 @@ export function ProductPricingFields({
       <input className={input} min="0.01" name="price" onChange={(event) => setPrice(event.target.value)} disabled={derived} required={required && !derived} step="0.01" type="number" value={derived && creation?.derivedPriceCents != null ? centsInput(creation.derivedPriceCents) : price} />
     </label>
     {creation ? <p className={`rounded-lg p-2 text-xs ${creation.priceRequired ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-900"}`} data-testid="new-product-price-note">{creation.message}</p> : null}
-    {!creation && excludedCategory ? <p className="rounded-lg bg-sky-50 p-2 text-xs text-sky-900" data-testid="price-manual-note">Categoría con precio manual (excluida del margen automático): el precio de venta se escribe a mano y un costo nuevo no lo recalcula. El costo se guarda igual, para la rentabilidad.</p> : null}
+    {!creation && excludedCategory && !customMargin ? <p className="rounded-lg bg-sky-50 p-2 text-xs text-sky-900" data-testid="price-manual-note">Categoría con precio manual (excluida del margen automático): el precio de venta se escribe a mano y un costo nuevo no lo recalcula. El costo se guarda igual, para la rentabilidad.</p> : null}
     {!creation && derived ? <p className="rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900" data-testid="price-derived-note">Con el margen configurado el precio de venta se forma desde el costo (no se escribe a mano): al guardar un costo nuevo se recalcula.</p> : null}
     <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-3">
       <div><dt className="text-stone-500">Costo estimado vigente</dt><dd className="font-black">{currentCostCents !== null ? `${formatCurrency(BigInt(currentCostCents))} ${suffix}` : "No disponible"}</dd></div>
@@ -67,7 +70,9 @@ export function ProductPricingFields({
     </dl>
     <p className="text-xs text-stone-500" data-testid="cost-price-note">
       El costo se calcula solo (desposte) o se carga a mano si el producto se compra ya terminado.{" "}
-      {excludedCategory
+      {customMargin
+        ? "Este producto usa un margen personalizado: al guardar un costo nuevo, el precio de venta se recalcula con ese margen. El precio manual sólo se usa si el producto no tiene costo."
+        : excludedCategory
         ? "Esta categoría tiene precio manual: guardar un costo nuevo no cambia el precio de venta."
         : marginConfigured
         ? "Al guardar un costo nuevo, el precio de venta se recalcula con el margen configurado. El precio manual sólo se usa si el producto no tiene costo."
