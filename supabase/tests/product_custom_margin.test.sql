@@ -122,7 +122,7 @@ select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000
 -- ---------------------------------------------------------------------------------------------
 select lives_ok($$select public.save_pricing_config(4000, 0, 0, 1000, true, false,
   array['a4000000-0000-4000-8000-00000000000b','a4000000-0000-4000-8000-00000000000c']::uuid[])$$, 'the global margin (40 %) is configured with Vaca and Cerdo excluded');
-select is(public.t_cm_price('CM-01'), 1666667::bigint, 'ACEITE: almacén, no own margin -> the global 40 % ($10.000 / 0,60)');
+select is(public.t_cm_price('CM-01'), 1665000::bigint, 'ACEITE: almacén, no own margin -> the global 40 % ($10.000 / 0,60)');
 select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1250000/1', 'VACIO: excluded category, no own margin -> manual price untouched');
 
 -- ---------------------------------------------------------------------------------------------
@@ -140,10 +140,10 @@ select is((select count(*) from public.product_custom_margins), 0::bigint, 'reje
 select lives_ok($$insert into keep values ('y1', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-02'), 3000), null, null)$$, 'YERBA gets an own margin of 30 %');
 select is((select payload ->> 'outcome' || '/' || (payload ->> 'source') || '/' || (payload ->> 'effectiveMarginBps') from keep where name = 'y1'), 'REPRICED/CUSTOM/3000', 'it reports a repricing with the own margin');
 select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1000000/3', 'YERBA: $7.000 / 0,70 = $10.000 (30 %, NOT the global 40 %), a NEW vigencia');
-select is(public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), '1666667/2', 'ACEITE (no own margin) is untouched');
+select is(public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), '1665000/2', 'ACEITE (no own margin) is untouched');
 select is(public.t_cm_margin('CM-02'), 3000, 'the own margin is stored as integer basis points');
 select lives_ok($$select public.set_product_cost(public.t_cm_by_sku('CM-02'), 800000, clock_timestamp())$$, 'YERBA cost changes to $8.000');
-select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1142857/4', 'a cost change uses the OWN margin: $8.000 / 0,70 = $11.428,57');
+select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1145000/4', 'a cost change uses the OWN margin: $8.000 / 0,70 = $11.450');
 select lives_ok($$insert into keep values ('y2', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-02'), 3000), null, null)$$, 'saving the SAME margin again');
 select is((select payload ->> 'outcome' from keep where name = 'y2'), 'UNCHANGED', 'is a no-op (UNCHANGED)');
 select is(public.t_cm_price_rows('CM-02'), 4::bigint, 'and it did not pollute the price history');
@@ -156,7 +156,7 @@ select is((select payload ->> 'recalculated' || '/' || (payload ->> 'customMargi
   '1/1/2/1/0', 'preview: 1 global-margin product recalculated (Aceite) / 1 own margin (Yerba) / 2 excluded / 1 without cost / 0 unchanged');
 select lives_ok($$select public.save_pricing_config(5000, 0, 0, 1000, true, false)$$, 'the change is confirmed');
 select is(public.t_cm_price('CM-01'), 2000000::bigint, 'ACEITE follows the new global margin: $10.000 / 0,50');
-select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1142857/4', 'YERBA (own margin) is NOT altered by the global change: same price, no new vigencia');
+select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1145000/4', 'YERBA (own margin) is NOT altered by the global change: same price, no new vigencia');
 select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price('CM-04'), '1250000/900000', 'excluded products without own margin are not touched either');
 select is(public.t_cm_price('CM-05'), 123400::bigint, 'a product without cost keeps its price');
 
@@ -178,21 +178,21 @@ select is((select payload ->> 'outcome' || '/' || (payload ->> 'source') from ke
 select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1200000/2', 'cost $9.000 / 0,75 = $12.000, in a NEW vigencia');
 select is((select count(*) from public.product_prices where product_id = public.t_cm_by_sku('CM-03') and branch_id is null and price_cents = 1250000 and valid_to is not null), 1::bigint, 'the previous manual price stays in the history (closed, never rewritten)');
 select lives_ok($$select public.set_product_cost(public.t_cm_by_sku('CM-03'), 1000000, clock_timestamp())$$, 'VACIO: a new cost ($10.000)');
-select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1333333/3', 'it follows the own margin even in an excluded category: $10.000 / 0,75');
+select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1335000/3', 'it follows the own margin even in an excluded category: $10.000 / 0,75');
 select lives_ok($$select public.save_pricing_config(4500, 0, 0, 1000, true, false)$$, 'a global margin change (45 %)');
-select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1333333/3', 'does NOT alter VACIO (own margin)');
+select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1335000/3', 'does NOT alter VACIO (own margin)');
 select is(public.t_cm_price('CM-04') || '/' || public.t_cm_price_rows('CM-04'), '900000/1', 'nor CHORIZO (excluded, no own margin)');
-select is(public.t_cm_price('CM-01'), 1818182::bigint, 'while ACEITE (global) follows it: $10.000 / 0,55');
-select is(public.t_cm_price('CM-02'), 1454545::bigint, 'and YERBA, now back on the global margin: $8.000 / 0,55');
+select is(public.t_cm_price('CM-01'), 1820000::bigint, 'while ACEITE (global) follows it: $10.000 / 0,55');
+select is(public.t_cm_price('CM-02'), 1455000::bigint, 'and YERBA, now back on the global margin: $8.000 / 0,55');
 
 -- ---------------------------------------------------------------------------------------------
 -- Quitar el margen propio de un producto EXCLUIDO: vuelve a precio manual (conserva el precio vigente)
 -- ---------------------------------------------------------------------------------------------
 select lives_ok($$insert into keep values ('v2', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-03'), null), null, null)$$, 'the own margin of VACIO is removed');
 select is((select payload ->> 'outcome' || '/' || (payload ->> 'source') from keep where name = 'v2'), 'MANUAL_PRICE/MANUAL', 'it reports the return to the manual price');
-select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1333333/3', 'the current price is KEPT (not recalculated, not deleted) and no vigencia is opened');
+select is(public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1335000/3', 'the current price is KEPT (not recalculated, not deleted) and no vigencia is opened');
 select lives_ok($$select public.set_product_cost(public.t_cm_by_sku('CM-03'), 1100000, clock_timestamp())$$, 'a later cost change');
-select is(public.t_cm_cost('CM-03') || '/' || public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1100000/1333333/3', 'only stores the cost: the product stopped receiving automatic pricing');
+select is(public.t_cm_cost('CM-03') || '/' || public.t_cm_price('CM-03') || '/' || public.t_cm_price_rows('CM-03'), '1100000/1335000/3', 'only stores the cost: the product stopped receiving automatic pricing');
 
 -- ---------------------------------------------------------------------------------------------
 -- Carga masiva de costos: usa el margen efectivo de cada producto
@@ -206,8 +206,8 @@ select lives_ok($$insert into keep values ('b1', null, public.bulk_set_product_c
   jsonb_build_object('productId', public.t_cm_by_sku('CM-03'), 'costCents', 1200000),
   jsonb_build_object('productId', public.t_cm_by_sku('CM-04'), 'costCents', 650000)), clock_timestamp()), null, null)$$, 'a bulk cost load with global, own-margin and manual products');
 select is((select (payload ->> 'applied') || '/' || (payload ->> 'repriced') || '/' || (payload ->> 'manualPrice') from keep where name = 'b1'), '4/3/1', 'bulk: 4 costs saved, 3 prices recalculated, 1 manual-price product');
-select is(public.t_cm_price('CM-01'), 2181818::bigint, 'bulk, global product: $12.000 / 0,55');
-select is(public.t_cm_price('CM-02'), 1285714::bigint, 'bulk, own margin 30 %: $9.000 / 0,70');
+select is(public.t_cm_price('CM-01'), 2180000::bigint, 'bulk, global product: $12.000 / 0,55');
+select is(public.t_cm_price('CM-02'), 1285000::bigint, 'bulk, own margin 30 %: $9.000 / 0,70');
 select is(public.t_cm_price('CM-03'), 1500000::bigint, 'bulk, excluded category WITH own margin 20 %: $12.000 / 0,80');
 select is(public.t_cm_price('CM-04') || '/' || public.t_cm_cost('CM-04') || '/' || public.t_cm_price_rows('CM-04'), '900000/650000/1', 'bulk, excluded category without own margin: cost stored, price untouched');
 
@@ -231,8 +231,8 @@ select lives_ok($$select public.preview_import_batch((select id from public.impo
 select lives_ok($$select public.apply_import_batch((select id from public.import_batches where file_name = 'cm-imp-1'))$$, 'the import is applied');
 select is(public.t_cm_price('CM-03') || '/' || public.t_cm_cost('CM-03'), '1625000/1300000', 'import, excluded category WITH own margin: price formed with 20 % ($13.000 / 0,80)');
 select is(public.t_cm_price('CM-04') || '/' || public.t_cm_cost('CM-04') || '/' || public.t_cm_price_rows('CM-04'), '900000/700000/1', 'import, excluded category without own margin: cost stored, price untouched');
-select is(public.t_cm_price('CM-02'), 1428571::bigint, 'import, own margin 30 %: $10.000 / 0,70');
-select is(public.t_cm_price('CM-01'), 2363636::bigint, 'import, global margin 45 %: $13.000 / 0,55');
+select is(public.t_cm_price('CM-02'), 1430000::bigint, 'import, own margin 30 %: $10.000 / 0,70');
+select is(public.t_cm_price('CM-01'), 2365000::bigint, 'import, global margin 45 %: $13.000 / 0,55');
 insert into keep values ('rows1', null, null, null, jsonb_build_array(public.t_cm_price_rows('CM-03'), public.t_cm_price_rows('CM-04'), public.t_cm_price_rows('CM-02'), public.t_cm_price_rows('CM-01'), public.t_cm_cost('CM-03')));
 select lives_ok($$select public.create_import_batch('simplygest', 'product', 'cm-imp-2', repeat('2', 64), 'a3000000-0000-4000-8000-000000000001',
   '{"defaultCategoryId":"a4000000-0000-4000-8000-00000000000a","createMissingCategories":false,"linkExistingBy":["barcode","sku"]}'::jsonb)$$, 'the same file is imported again (idempotence)');
@@ -255,7 +255,7 @@ select lives_ok($t$select public.stage_import_rows((select id from public.import
 select lives_ok($$select public.preview_import_batch((select id from public.import_batches where file_name = 'cm-imp-3'))$$, 'the preview is generated');
 select lives_ok($$select public.apply_import_batch((select id from public.import_batches where file_name = 'cm-imp-3'))$$, 'the import is applied');
 select is(public.t_cm_price('CM-04') || '/' || public.t_cm_price_rows('CM-04'), '950000/2', 'import, excluded category without own margin + explicit file price: the file price rules (existing compatibility)');
-select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1428571/' || (select doc ->> 2 from keep where name = 'rows1'), 'import, own margin + a file price: the price formed from cost and margin wins, the file price is ignored');
+select is(public.t_cm_price('CM-02') || '/' || public.t_cm_price_rows('CM-02'), '1430000/' || (select doc ->> 2 from keep where name = 'rows1'), 'import, own margin + a file price: the price formed from cost and margin wins, the file price is ignored');
 
 -- ---------------------------------------------------------------------------------------------
 -- POS: sólo recibe el precio de lista formado (nunca costo ni margen)
@@ -271,7 +271,7 @@ select is(
   '1625000', 'the POS receives the formed list price of the own-margin product in an excluded category');
 select is(
   (select (i ->> 'pricePerKgCents') from jsonb_array_elements(public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0) -> 'catalog') i where i ->> 'productName' = 'Yerba'),
-  '1428571', 'and the own-margin product in a normal category');
+  '1430000', 'and the own-margin product in a normal category');
 select ok(not (public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0)::text ilike '%margin%'), 'the POS payload exposes no margin');
 select ok(not (public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0)::text ilike '%"cost%'), 'nor cost');
 
@@ -279,17 +279,17 @@ select ok(not (public.pull_pos_state('a7000000-0000-4000-8000-000000000001', 0):
 -- Casos límite de set_product_custom_margin
 -- ---------------------------------------------------------------------------------------------
 select lives_ok($$insert into keep values ('n1', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-01'), 3500, false), null, null)$$, 'saving a margin without repricing (the Admin does it when the same edit also saves a cost)');
-select is((select payload ->> 'outcome' from keep where name = 'n1') || '/' || public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), 'NOT_REPRICED/2363636/6', 'it only stores the margin: the price and its history are untouched');
+select is((select payload ->> 'outcome' from keep where name = 'n1') || '/' || public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), 'NOT_REPRICED/2365000/6', 'it only stores the margin: the price and its history are untouched');
 select lives_ok($$select public.set_product_cost(public.t_cm_by_sku('CM-01'), 1000000, clock_timestamp())$$, 'the cost saved afterwards reprices ONCE with the new margin');
-select is(public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), '1538462/7', 'ACEITE: $10.000 / 0,65');
+select is(public.t_cm_price('CM-01') || '/' || public.t_cm_price_rows('CM-01'), '1540000/7', 'ACEITE: $10.000 / 0,65');
 select lives_ok($$select public.set_product_custom_margin(public.t_cm_by_sku('CM-01'), null, false)$$, 'removing it without repricing');
-select is(public.t_cm_price('CM-01') || '/' || (select count(*) from public.product_custom_margins where product_id = public.t_cm_by_sku('CM-01')), '1538462/0', 'keeps the current price until the next cost change');
+select is(public.t_cm_price('CM-01') || '/' || (select count(*) from public.product_custom_margins where product_id = public.t_cm_by_sku('CM-01')), '1540000/0', 'keeps the current price until the next cost change');
 select lives_ok($$insert into keep values ('n2', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-05'), 3000), null, null)$$, 'a margin on a product without cost');
 select is((select payload ->> 'outcome' from keep where name = 'n2') || '/' || public.t_cm_price('CM-05'), 'NO_COST/123400', 'is stored and the price stays (it will form when a cost arrives)');
 select lives_ok($$insert into keep values ('n3', null, public.set_product_custom_margin(public.t_cm_by_sku('CM-06'), 3000), null, null)$$, 'a margin on a pure raw material');
 select is((select payload ->> 'outcome' from keep where name = 'n3'), 'NOT_SELLABLE', 'is stored but forms no price (not a sale product)');
 select lives_ok($$select public.set_product_cost(public.t_cm_by_sku('CM-05'), 400000, clock_timestamp())$$, 'a first cost arrives for the product without cost');
-select is(public.t_cm_price('CM-05'), 571429::bigint, 'and forms the price with the own margin: $4.000 / 0,70');
+select is(public.t_cm_price('CM-05'), 570000::bigint, 'and forms the price with the own margin: $4.000 / 0,70');
 
 -- ---------------------------------------------------------------------------------------------
 -- Auditoría, aislamiento y permisos
@@ -303,7 +303,7 @@ select is((select count(*) from public.product_custom_margins), 0::bigint, 'the 
 select throws_ok($$select public.set_product_custom_margin(public.t_cm_by_sku('CM-02'), 1000)$$, '42501', 'Product was not found in this organization', 'nor set a margin on a product of this organization');
 select lives_ok($$insert into keep values ('o1', null, public.set_product_custom_margin(public.t_cm_by_sku('CMB-07'), 4000), null, null)$$, 'the other organization sets an own margin on ITS product (it has NO global margin configured)');
 select is((select payload ->> 'outcome' || '/' || (payload ->> 'source') from keep where name = 'o1'), 'REPRICED/CUSTOM', 'an own margin works even without a global margin');
-select is(public.t_cm_price('CMB-07') || '/' || public.t_cm_price_rows('CMB-07'), '833333/2', 'the price is formed: $5.000 / 0,60');
+select is(public.t_cm_price('CMB-07') || '/' || public.t_cm_price_rows('CMB-07'), '835000/2', 'the price is formed: $5.000 / 0,60');
 
 select set_config('request.jwt.claim.sub', 'a1000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);

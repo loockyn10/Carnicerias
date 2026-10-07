@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(111);
+select plan(117);
 
 -- Covers 202610070066 (D-069): categorías EXCLUIDAS del margen automático. Los productos de esas categorías (carnicería: Vaca / Cerdo /
 -- Pollo en el caso real, pero acá se eligen por ID) conservan su precio de lista: ni un costo nuevo (set_product_cost, carga masiva,
@@ -136,7 +136,7 @@ select is((select payload ->> 'withoutCost' from keep where name = 'p1'), '1', '
 select is((select payload ->> 'branchOverrides' from keep where name = 'p1'), '1', 'preview: 1 branch-specific price would keep winning over the global one');
 select is((select jsonb_array_length(payload -> 'excludedCategoryIds') from keep where name = 'p1'), 3, 'preview echoes the 3 proposed excluded category ids');
 select is((select payload -> 'sample' -> 0 ->> 'name' from keep where name = 'p1'), 'Aceite', 'preview shows which prices would change (sample, by name)');
-select is((select (payload -> 'sample' -> 0 ->> 'newCents') from keep where name = 'p1'), '1428571', 'with the new price (Aceite $10.000 / 0,70)');
+select is((select (payload -> 'sample' -> 0 ->> 'newCents') from keep where name = 'p1'), '1430000', 'with the new price (Aceite $10.000 / 0,70)');
 reset role;
 select is((select count(*) from public.organization_pricing_settings), 0::bigint, 'the preview wrote no settings');
 select is(public.t_xc_excluded('f2000000-0000-4000-8000-000000000001'), '{}'::uuid[], 'the preview saved no excluded categories');
@@ -148,8 +148,8 @@ select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000
 select lives_ok($$insert into keep values ('c1', null, public.save_pricing_config(3000, 0, 0, 1000, true, false,
   array['f4000000-0000-4000-8000-00000000000b','f4000000-0000-4000-8000-00000000000c','f4000000-0000-4000-8000-00000000000d']::uuid[]), null, null)$$, 'confirming saves the margin and the exclusion');
 select is((select payload ->> 'recalculated' from keep where name = 'c1'), '2', 'only the 2 automatic products were repriced');
-select is(public.t_xc_price('XC-01'), 1428571::bigint, 'almacén + cost + margin -> automatic price: $10.000 / 0,70 = $14.285,71');
-select is(public.t_xc_price('XC-05'), 571429::bigint, 'a product WITHOUT category is automatic: $4.000 / 0,70 = $5.714,29');
+select is(public.t_xc_price('XC-01'), 1430000::bigint, 'almacén + cost + margin -> automatic price: $10.000 / 0,70 = $14.300');
+select is(public.t_xc_price('XC-05'), 570000::bigint, 'a product WITHOUT category is automatic: $4.000 / 0,70 = $5.700');
 select is(public.t_xc_price('XC-06'), 123400::bigint, 'an automatic product without cost keeps its price');
 select is(public.t_xc_price('XC-02') || '/' || public.t_xc_price_rows('XC-02'), '1250000/1', 'Vaca (Vacio, cost $8.000, margin 30 %): NOT $11.428,57; the manual $12.500 stays and no price vigencia was opened');
 select is(public.t_xc_price('XC-03') || '/' || public.t_xc_price_rows('XC-03'), '900000/1', 'Cerdo keeps its price');
@@ -170,7 +170,7 @@ select is((select payload ->> 'excludedByCategory' || '/' || (payload ->> 'recal
 select is((select payload ->> 'marginChanged' from keep where name = 'p2'), 'true', 'it says the margin changed');
 select is((select jsonb_array_length(payload -> 'excludedCategoryIds') from keep where name = 'p2'), 3, 'omitting the list keeps the 3 excluded categories (a deployed Admin that does not send it is safe)');
 select lives_ok($$select public.save_pricing_config(3500, 0, 0, 1000, true, false)$$, 'the margin change is confirmed (6-argument call)');
-select is(public.t_xc_price('XC-01'), 1538462::bigint, 'Aceite follows the new margin: $10.000 / 0,65');
+select is(public.t_xc_price('XC-01'), 1540000::bigint, 'Aceite follows the new margin: $10.000 / 0,65');
 select is(public.t_xc_price('XC-04') || '/' || public.t_xc_price_rows('XC-04'), '600000/1', 'Pollo + margin change -> price unchanged, no new vigencia');
 select is(public.t_xc_price('XC-02') || '/' || public.t_xc_price_rows('XC-02'), '1250000/1', 'Vacio unchanged by the margin change too');
 select is(public.t_xc_excluded('f2000000-0000-4000-8000-000000000001') = array['f4000000-0000-4000-8000-00000000000b','f4000000-0000-4000-8000-00000000000c','f4000000-0000-4000-8000-00000000000d']::uuid[], true, 'the exclusion list was not modified by a call that did not send it');
@@ -185,7 +185,7 @@ select is((public.t_xc_price('XC-02') - public.t_xc_cost('XC-02')), 350000::bigi
 select lives_ok($$select public.set_product_cost(public.t_xc_by_sku('XC-03'), 600000, clock_timestamp())$$, 'a new cost is saved for Chorizo (Cerdo)');
 select is(public.t_xc_cost('XC-03') || '/' || public.t_xc_price('XC-03') || '/' || public.t_xc_price_rows('XC-03'), '600000/900000/1', 'Cerdo + new cost -> cost updated, price unchanged');
 select lives_ok($$select public.set_product_cost(public.t_xc_by_sku('XC-01'), 1100000, clock_timestamp())$$, 'a new cost is saved for Aceite (automatic)');
-select is(public.t_xc_price('XC-01'), 1692308::bigint, 'the automatic product is repriced: $11.000 / 0,65 = $16.923,08');
+select is(public.t_xc_price('XC-01'), 1690000::bigint, 'the automatic product is repriced: $11.000 / 0,65 = $16.900');
 
 -- Un precio manual sobre un producto excluido sigue siendo posible y se conserva.
 select lives_ok($$select public.set_product_price(public.t_xc_by_sku('XC-02'), null, 1300000, clock_timestamp())$$, 'the administrator can set a manual price on an excluded product');
@@ -200,7 +200,7 @@ select lives_ok($$insert into keep values ('b1', null, public.bulk_set_product_c
   jsonb_build_object('productId', public.t_xc_by_sku('XC-04'), 'costCents', 350000),
   jsonb_build_object('productId', public.t_xc_by_sku('XC-05'), 'costCents', 450000)), clock_timestamp()), null, null)$$, 'a bulk cost load with automatic and excluded products');
 select is((select (payload ->> 'applied') || '/' || (payload ->> 'repriced') || '/' || (payload ->> 'manualPrice') from keep where name = 'b1'), '4/2/2', 'bulk: 4 costs saved, 2 prices recalculated, 2 manual-price products');
-select is(public.t_xc_price('XC-01') || '/' || public.t_xc_price('XC-05'), '1846154/692308', 'automatic rows: new cost -> new price ($12.000 / 0,65 and $4.500 / 0,65)');
+select is(public.t_xc_price('XC-01') || '/' || public.t_xc_price('XC-05'), '1845000/690000', 'automatic rows: new cost -> new price ($12.000 / 0,65 and $4.500 / 0,65)');
 select is(public.t_xc_price('XC-02') || '/' || public.t_xc_price('XC-04'), '1300000/600000', 'excluded rows: the price is untouched');
 select is(public.t_xc_cost('XC-02') || '/' || public.t_xc_cost('XC-04'), '1000000/350000', 'excluded rows: the new cost IS stored');
 select is(public.t_xc_price_rows('XC-04'), 1::bigint, 'and no price vigencia was opened for them');
@@ -229,7 +229,7 @@ select is(public.t_xc_cost('XC-02') || '/' || public.t_xc_price('XC-02') || '/' 
 select is(public.t_xc_cost('XC-04') || '/' || public.t_xc_price('XC-04'), '380000/650000', 'import, excluded product WITH an explicit price: the file price is used (existing compatibility) and the cost is stored');
 select is(public.t_xc_price('XC-01'), 2000000::bigint, 'import, automatic product with a cost: the price is formed from the margin ($13.000 / 0,65 = $20.000)');
 select is(public.t_xc_price_rows('XC-NEW-V') || '/' || public.t_xc_cost('XC-NEW-V'), '0/700000', 'import, NEW product in a Vaca category with a cost: no price formed (it is entered manually), cost stored');
-select is(public.t_xc_price('XC-NEW-A'), 307692::bigint, 'import, NEW automatic product with a cost: price formed ($2.000 / 0,65)');
+select is(public.t_xc_price('XC-NEW-A'), 310000::bigint, 'import, NEW automatic product with a cost: price formed ($2.000 / 0,65)');
 select lives_ok($$select public.create_import_batch('simplygest', 'product', 'xc-imp-2', repeat('2', 64), 'f3000000-0000-4000-8000-000000000001',
   '{"defaultCategoryId":"f4000000-0000-4000-8000-00000000000a","createMissingCategories":false,"linkExistingBy":["barcode","sku"]}'::jsonb)$$, 'the same file is imported again (idempotence)');
 select lives_ok($t$select public.stage_import_rows((select id from public.import_batches where file_name = 'xc-imp-2'), $j$[
@@ -269,12 +269,12 @@ select lives_ok($$insert into keep values ('a1', null, public.save_pricing_confi
   array['f4000000-0000-4000-8000-00000000000a','f4000000-0000-4000-8000-00000000000b','f4000000-0000-4000-8000-00000000000c','f4000000-0000-4000-8000-00000000000d']::uuid[]), null, null)$$, 'adding Almacén to the exclusion');
 select is((select payload ->> 'requiresConfirmation' from keep where name = 'a1'), 'false', 'adding a category does not need confirmation');
 select is((select jsonb_array_length(payload -> 'addedExcludedCategoryIds') from keep where name = 'a1'), 1, 'it reports the added category');
-select is(public.t_xc_price('XC-01'), 2166667::bigint, 'and the price it already had is kept (historical prices are not rewritten)');
+select is(public.t_xc_price('XC-01'), 2165000::bigint, 'and the price it already had is kept (historical prices are not rewritten)');
 select lives_ok($$select public.set_product_cost(public.t_xc_by_sku('XC-01'), 1500000, clock_timestamp())$$, 'a new cost for Aceite, now in an excluded category');
-select is(public.t_xc_cost('XC-01') || '/' || public.t_xc_price('XC-01'), '1500000/2166667', 'the cost is saved and the price is no longer repriced automatically');
+select is(public.t_xc_cost('XC-01') || '/' || public.t_xc_price('XC-01'), '1500000/2165000', 'the cost is saved and the price is no longer repriced automatically');
 select lives_ok($$select public.save_pricing_config(4500, 0, 0, 1000, true, false)$$, 'a margin change after adding the category');
-select is(public.t_xc_price('XC-01'), 2166667::bigint, 'does not reprice it either');
-select is(public.t_xc_price('XC-05'), 818182::bigint, 'while the product without category (still automatic) follows the margin: $4.500 / 0,55');
+select is(public.t_xc_price('XC-01'), 2165000::bigint, 'does not reprice it either');
+select is(public.t_xc_price('XC-05'), 820000::bigint, 'while the product without category (still automatic) follows the margin: $4.500 / 0,55');
 
 -- ---------------------------------------------------------------------------------------------
 -- Quitar una categoría de la exclusión: vista previa, confirmación, y recién ahí vigencias nuevas (sólo de esa categoría)
@@ -295,7 +295,7 @@ select set_config('request.jwt.claim.sub', 'f1000000-0000-4000-8000-000000000001
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select lives_ok($$select public.save_pricing_config(4500, 0, 0, 1000, true, false,
   array['f4000000-0000-4000-8000-00000000000a','f4000000-0000-4000-8000-00000000000c','f4000000-0000-4000-8000-00000000000d']::uuid[])$$, 'confirming the removal');
-select is(public.t_xc_price('XC-02') || '/' || public.t_xc_price_rows('XC-02'), '7636364/3', 'Vacio (cost $42.000, margin 45 %) now has an automatic price in a NEW vigencia: $42.000 / 0,55');
+select is(public.t_xc_price('XC-02') || '/' || public.t_xc_price_rows('XC-02'), '7635000/3', 'Vacio (cost $42.000, margin 45 %) now has an automatic price in a NEW vigencia: $42.000 / 0,55');
 select is((select count(*) from public.product_prices where product_id = public.t_xc_by_sku('XC-02') and branch_id is null and price_cents = 1300000 and valid_to is not null), 1::bigint, 'the previous manual price stays in the history (closed, not rewritten)');
 select is(public.t_xc_price('XC-03') || '/' || public.t_xc_price('XC-04'), '900000/650000', 'Cerdo and Pollo (still excluded) are untouched');
 select is(public.t_xc_price('XC-05'), 777700::bigint, 'the removal only reprices the removed category: another product with a drifted price is not overwritten');
@@ -318,6 +318,19 @@ select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000
 select is((select count(*) from public.organization_pricing_excluded_categories), 1::bigint, 'and that did not touch this organization');
 reset role;
 select is(public.t_xc_price('XCB-08') || '/' || public.t_xc_price_rows('XCB-08'), '700000/1', 'the other organization''s Vaca product keeps its price too');
+-- Redondeo comercial a $50 (D-071): sólo el precio AUTOMÁTICO se redondea. Un precio manual (aunque no sea múltiplo de $50) y un producto
+-- excluido/manual no se tocan; el precio automático vigente es siempre múltiplo de $50.
+reset role;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f1000000-0000-4000-8000-000000000001', true);
+select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select is(public.t_xc_price('XC-06'), 123400::bigint, 'a manual price that is not a multiple of $50 and never had a cost is untouched by the rounding');
+select lives_ok($$select public.set_product_price(public.t_xc_by_sku('XC-02'), null, 123457, clock_timestamp())$$, 'a manual price ($1.234,57) is saved exactly as typed on an excluded product');
+select is(public.t_xc_price('XC-02'), 123457::bigint, 'manual prices are not rounded to $50');
+select lives_ok($$select public.set_product_cost(public.t_xc_by_sku('XC-02'), 950000, clock_timestamp())$$, 'a new cost for the excluded product...');
+select is(public.t_xc_price('XC-02'), 123457::bigint, '...does not reprice it nor round its manual price');
+select is(public.t_xc_price('XC-01') % 5000, 0::bigint, 'the automatic price of Aceite is a multiple of $50');
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'f1000000-0000-4000-8000-000000000002', true);
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-000000000002","role":"authenticated"}', true);

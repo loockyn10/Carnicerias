@@ -23,7 +23,7 @@ describe("PricingConfigForm: margen, dto llevando 3u, dto por pack y recargo por
 
   it("explica cada valor (margen sobre el precio de venta, desde 3 unidades, packs, tarjeta) con el ejemplo calculado", () => {
     expect(html).toContain("Porcentaje de ganancia sobre el precio de venta");
-    expect(html).toContain("costo $ 10.000 con margen 30% → venta $ 14.285,71");
+    expect(html).toContain("costo $ 10.000 con margen 30% → venta $ 14.300");
     expect(html).toContain("Se aplica desde 3 unidades");
     expect(html).toContain("Se aplica a los productos que tengan unidades por pack configuradas");
     expect(html).toContain("Efectivo y transferencia no tienen ajuste");

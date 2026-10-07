@@ -936,3 +936,12 @@ SimplyGest tiene productos válidos con precio 0 (ya no se usan, o "Fran les pon
 
 **Motivo:** que algunos productos (p. ej. yerba al 30 %, o un corte de Vaca al 25 %) tengan su propio margen sin romper la regla general ni la exclusión de carnicería.
 
+## D-071 — Redondeo comercial a $50 del precio de lista calculado por margen
+
+**Status:** Active (implementado 2026-10-07; migración `202610070068` **sin aplicar**; completa D-068/D-070, que no se tocaron).
+
+- **Regla.** `costo → gross-up por margen (costo ÷ (1 − margen), half-up, sin cambios) → redondeo al múltiplo de $50 más cercano (half-up en el punto medio) → nueva vigencia`. En centavos enteros: `floor((precio + 2.500) ÷ 5.000) × 5.000`. 2.466,44 → 2.450; 2.424 → 2.400; 2.474,99 → 2.450; 2.475 → 2.500; 5.714,29 → 5.700; 5.726 → 5.750. **Piso de $50**: un costo mínimo nunca forma un precio de $0 ("sin precio"; `set_price_history` lo rechazaría y frenaría toda la carga masiva). El redondeo puede dejar un precio por debajo del costo sólo con costos de pocos pesos (decisión explícita del pedido; no se compensa).
+- **Un solo helper.** SQL: `app_private.round_commercial_price_to_nearest_50`, llamado desde `app_private.list_price_from_margin` (por donde pasan costo individual, carga masiva, importación, cambio de margen global/propio, alta con costo y las vistas previas del servidor). TS: `roundCommercialPriceToNearest50`, aplicado dentro de `calculateListPriceFromMargin`; las pantallas (carga masiva, editor del producto, alta, ejemplo de configuración) sólo llaman a esa función, así que el precio proyectado es el que guarda el servidor.
+- **No cambia.** `public.calculate_product_price` / `calculatePriceFormation` (gross-up genérico y sistema de markup anterior); precio manual y precio manual por línea de Central (D-061); categorías excluidas sin margen propio (D-069); snapshots y vigencias históricas (nada se reescribe: un precio ya guardado sigue igual hasta que un costo o margen nuevo lo vuelva a derivar; guardar el mismo margen no recalcula, D-068 b); dto 3u, pack, promociones y recargo de tarjeta, que se calculan desde el precio de lista ya redondeado y **no** se redondean a $50.
+
+**Motivo:** precios de góndola comerciales (múltiplos de $50) sin tocar la fórmula de margen, el orden de descuentos ni el sync offline.

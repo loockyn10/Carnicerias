@@ -7,6 +7,7 @@ import { ProductManageModal } from "../../../components/product-manage-modal";
 import { ProductBulkBar, ProductSelectableRow, ProductSelectHeaderCell, ProductSelectionProvider, ProductSelectToggle } from "../../../components/product-selection";
 import { PricingConfigModal } from "../../../components/pricing-config-modal";
 import { SectionTabs } from "../../../components/section-tabs";
+import { PRODUCTOS_TABS } from "../products-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { createClient } from "../../../lib/supabase/server";
 import { fetchAllRows } from "../../../lib/fetch-all";
@@ -14,12 +15,6 @@ import { createPerfLogger } from "../../../lib/perf";
 import { effectiveMarginRule } from "../../../lib/product-margin";
 import { promotionLabel, type PromotionLabelRow } from "../../../lib/promotion-label";
 import { deactivateProductsAction, saveCategoryAction } from "../actions";
-
-const PRODUCTOS_TABS = [
-  { label: "Productos", href: "/admin/products" },
-  { label: "Precios", href: "/admin/products?tab=pricing" },
-  { label: "Promociones", href: "/admin/promotions" }
-];
 
 interface Discount extends PromotionLabelRow { id: string; product_id: string; branch_id: string | null; active: boolean; valid_from: string; valid_until: string | null }
 

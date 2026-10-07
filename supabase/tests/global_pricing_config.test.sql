@@ -28,15 +28,25 @@ select ok(not has_table_privilege('authenticated', 'public.organization_pricing_
 -- ---------------------------------------------------------------------------------------------
 -- La fórmula: margen sobre el PRECIO DE VENTA (gross-up), no markup sobre costo
 -- ---------------------------------------------------------------------------------------------
-select is(app_private.list_price_from_margin(1000000, 3000), 1428571::bigint, 'cost $10.000 at 30 % margin -> $14.285,71 (10.000 / 0,70), NOT $13.000 (10.000 x 1,30)');
+select is(app_private.list_price_from_margin(1000000, 3000), 1430000::bigint, 'cost $10.000 at 30 % margin -> $14.300 (10.000 / 0,70), NOT $13.000 (10.000 x 1,30)');
 select isnt(app_private.list_price_from_margin(1000000, 3000), 1300000::bigint, 'it is not a 30 % markup over cost');
-select is(app_private.list_price_from_margin(400000, 3000), 571429::bigint, 'cost $4.000 at 30 % -> $5.714,29');
+select is(app_private.list_price_from_margin(400000, 3000), 570000::bigint, 'cost $4.000 at 30 % -> $5.700');
 select is(app_private.list_price_from_margin(1000000, 5000), 2000000::bigint, 'cost $10.000 at 50 % -> exactly $20.000');
-select is(app_private.list_price_from_margin(1000000, 3500), 1538462::bigint, 'cost $10.000 at 35 % -> $15.384,62');
-select is(app_private.list_price_from_margin(1, 5000), 2::bigint, 'half-up: 1 / 0,5 = 2');
-select is(app_private.list_price_from_margin(100, 3333), 150::bigint, 'half-up on a fraction: 100 / 0,6667 = 149,99 -> 150');
-select is(app_private.list_price_from_margin(10000, 1), 10001::bigint, 'half-up never drops below the cost: 10.000 / 0,9999 = 10.001');
-select is(app_private.list_price_from_margin(1000000, 3000), (select list_price_cents from public.calculate_product_price(1000000, 0, 3000)), 'it is the existing gross-up (calculate_product_price with markup 0), not a parallel formula');
+select is(app_private.list_price_from_margin(1000000, 3500), 1540000::bigint, 'cost $10.000 at 35 % -> $15.400');
+-- Redondeo comercial a $50 (D-071): se aplica DESPUES del gross-up, half-up en el punto medio, en centavos enteros.
+select is(app_private.round_commercial_price_to_nearest_50(246644), 245000::bigint, '2.466,44 -> 2.450');
+select is(app_private.round_commercial_price_to_nearest_50(242400), 240000::bigint, '2.424 -> 2.400');
+select is(app_private.round_commercial_price_to_nearest_50(247499), 245000::bigint, '2.474,99 -> 2.450');
+select is(app_private.round_commercial_price_to_nearest_50(247500), 250000::bigint, '2.475 (punto medio) -> 2.500, half-up');
+select is(app_private.round_commercial_price_to_nearest_50(247600), 250000::bigint, '2.476 -> 2.500');
+select is(app_private.round_commercial_price_to_nearest_50(571429), 570000::bigint, '5.714,29 -> 5.700');
+select is(app_private.round_commercial_price_to_nearest_50(572600), 575000::bigint, '5.726 -> 5.750');
+select is(app_private.list_price_from_margin(148000, 4000), 245000::bigint, 'cost $1.480 at 40 %: gross-up $2.466,67 -> stored $2.450 (the Admin preview shows the same)');
+select is(app_private.list_price_from_margin(1, 5000), 5000::bigint, 'floor: a tiny cost never forms a $0 price, the minimum is $50');
+select is(app_private.list_price_from_margin(100, 3333), 5000::bigint, 'floor: 100 / 0,6667 = 150 cents -> rounds to $0 -> minimum $50');
+select is(app_private.list_price_from_margin(10000, 1), 10000::bigint, 'cost $100 at 0,01 %: 100,01 -> $100 (rounding is commercial; it may land under the cost for tiny costs)');
+select is(app_private.list_price_from_margin(1000000, 3000), (app_private.round_commercial_price_to_nearest_50((select list_price_cents from public.calculate_product_price(1000000, 0, 3000)))), 'it is the existing gross-up (calculate_product_price with markup 0) + the $50 rounding, not a parallel formula');
+select is((select list_price_cents from public.calculate_product_price(1000000, 0, 3000)), 1428571::bigint, 'the generic gross-up (calculate_product_price) is NOT rounded: only the automatic margin price is');
 select throws_ok($$select app_private.list_price_from_margin(1000000, 10000)$$, '22023', null, '100 % margin is rejected');
 select throws_ok($$select app_private.list_price_from_margin(1000000, 0)$$, '22023', null, '0 % margin is rejected');
 select throws_ok($$select app_private.list_price_from_margin(0, 3000)$$, '22023', null, 'a zero cost produces no price');
@@ -102,7 +112,7 @@ insert into public.product_prices (organization_id, product_id, price_cents, val
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000a', 1000000, now() - interval '1 day'),
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000b', 600000, now() - interval '1 day'),
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000c', 777700, now() - interval '1 day'),
-  ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000d', 1428571, now() - interval '1 day'),
+  ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000d', 1430000, now() - interval '1 day'),
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-00000000000f', 111100, now() - interval '1 day'),
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-000000000011', 200000, now() - interval '1 day'),
   ('e2000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-000000000012', 540000, now() - interval '1 day'),
@@ -293,12 +303,12 @@ select is((select (doc ->> 'branchPromotionsUpdated')::int from keep where name 
 select is((select (doc ->> 'cardSurchargeChanged')::boolean from keep where name = 'cfg30'), true, 'result: the card surcharge was written');
 select is((select margin_bps || '/' || unit_bulk_discount_bps || '/' || pack_discount_bps from public.organization_pricing_settings where organization_id = 'e2000000-0000-4000-8000-000000000001'), '3000/1500/2000', 'the global configuration is stored in basis points');
 
--- Aceite: costo $10.000 + margen 30 % => $14.285,71; el precio anterior queda como historia.
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1428571::bigint, 'Aceite: new list price $14.285,71');
+-- Aceite: costo $10.000 + margen 30 % => $14.300; el precio anterior queda como historia.
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1430000::bigint, 'Aceite: new list price $14.300');
 select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000a'), 2::bigint, 'Aceite: a NEW vigencia was opened (2 rows)');
 select is((select price_cents from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000a' and valid_to is not null), 1000000::bigint, 'Aceite: the old row keeps its price $10.000 (history is never rewritten)');
 select ok((select valid_to is not null and valid_to <= (select valid_from from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000a' and valid_to is null) from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000a' and valid_to is not null), 'Aceite: the old vigencia closes exactly where the new one opens');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 571429::bigint, 'Yerba: cost $4.000 -> $5.714,29');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 570000::bigint, 'Yerba: cost $4.000 -> $5.700');
 select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000d'), 1::bigint, 'Azúcar: already at the right price, no vigencia noise');
 -- Sin costo: ni se inventa ni se pone en 0 ni se borra.
 select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 777700::bigint, 'Vacío (no cost): keeps its price');
@@ -348,16 +358,16 @@ select lives_ok($$select public.set_product_cost('e5000000-0000-4000-8000-000000
 select is(public.t_gp_cost('e5000000-0000-4000-8000-00000000000b'), 350000::bigint, 'the new cost is current');
 select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 500000::bigint, 'and the list price follows: $3.500 / 0,70 = $5.000');
 select is(public.t_gp_cost_rows('e5000000-0000-4000-8000-00000000000b'), 4::bigint, 'cost history keeps every vigencia ($4.000 initial, $4.500, $4.000, $3.500)');
-select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000b'), 3::bigint, 'price history keeps every vigencia (manual $6.000, $5.714,29, $5.000)');
+select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000b'), 3::bigint, 'price history keeps every vigencia (manual $6.000, $5.700, $5.000)');
 insert into keep select 'bulk1', null, null, null, public.bulk_set_product_costs(
   '[{"productId":"e5000000-0000-4000-8000-00000000000b","costCents":400000},{"productId":"e5000000-0000-4000-8000-00000000000a","costCents":1000000},{"productId":"e5000000-0000-4000-8000-00000000000c","costCents":600000}]'::jsonb, clock_timestamp());
 select is((select doc ->> 'applied' from keep where name = 'bulk1'), '2', 'bulk: two costs changed (Aceite already had that cost: nothing to do)');
 select is((select doc ->> 'costUnchanged' from keep where name = 'bulk1'), '1', 'bulk: an unchanged cost is not saved again (idempotent)');
 select is((select doc ->> 'repriced' from keep where name = 'bulk1'), '2', 'bulk: both changed costs reprice');
 select is((select (doc ->> 'marginConfigured')::boolean from keep where name = 'bulk1'), true, 'bulk: reports that the margin is configured');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 571429::bigint, 'Yerba is back to $4.000 -> $5.714,29');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 570000::bigint, 'Yerba is back to $4.000 -> $5.700');
 select is(public.t_gp_cost('e5000000-0000-4000-8000-00000000000c'), 600000::bigint, 'Vacío (WEIGHT) got its first cost...');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 857143::bigint, '...and therefore a price: $6.000 / 0,70 = $8.571,43 per kg');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 855000::bigint, '...and therefore a price: $6.000 / 0,70 = $8.550 per kg');
 select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000a'), 2::bigint, 'an unchanged cost opened no new price vigencia');
 
 -- Costo en un producto que no se vende (materia prima / inactivo): se guarda, pero no nace ni cambia ningún precio.
@@ -390,7 +400,7 @@ select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-00000
 select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1499900::bigint, 'the manual price is the list price');
 select is(public.t_gp_cost('e5000000-0000-4000-8000-00000000000a'), 1000000::bigint, 'it did not change the cost');
 select is((select margin_bps from public.organization_pricing_settings where organization_id = 'e2000000-0000-4000-8000-000000000001'), 3000, 'nor the global margin');
-select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-00000000000a', null, 1428571, clock_timestamp())$$, 'and it is put back to the derived price for the rest of the test');
+select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-00000000000a', null, 1430000, clock_timestamp())$$, 'and it is put back to the derived price for the rest of the test');
 
 -- ---------------------------------------------------------------------------------------------
 -- Precios por sucursal: un precio vigente de sucursal GANA sobre el global, así que se informan (y se pueden cerrar), nunca se ocultan
@@ -399,12 +409,12 @@ select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-00000
 select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-00000000000d', 'e3000000-0000-4000-8000-000000000002', 888800, clock_timestamp())$$, 'Azúcar gets an Avenida-only price');
 select lives_ok($$select public.set_product_price('e5000000-0000-4000-8000-000000000013', 'e3000000-0000-4000-8000-000000000001', 150000, clock_timestamp())$$, 'Leche (no cost) gets a Central-only price');
 select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 999900::bigint, 'precedence: the Central price WINS over the global one in Central');
-select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000002'), 571429::bigint, '...and Avenida (no override) keeps seeing the global price');
+select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000002'), 570000::bigint, '...and Avenida (no override) keeps seeing the global price');
 select is(((public.bulk_set_product_costs('[{"productId":"e5000000-0000-4000-8000-00000000000b","costCents":410000}]'::jsonb, clock_timestamp())) ->> 'branchOverrides')::int, 1, 'a cost change reports that the product has a branch price that keeps winning');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 585714::bigint, 'the GLOBAL price followed the cost ($4.100 / 0,70)');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 585000::bigint, 'the GLOBAL price followed the cost ($4.100 / 0,70)');
 select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 999900::bigint, '...but Central still sells at the old branch price: the problem is visible, not hidden');
 select lives_ok($$select public.bulk_set_product_costs('[{"productId":"e5000000-0000-4000-8000-00000000000b","costCents":400000}]'::jsonb, clock_timestamp())$$, 'Yerba cost back to $4.000');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 571429::bigint, '...and its global price with it');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 570000::bigint, '...and its global price with it');
 
 -- ---------------------------------------------------------------------------------------------
 -- POS: dispositivo, catálogo y lo que recibe
@@ -417,7 +427,7 @@ select set_config('request.jwt.claims', '{"sub":"e1000000-0000-4000-8000-0000000
 select lives_ok($$select public.register_pos_device('e7000000-0000-4000-8000-000000000001', 'e3000000-0000-4000-8000-000000000001', 'Caja Central')$$, 'the Central device is registered');
 select is(
   (select (i ->> 'pricePerKgCents') from jsonb_array_elements(public.pull_pos_state('e7000000-0000-4000-8000-000000000001', 0) -> 'catalog') i where i ->> 'productName' = 'Aceite'),
-  '1428571', 'the POS receives the FORMED list price (it never recomputes it from a cost)');
+  '1430000', 'the POS receives the FORMED list price (it never recomputes it from a cost)');
 select ok(not (public.pull_pos_state('e7000000-0000-4000-8000-000000000001', 0)::text ilike '%cost%'), 'the POS payload exposes no cost');
 select ok(not (public.pull_pos_state('e7000000-0000-4000-8000-000000000001', 0)::text ilike '%margin%'), 'nor the margin');
 select is(
@@ -434,7 +444,7 @@ select is((public.get_pos_commercial_config('e3000000-0000-4000-8000-00000000000
 
 -- Día 1: ventas offline armadas ahora, con lo vigente (se sincronizan DESPUÉS de cambiar la configuración).
 insert into keep select 'rule15', public.t_gp_rule_id('e3000000-0000-4000-8000-000000000001'), null, null, null;
-insert into keep select 'day1-aceite', null, public.t_gp_payload(1, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-00000000000a', 'Aceite', 1, 1428571)), clock_timestamp()), null, null;
+insert into keep select 'day1-aceite', null, public.t_gp_payload(1, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-00000000000a', 'Aceite', 1, 1430000)), clock_timestamp()), null, null;
 insert into keep select 'day1-pack', null, public.t_gp_payload(2, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-000000000011', 'Coca', 1, 200000, 'PACK', 6, 2000)), clock_timestamp()), null, null;
 insert into keep select 'day1-3u', null, public.t_gp_payload(3, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-000000000012', 'Producto 3u', 3, 540000, 'PROMO', null, null, (select id from keep where name = 'rule15'), 1500)), clock_timestamp()), null, null;
 insert into keep select 'day1-2u', null, public.t_gp_payload(4, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-000000000012', 'Producto 3u', 2, 540000)), clock_timestamp()), null, null;
@@ -449,16 +459,16 @@ insert into keep select 'preview35', null, null, null, public.save_pricing_confi
 select is((select (doc ->> 'requiresConfirmation')::boolean from keep where name = 'preview35'), true, 'a margin change asks for confirmation again');
 select is((select (doc ->> 'branchOverrides')::int || '/' || (doc ->> 'branchOverridesOther')::int from keep where name = 'preview35'), '2/1', 'preview: 2 branch prices (Yerba, Azúcar) would shadow the new global price; 1 more (Leche, no cost) is outside the recalculation');
 select is((select (doc ->> 'recalculated')::int || '/' || (doc ->> 'unchanged')::int || '/' || (doc ->> 'previousMarginBps') from keep where name = 'preview35'), '4/0/3000', 'preview: 4 would change (Aceite, Yerba, Vacío, Azúcar), previous margin 30 %');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1428571::bigint, 'still nothing written by the preview');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1430000::bigint, 'still nothing written by the preview');
 insert into keep select 'cfg35', null, null, null, public.save_pricing_config(3500, 1000, 2500, 1000, true);
 select is((select (doc ->> 'branchOverrides')::int || '/' || (doc ->> 'branchOverridesClosed')::int from keep where name = 'cfg35'), '2/0', 'confirming WITHOUT asking to close them leaves the 2 branch prices in force and says so');
-select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 999900::bigint, '...Yerba in Central still shows the branch price, not the new global $6.153,85');
+select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 999900::bigint, '...Yerba in Central still shows the branch price, not the new global $6.150');
 select is((select (doc ->> 'recalculated')::int from keep where name = 'cfg35'), 4, 'margin 35 %: 4 prices recalculated');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1538462::bigint, 'Aceite: $10.000 / 0,65 = $15.384,62');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1540000::bigint, 'Aceite: $10.000 / 0,65 = $15.400');
 select is(public.t_gp_price_rows('e5000000-0000-4000-8000-00000000000a'), 5::bigint, 'Aceite: every previous vigencia is still there (5 rows incl. the manual excursion)');
 select is((select price_cents from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000a' and valid_to is not null order by valid_from limit 1), 1000000::bigint, 'the oldest row still says $10.000');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615385::bigint, 'Yerba: $4.000 / 0,65 = $6.153,85');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 923077::bigint, 'Vacío: $6.000 / 0,65 = $9.230,77 per kg');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615000::bigint, 'Yerba: $4.000 / 0,65 = $6.150');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 925000::bigint, 'Vacío: $6.000 / 0,65 = $9.250 per kg');
 select is((select (doc ->> 'scheduledPrice')::int from keep where name = 'cfg35'), 1, 'the scheduled price is still respected');
 select is((select (doc ->> 'withoutCost')::int from keep where name = 'cfg35'), 4, 'now 4 sellable products have no usable cost (Coca, Producto 3u, Leche, Producto cero)');
 select is((select pack_discount_bps from public.products where sku = 'GP-H'), 2500, 'packs now carry the new global 25 %');
@@ -473,14 +483,14 @@ select is((select cash_discount_bps from public.organization_cash_discounts wher
 
 -- Un cambio de costo posterior a la venta del Día 1 tampoco debe reescribir su costo histórico.
 select lives_ok($$select public.set_product_cost('e5000000-0000-4000-8000-00000000000a', 700000, clock_timestamp())$$, 'Aceite cost changes AFTER the Day 1 sale was made');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1076923::bigint, 'and its list price follows: $7.000 / 0,65');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000a'), 1075000::bigint, 'and its list price follows: $7.000 / 0,65');
 
 -- ---------------------------------------------------------------------------------------------
 -- Las ventas offline del Día 1 sincronizan DESPUÉS del cambio y conservan lo que tenían
 -- ---------------------------------------------------------------------------------------------
 select set_config('request.jwt.claim.sub', 'e1000000-0000-4000-8000-000000000002', true);
 select set_config('request.jwt.claims', '{"sub":"e1000000-0000-4000-8000-000000000002","role":"authenticated"}', true);
-select lives_ok($$select public.t_gp_sync((select payload from keep where name = 'day1-aceite'))$$, 'Day 1: the Aceite sale ($14.285,71) syncs after the margin and the cost changed');
+select lives_ok($$select public.t_gp_sync((select payload from keep where name = 'day1-aceite'))$$, 'Day 1: the Aceite sale ($14.300) syncs after the margin and the cost changed');
 select lives_ok($$select public.t_gp_sync((select payload from keep where name = 'day1-pack'))$$, 'Day 1: the Coca pack (6 units at 20 %) syncs after the pack moved to 25 %');
 select lives_ok($$select public.t_gp_sync((select payload from keep where name = 'day1-3u'))$$, 'Day 1: the "3u" sale (rule at 15 %) syncs after the rule moved to 10 %');
 select lives_ok($$select public.t_gp_sync((select payload from keep where name = 'day1-2u'))$$, 'two units of the same product: syncs');
@@ -495,8 +505,8 @@ select throws_ok($$select public.t_gp_sync(public.t_gp_payload(8, jsonb_build_ar
   'branchPromotionDiscountedUnits', 6, 'branchPromotionDiscountCents', '120000'))))$$, '22023', null, 'a pack that also claims the global 3u discount is rejected: one discount per line, never stacked');
 
 reset role;
-select is((select original_price_per_kg_cents || '/' || subtotal_cents from public.sale_items where sale_id = public.t_gp_sale(1)), '1428571/1428571', 'Day 1 Aceite keeps its Day 1 price, not the new $15.384,62');
-select is((select total_cents from public.sales where id = public.t_gp_sale(1)), 1428571::bigint, 'and its Day 1 total');
+select is((select original_price_per_kg_cents || '/' || subtotal_cents from public.sale_items where sale_id = public.t_gp_sale(1)), '1430000/1430000', 'Day 1 Aceite keeps its Day 1 price, not the new $15.400');
+select is((select total_cents from public.sales where id = public.t_gp_sale(1)), 1430000::bigint, 'and its Day 1 total');
 select is((select cost_cents_snapshot from public.sale_items where sale_id = public.t_gp_sale(1)), 1000000::bigint, 'with the cost of the moment of the sale ($10.000), not the current $7.000: historical profitability is untouched');
 select is((select quantity_units || '/' || pack_discount_bps || '/' || pack_discount_cents || '/' || subtotal_cents || '/' || price_per_kg_cents from public.sale_items where sale_id = public.t_gp_sale(2)), '6/2000/240000/960000/160000', 'Day 1 pack: 6 x $2.000 = $12.000 - 20 % = $9.600 = $1.600 per unit, stored at the Day 1 percentage');
 select is((select pack_config_id from public.sale_items where sale_id = public.t_gp_sale(2)), (select id from keep where name = 'packv20'), 'against the 20 % version it was sold with');
@@ -519,10 +529,10 @@ select throws_ok($$select public.close_branch_price_overrides()$$, '42501', 'Per
 select set_config('request.jwt.claim.sub', 'e1000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claims', '{"sub":"e1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is((public.close_branch_price_overrides(array['e5000000-0000-4000-8000-00000000000b']::uuid[]) ->> 'closed')::int, 1, 'closing the branch prices of one product closes exactly that one');
-select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 615385::bigint, 'Central now sees the global price of Yerba ($6.153,85)');
+select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 615000::bigint, 'Central now sees the global price of Yerba ($6.150)');
 select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000d', 'e3000000-0000-4000-8000-000000000002'), 888800::bigint, 'the other overrides are untouched');
 select is((public.close_branch_price_overrides() ->> 'closed')::int, 2, 'closing all the rest closes the other 2');
-select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000d', 'e3000000-0000-4000-8000-000000000002'), 1538462::bigint, 'Avenida now sees the global price of Azúcar too');
+select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000d', 'e3000000-0000-4000-8000-000000000002'), 1540000::bigint, 'Avenida now sees the global price of Azúcar too');
 select is((select count(*) from public.product_prices where branch_id is not null and valid_to is null), 0::bigint, 'no branch price is in force any more');
 select is((select count(*) from public.product_prices where branch_id is not null), 3::bigint, 'but the 3 rows are still in the history (closed, never deleted)');
 select is((select price_cents from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000b' and branch_id is not null), 999900::bigint, 'and a closed branch price keeps its value');
@@ -536,7 +546,7 @@ select is((select (doc ->> 'branchOverridesClosed')::int from keep where name = 
 select is(public.t_gp_effective('e5000000-0000-4000-8000-00000000000b', 'e3000000-0000-4000-8000-000000000001'), 625000::bigint, 'Central sees the new global price: $4.000 / 0,64 = $6.250');
 select is((select count(*) from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000b' and branch_id is not null and valid_to is not null), 2::bigint, 'both Central rows of Yerba are history now');
 select lives_ok($$select public.save_pricing_config(3500, 1000, 2500, 1000, true)$$, 'margin back to 35 % for the rest of the test');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615385::bigint, '...and Yerba is back at $6.153,85');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615000::bigint, '...and Yerba is back at $6.150');
 
 -- Con los precios por sucursal cerrados: el POS recibe el precio GLOBAL, el sync deja de aceptar el viejo y el historial queda
 reset role;
@@ -546,11 +556,11 @@ select set_config('request.jwt.claim.sub', 'e1000000-0000-4000-8000-000000000002
 select set_config('request.jwt.claims', '{"sub":"e1000000-0000-4000-8000-000000000002","role":"authenticated"}', true);
 select is(
   (select (i ->> 'pricePerKgCents') from jsonb_array_elements(public.pull_pos_state('e7000000-0000-4000-8000-000000000001', 0) -> 'catalog') i where i ->> 'productName' = 'Yerba'),
-  '615385', 'after closing the branch prices the Central POS receives the new GLOBAL price of Yerba');
-select lives_ok($$select public.t_gp_sync(public.t_gp_payload(30, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-00000000000b', 'Yerba', 1, 615385))))$$, 'a sale at the global price syncs');
+  '615000', 'after closing the branch prices the Central POS receives the new GLOBAL price of Yerba');
+select lives_ok($$select public.t_gp_sync(public.t_gp_payload(30, jsonb_build_array(public.t_gp_item('e5000000-0000-4000-8000-00000000000b', 'Yerba', 1, 615000))))$$, 'a sale at the global price syncs');
 -- (El sync offline no relee product_prices: el precio de lista de una venta es el snapshot que trae la caja; por eso lo que importa es lo que la caja RECIBE, probado arriba.)
 reset role;
-select is((select original_price_per_kg_cents from public.sale_items where sale_id = public.t_gp_sale(30)), 615385::bigint, 'the accepted sale carries the global list price as its snapshot');
+select is((select original_price_per_kg_cents from public.sale_items where sale_id = public.t_gp_sale(30)), 615000::bigint, 'the accepted sale carries the global list price as its snapshot');
 select is((select count(*) from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000b' and branch_id is not null and valid_to is not null), 2::bigint, 'history intact: both closed Central rows of Yerba are still there');
 select is((select string_agg(price_cents::text, ',' order by price_cents) from public.product_prices where product_id = 'e5000000-0000-4000-8000-00000000000b' and branch_id is not null), '777700,999900', '...with their original prices');
 set local role authenticated;
@@ -642,10 +652,10 @@ select lives_ok($$select public.create_production_batch(
   p_source_product_id => 'e5000000-0000-4000-8000-00000000000e', p_input_weight_grams => 20000, p_cost_per_kg_cents => 420000,
   p_branch_id => 'e3000000-0000-4000-8000-000000000001', p_description => 'Media res')$$, 'a Desposte batch is created');
 select lives_ok($$select public.set_production_batch_output((select id from public.production_batches where organization_id = 'e2000000-0000-4000-8000-000000000001'), 'e5000000-0000-4000-8000-00000000000c', 2000)$$, 'with the Vacío output');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 923077::bigint, 'before finalizing, Vacío has the margin price');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 925000::bigint, 'before finalizing, Vacío has the margin price');
 select lives_ok($$select public.complete_production_batch((select id from public.production_batches where organization_id = 'e2000000-0000-4000-8000-000000000001'))$$, 'the batch is finalized');
 select is(public.t_gp_cost('e5000000-0000-4000-8000-00000000000c'), 4200000::bigint, 'the produced cost became the current cost');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 923077::bigint, 'production does not reprice by itself: the list price is untouched');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 925000::bigint, 'production does not reprice by itself: the list price is untouched');
 
 -- ---------------------------------------------------------------------------------------------
 -- Alta de un producto en el Admin: con costo + margen el precio sale solo (misma función); sin margen/costo/activo hace falta precio manual
@@ -653,7 +663,7 @@ select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000c'), 923077
 select lives_ok($$select public.create_product_with_pricing('e4000000-0000-4000-8000-000000000001', 'Alta derivada', 'gp-alta-derivada', 'GP-ALTA', 'UNIT', true)$$, 'the Admin creates a product with no price');
 select is(public.t_gp_price_rows(public.t_gp_by_sku('GP-ALTA')), 0::bigint, 'without a cost it has no price (the Admin form asks for one in that case)');
 select lives_ok($$select public.set_product_cost(public.t_gp_by_sku('GP-ALTA'), 1000000, clock_timestamp())$$, 'its cost ($10.000) is loaded');
-select is(public.t_gp_open_price(public.t_gp_by_sku('GP-ALTA')), 1538462::bigint, 'the price is formed by the margin (35 %): $10.000 / 0,65 = $15.384,62 with NO manual price');
+select is(public.t_gp_open_price(public.t_gp_by_sku('GP-ALTA')), 1540000::bigint, 'the price is formed by the margin (35 %): $10.000 / 0,65 = $15.400 with NO manual price');
 select is(public.t_gp_price_rows(public.t_gp_by_sku('GP-ALTA')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('GP-ALTA')), '1/1', 'one price vigencia and one cost vigencia, created together');
 select lives_ok($$select public.create_product_with_pricing('e4000000-0000-4000-8000-000000000001', 'Alta inactiva', 'gp-alta-inactiva', 'GP-INACT', 'UNIT', false)$$, 'an INACTIVE product is created with a cost');
 select lives_ok($$select public.set_product_cost(public.t_gp_by_sku('GP-INACT'), 1000000, clock_timestamp())$$, 'its cost is saved');
@@ -682,11 +692,11 @@ select lives_ok($t$select public.stage_import_rows((select id from public.import
 ]$j$::jsonb)$t$, 'five rows are staged');
 select is((public.preview_import_batch((select id from public.import_batches where file_name = 'gp-imp-1')) -> 'summary' ->> 'create')::int || '/' || (public.preview_import_batch((select id from public.import_batches where file_name = 'gp-imp-1')) -> 'summary' ->> 'update')::int, '4/1', 'preview: 4 products to create and 1 existing to link');
 select is(public.apply_import_batch((select id from public.import_batches where file_name = 'gp-imp-1')) -> 'result', '{"created":4,"updated":1,"ignored":0,"skippedErrors":0}'::jsonb, 'apply creates 4 and updates the linked one');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-1')), '1538462/1', 'cost + price in the file: the price is FORMED from the cost ($10.000 / 0,65), the file price ($5.555) is ignored and never written');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-2')), 615385::bigint, 'only a cost: the price is formed from it ($4.000 / 0,65)');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-1')), '1540000/1', 'cost + price in the file: the price is FORMED from the cost ($10.000 / 0,65), the file price ($5.555) is ignored and never written');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-2')), 615000::bigint, 'only a cost: the price is formed from it ($4.000 / 0,65)');
 select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-3')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('IMP-3')), '777700/0', 'only a price (no cost): the file price is kept, as before');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-4')), 307692::bigint, 'a $0 price with a cost: the cost forms the price ($2.000 / 0,65), not a "sin precio" row');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-X')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('IMP-X')), '461538/1', 'an existing product with the same cost and NO price gets its price formed, without a second cost vigencia');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-4')), 310000::bigint, 'a $0 price with a cost: the cost forms the price ($2.000 / 0,65), not a "sin precio" row');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-X')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('IMP-X')), '460000/1', 'an existing product with the same cost and NO price gets its price formed, without a second cost vigencia');
 select is((select count(*) from public.external_entity_links where entity_type = 'product' and external_id in ('I1', 'I2', 'I3', 'I4', 'I5')), 5::bigint, 'every row is linked to its product (external_entity_links)');
 
 -- Idempotencia: el mismo archivo otra vez no cambia nada (y otro con el mismo costo pero otro precio tampoco pisa el precio formado).
@@ -717,8 +727,8 @@ select lives_ok($t$select public.stage_import_rows((select id from public.import
 ]$j$::jsonb)$t$, 'three changed rows are staged');
 select lives_ok($$select public.preview_import_batch((select id from public.import_batches where file_name = 'gp-imp-3'))$$, 'preview of gp-imp-3');
 select is(public.apply_import_batch((select id from public.import_batches where file_name = 'gp-imp-3')) -> 'result', '{"created":0,"updated":3,"ignored":0,"skippedErrors":0}'::jsonb, 'three products are updated');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('IMP-1')), '1538462/1/1', 'same cost, different file price: the formed price is NOT overwritten by the file price (no new vigencia)');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-2')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-2')), '769231/2', 'a changed cost re-forms the price ($5.000 / 0,65) and opens a new vigencia (history kept)');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-1')) || '/' || public.t_gp_cost_rows(public.t_gp_by_sku('IMP-1')), '1540000/1/1', 'same cost, different file price: the formed price is NOT overwritten by the file price (no new vigencia)');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-2')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-2')), '770000/2', 'a changed cost re-forms the price ($5.000 / 0,65) and opens a new vigencia (history kept)');
 select is(public.t_gp_open_price(public.t_gp_by_sku('IMP-3')) || '/' || public.t_gp_price_rows(public.t_gp_by_sku('IMP-3')), '800000/2', 'a price-only row still sets the file price (compatibility)');
 
 -- ---------------------------------------------------------------------------------------------
@@ -769,13 +779,13 @@ select lives_ok($t$select public.stage_import_rows((select id from public.import
 ]$j$::jsonb)$t$, 'staged');
 select lives_ok($$select public.preview_import_batch((select id from public.import_batches where file_name = 'gpb-imp-2'))$$, 'preview of gpb-imp-2');
 select is(public.apply_import_batch((select id from public.import_batches where file_name = 'gpb-imp-2')) -> 'result', '{"created":0,"updated":1,"ignored":0,"skippedErrors":0}'::jsonb, 'updated');
-select is(public.t_gp_open_price(public.t_gp_by_sku('IMPB-1')), 1692308::bigint, 'WITH the margin now configured, the new cost forms the price ($11.000 / 0,65), not the file price');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-000000000020'), 153846::bigint, 'org B product: $1.000 at 35 % -> $1.538,46');
+select is(public.t_gp_open_price(public.t_gp_by_sku('IMPB-1')), 1690000::bigint, 'WITH the margin now configured, the new cost forms the price ($11.000 / 0,65), not the file price');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-000000000020'), 155000::bigint, 'org B product: $1.000 at 35 % -> $1.550');
 select is((select pack_discount_bps from public.products where sku = 'GPB-Z'), 3000, 'org B pack moved to its own global 30 %');
 select is((select count(*) from public.branch_promotions where organization_id = 'e2000000-0000-4000-8000-000000000002' and active), 1::bigint, 'org B got its own promotion row');
 reset role;
 select is((select margin_bps from public.organization_pricing_settings where organization_id = 'e2000000-0000-4000-8000-000000000001'), 3500, 'org A margin untouched by org B');
-select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615385::bigint, 'org A prices untouched by org B');
+select is(public.t_gp_open_price('e5000000-0000-4000-8000-00000000000b'), 615000::bigint, 'org A prices untouched by org B');
 select is((select pack_discount_bps from public.products where sku = 'GP-H'), 1500, 'org A packs untouched by org B');
 select is((select count(*) from public.organization_pricing_settings), 2::bigint, 'one settings row per organization');
 select throws_ok($$insert into public.organization_pricing_settings (organization_id, margin_bps) values ('e2000000-0000-4000-8000-000000000001', 4000)$$, '23505', null, 'the table allows a single row per organization');

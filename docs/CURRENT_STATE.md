@@ -13,6 +13,7 @@ Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisio
 - Distribución Debian 12 i386 (`.deb`) implementada mediante `pnpm build:pos:linux:i386` (ver `docs/LINUX_POS.md`); pipeline reproducible, `REQUIERE VERIFICACIÓN EN HARDWARE REAL` antes de considerarla validada.
 - Admin para operación multisucursal, ventas, stock, reposición, productos, promociones, avisos, empleados, dispositivos, rendiciones, timekeeping, analítica y auditoría.
 - Admin `/admin/branch-stock` ("Stock por sucursal"): matriz de consulta producto × sucursal, búsqueda por nombre/SKU tolerante a acentos, filtro por categoría, sin escribir stock (sólo lectura). Reutiliza `get_replenishment_plan` (no crea RPC ni fuente de stock nueva); no incluye la Central (ver D-011).
+- Admin `/admin/products/labels` (Productos → Etiquetas): preview de la etiqueta de góndola 70 × 50 mm (`ProductPriceLabel`, `lib/product-label.ts`) con el precio global vigente y el «llevando 3u» global (D-068) calculado por el motor existente. Sólo diseño: sin impresión, cola ni barcode.
 
 - **Bug corregido 2026-09-30**: en `/admin/replenishment` el botón "Registrar ingreso" sólo se renderizaba si `row.needsReplenishment` (sugerido > 0 o prioridad ≠ NORMAL), por lo que un producto con stock suficiente no se podía reponer. Ahora toda tarjeta tiene el botón (frontend únicamente; `record_stock_operation` nunca exigió stock 0). La búsqueda ignora el filtro "Necesitan reposición" y el diálogo muestra `Ingreso: +Y · Stock resultante`. Sin migración.
 

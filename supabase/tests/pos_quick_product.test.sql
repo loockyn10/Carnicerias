@@ -405,7 +405,7 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a1000000-0000-4000-8000-00000000000a', true);
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
 select lives_ok($$select public.set_product_cost((select id from public.products where name = 'Quick con margen'), 50000, clock_timestamp())$$, 'the Admin later loads the cost of the quick-created product');
-select is((select price_cents from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen') and valid_to is null order by valid_from desc limit 1), 71429::bigint, 'the list price is now formed by the global rule: $500 / 0,70 = $714,29');
+select is((select price_cents from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen') and valid_to is null order by valid_from desc limit 1), 70000::bigint, 'the list price is now formed by the global rule: $500 / 0,70 = $700');
 select is((select count(*) from public.product_prices where product_id = (select id from public.products where name = 'Quick con margen')), 2::bigint, 'the emergency price stays in the history (2 vigencias)');
 reset role;
 

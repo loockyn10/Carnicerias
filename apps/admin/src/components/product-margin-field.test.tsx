@@ -36,7 +36,7 @@ describe("ProductMarginField (editor del producto, D-070)", () => {
     expect(html).toMatch(/name="custom_margin"[^>]*value="30"/);
     expect(html).not.toMatch(/name="custom_margin"[^>]*disabled=""|disabled=""[^>]*name="custom_margin"/);
     expect(html).toContain("incluso en una categoría excluida");
-    expect(html).toContain("Con el costo actual: $ 14.285,71 / unidad.");
+    expect(html).toContain("Con el costo actual: $ 14.300 / unidad.");
     expect(html).toMatch(/name="current_custom_margin_bps"[^>]*value="3000"/);
   });
 

@@ -97,3 +97,15 @@ describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Margen | 
     expect(renderToStaticMarkup(<BulkCostEditor marginConfigured rows={[]} />)).toContain("No hay productos de venta para cargar costos.");
   });
 });
+
+describe("BulkCostEditor: precio proyectado (D-071)", () => {
+  it("lo calcula sólo con calculateListPriceFromMargin (que redondea a $50 igual que el servidor), sin fórmula propia", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./bulk-cost-editor.tsx", import.meta.url), "utf8");
+    expect(source).toContain("calculateListPriceFromMargin(");
+    expect(source).not.toMatch(/10_?000n?\s*-/);
+    const { calculateListPriceFromMargin } = await import("@carnicerias/business-logic");
+    // Costo $1.480 con 40 %: gross-up $2.466,67 -> $2.450 (el servidor guarda lo mismo: supabase/tests/global_pricing_config.test.sql).
+    expect(calculateListPriceFromMargin(148_000n, 4_000n)).toBe(245_000n);
+  });
+});

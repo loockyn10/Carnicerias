@@ -58,15 +58,30 @@ export function calculatePriceFormation(costCents: bigint, profitMarkupBps: bigi
   return { targetCashPriceCents, listPriceCents, effectiveCashPriceCents };
 }
 
+/** Commercial rounding step for automatic list prices (D-071): $50 = 5.000 cents. */
+export const COMMERCIAL_PRICE_STEP_CENTS = 5_000n;
+
+/**
+ * Rounds a price in cents to the nearest multiple of $50, half-up at the midpoint (2.475 -> 2.500, 2.474,99 -> 2.450). Integers only.
+ * Twin of `app_private.round_commercial_price_to_nearest_50` (Postgres). It is the ONLY place the commercial rounding lives: the Admin
+ * previews call `calculateListPriceFromMargin`, which applies it, so they show exactly what the server stores.
+ */
+export function roundCommercialPriceToNearest50(priceCents: bigint): bigint {
+  if (priceCents < 0n) throw new RangeError("Price must not be negative");
+  return ((priceCents + COMMERCIAL_PRICE_STEP_CENTS / 2n) / COMMERCIAL_PRICE_STEP_CENTS) * COMMERCIAL_PRICE_STEP_CENTS;
+}
+
 /**
  * List price from a cost and a MARGIN OVER THE SALE PRICE (D-068): `price = cost / (1 - margin)`, half-up, in cents and basis
  * points. It is the existing gross-up (`calculatePriceFormation` with a 0 markup), never a markup over cost: cost $10.000 and a
- * 30 % margin -> $14.285,71 (not $13.000). Twin of `app_private.list_price_from_margin` (Postgres), which is what the server uses.
+ * 30 % margin -> gross-up $14.285,71 (not $13.000) -> rounded to the nearest $50: $14.300. Twin of `app_private.list_price_from_margin` (Postgres), which is what the server uses.
  */
 export function calculateListPriceFromMargin(costCents: bigint, marginBps: bigint): bigint {
   if (costCents <= 0n) throw new RangeError("Cost must be positive");
   if (marginBps < 1n || marginBps > 9_999n) throw new RangeError("Margin must be above 0% and below 100%");
-  return calculatePriceFormation(costCents, 0n, marginBps).listPriceCents;
+  // Gross-up (unchanged) -> commercial rounding to $50. Floor of $50: a tiny cost never forms a $0 price ("sin precio").
+  const rounded = roundCommercialPriceToNearest50(calculatePriceFormation(costCents, 0n, marginBps).listPriceCents);
+  return rounded < COMMERCIAL_PRICE_STEP_CENTS ? COMMERCIAL_PRICE_STEP_CENTS : rounded;
 }
 
 /**

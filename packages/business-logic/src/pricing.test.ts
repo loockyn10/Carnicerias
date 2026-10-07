@@ -1,20 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateListPriceFromMargin, calculatePriceFormation, calculateSalePricing, calculateUnitPackSalePricing,
-  calculateWeightPackSalePricing, isCardSurchargePaymentMethod
+  calculateWeightPackSalePricing, isCardSurchargePaymentMethod, roundCommercialPriceToNearest50
 } from "./pricing";
 import { calculateBranchPromotionLinePricing, calculateUnitPackLinePricing } from "./unit-discounts";
 
 // D-068: margin over the SALE price (gross-up), not a markup over cost.
 describe("list price from margin", () => {
   it.each([
-    [1_000_000n, 3_000n, 1_428_571n], // $10.000 at 30 % -> $14.285,71 (NOT $13.000)
-    [400_000n, 3_000n, 571_429n], // $4.000 at 30 % -> $5.714,29
+    [1_000_000n, 3_000n, 1_430_000n], // $10.000 at 30 % -> gross-up $14.285,71 -> $14.300 (NOT $13.000)
+    [400_000n, 3_000n, 570_000n], // $4.000 at 30 % -> $5.714,29 -> $5.700
     [1_000_000n, 5_000n, 2_000_000n], // $10.000 at 50 % -> exactly $20.000
-    [1_000_000n, 3_500n, 1_538_462n], // $10.000 at 35 % -> $15.384,62
+    [1_000_000n, 3_500n, 1_540_000n], // $10.000 at 35 % -> $15.384,62 -> $15.400
     [350_000n, 3_000n, 500_000n], // $3.500 at 30 % -> $5.000
-    [1n, 5_000n, 2n], // half-up
-    [10_000n, 1n, 10_001n] // never below the cost
+    [148_000n, 4_000n, 245_000n], // $1.480 at 40 % -> $2.466,67 -> $2.450 (the Admin preview shows this, not $2.466,67)
+    [1n, 5_000n, 5_000n], // floor: a tiny cost never forms a $0 price
+    [10_000n, 1n, 10_000n] // $100,01 -> $100
   ])("cost %s at margin %s bps -> %s", (cost, margin, price) => {
     expect(calculateListPriceFromMargin(cost, margin)).toBe(price);
   });
@@ -23,13 +24,21 @@ describe("list price from margin", () => {
     expect(calculateListPriceFromMargin(1_000_000n, 3_000n)).not.toBe(1_300_000n);
   });
 
-  it("the realised margin over the sale price is the configured one", () => {
+  it("the realised margin over the sale price is the configured one (within the $50 rounding)", () => {
     const price = calculateListPriceFromMargin(1_000_000n, 3_000n);
-    expect(Number(price - 1_000_000n) / Number(price)).toBeCloseTo(0.3, 5);
+    expect(Number(price - 1_000_000n) / Number(price)).toBeCloseTo(0.3, 2);
   });
 
-  it("is the existing gross-up with a 0 markup (no parallel formula)", () => {
-    expect(calculateListPriceFromMargin(1_234_567n, 2_750n)).toBe(calculatePriceFormation(1_234_567n, 0n, 2_750n).listPriceCents);
+  it("is the existing gross-up with a 0 markup plus the commercial rounding (no parallel formula)", () => {
+    expect(calculateListPriceFromMargin(1_234_567n, 2_750n)).toBe(roundCommercialPriceToNearest50(calculatePriceFormation(1_234_567n, 0n, 2_750n).listPriceCents));
+    // The generic gross-up itself is NOT rounded; only the automatic margin price is.
+    expect(calculatePriceFormation(1_000_000n, 0n, 3_000n).listPriceCents).toBe(1_428_571n);
+  });
+
+  it("the automatic price is always a multiple of $50", () => {
+    for (const cost of [123n, 4_990n, 99_999n, 1_234_567n, 987_654_321n]) for (const margin of [1n, 1_500n, 3_333n, 5_000n, 9_999n]) {
+      expect(calculateListPriceFromMargin(cost, margin) % 5_000n).toBe(0n);
+    }
   });
 
   it("rejects a 100 % / 0 % margin and a missing cost", () => {
@@ -282,5 +291,34 @@ describe("promotion pack (PACK_FIXED_TOTAL) — D-044 corrected: no exception to
     expect(() => calculateUnitPackSalePricing({
       listPriceCents: 700n, quantityUnits: 40, paymentMethod: "CASH", cashDiscountBps: 0n, pack
     })).toThrow(RangeError);
+  });
+});
+
+// D-071: commercial rounding of the automatic list price to the nearest $50 (5.000 cents), half-up, integers only.
+describe("roundCommercialPriceToNearest50", () => {
+  it.each([
+    [246_644n, 245_000n], // 2.466,44 -> 2.450
+    [242_400n, 240_000n], // 2.424 -> 2.400
+    [247_499n, 245_000n], // 2.474,99 -> 2.450
+    [247_500n, 250_000n], // 2.475 (midpoint) -> 2.500
+    [247_600n, 250_000n], // 2.476 -> 2.500
+    [571_429n, 570_000n], // 5.714,29 -> 5.700
+    [572_600n, 575_000n], // 5.726 -> 5.750
+    [1_428_571n, 1_430_000n], // 14.285,71 -> 14.300
+    [250_000n, 250_000n], // already a multiple
+    [0n, 0n]
+  ])("%s cents -> %s", (input, expected) => {
+    expect(roundCommercialPriceToNearest50(input)).toBe(expected);
+  });
+
+  it("works on integers far beyond Number precision", () => {
+    expect(roundCommercialPriceToNearest50(9_007_199_254_740_993_000n + 2_500n)).toBe(9_007_199_254_740_995_000n);
+  });
+
+  it("promotions, packs and the card surcharge keep their formulas, computed from the already-rounded list price", () => {
+    const list = calculateListPriceFromMargin(148_000n, 4_000n);
+    expect(list).toBe(245_000n);
+    const promo = calculateBranchPromotionLinePricing({ listPriceCents: list, quantityUnits: 3, promotion: { id: "p", minimumUnits: 3, discountBps: 1_500 }, paymentMethod: "CASH", cashDiscountBps: 0n });
+    expect(promo?.cashSubtotalCents).toBe(624_750n); // 3 x 2.450 x 0,85, NOT re-rounded to $50
   });
 });

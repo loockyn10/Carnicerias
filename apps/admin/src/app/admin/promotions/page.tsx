@@ -2,15 +2,10 @@ import { BranchPromotionsPanel, type BranchPromotionRow } from "../../../compone
 import { PromotionModal, type PromotionValue } from "../../../components/promotion-modal";
 import { PromotionsList, type PromotionRow } from "../../../components/promotions-list";
 import { SectionTabs } from "../../../components/section-tabs";
+import { PRODUCTOS_TABS } from "../products-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { fetchAllRows } from "../../../lib/fetch-all";
 import { createClient } from "../../../lib/supabase/server";
-
-const PRODUCTOS_TABS = [
-  { label: "Productos", href: "/admin/products" },
-  { label: "Precios", href: "/admin/products?tab=pricing" },
-  { label: "Promociones", href: "/admin/promotions" }
-];
 
 interface Discount {
   id: string;
