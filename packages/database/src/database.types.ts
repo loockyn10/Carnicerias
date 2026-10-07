@@ -519,6 +519,112 @@ export type Database = {
           },
         ]
       }
+      digital_signage_displays: {
+        Row: {
+          branch_id: string | null
+          created_at: string
+          created_by: string | null
+          enabled: boolean
+          id: string
+          name: string
+          organization_id: string
+          slide_duration_seconds: number
+          token_hash: string
+          token_rotated_at: string
+          updated_at: string
+        }
+        Insert: {
+          branch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          name: string
+          organization_id: string
+          slide_duration_seconds?: number
+          token_hash: string
+          token_rotated_at?: string
+          updated_at?: string
+        }
+        Update: {
+          branch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          name?: string
+          organization_id?: string
+          slide_duration_seconds?: number
+          token_hash?: string
+          token_rotated_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "digital_signage_displays_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "digital_signage_displays_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "digital_signage_displays_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      digital_signage_slides: {
+        Row: {
+          created_at: string
+          display_id: string
+          id: string
+          organization_id: string
+          position: number
+          product_id: string
+        }
+        Insert: {
+          created_at?: string
+          display_id: string
+          id?: string
+          organization_id: string
+          position: number
+          product_id: string
+        }
+        Update: {
+          created_at?: string
+          display_id?: string
+          id?: string
+          organization_id?: string
+          position?: number
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "digital_signage_slides_display_id_organization_id_fkey"
+            columns: ["display_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "digital_signage_displays"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "digital_signage_slides_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       employee_hourly_rates: {
         Row: {
           created_at: string
@@ -3961,6 +4067,10 @@ export type Database = {
         }
         Returns: string
       }
+      create_signage_display: {
+        Args: { p_branch_id?: string; p_name: string }
+        Returns: Json
+      }
       create_stock_transfer: {
         Args: {
           p_destination_branch_id: string
@@ -4205,6 +4315,11 @@ export type Database = {
         }
         Returns: Json
       }
+      get_signage_display: { Args: { p_token: string }; Returns: Json }
+      get_signage_display_admin: {
+        Args: { p_display_id: string }
+        Returns: Json
+      }
       get_timekeeping_report: {
         Args: {
           p_branch_id?: string
@@ -4419,6 +4534,10 @@ export type Database = {
         }
         Returns: string
       }
+      regenerate_signage_token: {
+        Args: { p_display_id: string }
+        Returns: Json
+      }
       register_pos_device: {
         Args: { p_branch_id: string; p_device_id: string; p_label?: string }
         Returns: Json
@@ -4546,6 +4665,17 @@ export type Database = {
           p_cost_cents: number
           p_product_id: string
           p_profit_markup_bps: number
+        }
+        Returns: Json
+      }
+      save_signage_display: {
+        Args: {
+          p_branch_id: string
+          p_display_id: string
+          p_enabled: boolean
+          p_name: string
+          p_product_ids: string[]
+          p_slide_duration_seconds: number
         }
         Returns: Json
       }

@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Cartelería digital: aplicar y probar en un televisor (acción del usuario)
+
+Implementado 2026-10-07 (D-072). **Migración pendiente: `202610070069_digital_signage.sql`** (tablas nuevas vacías; no toca nada existente).
+
+1. `supabase db push --dry-run` (debe listar sólo la 069) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel).
+2. Productos → Cartelería → crear la pantalla (nombre + sucursal) y **copiar el enlace en ese momento** (no se vuelve a mostrar; si se pierde: «Regenerar enlace»). Cargar 3–4 productos, «Guardar y publicar» y abrir el enlace en el navegador del TV (o «Abrir vista TV» en la PC).
+3. Verificar en el TV: precio igual al del POS de esa sucursal, «llevando 3 unidades» sólo donde corresponde, rotación en bucle y que un cambio de precio/orden aparece solo en < 1 min.
+4. Cortar el Wi-Fi del TV 1–2 min: debe seguir mostrando las ofertas sin error y recuperarse solo.
+5. Pendiente de producto (no urgente): foto del producto en la plantilla, exportar PNG/WhatsApp, más plantillas, promociones `PACK_FIXED_TOTAL`/packs en la cartelería y permiso propio.
+
 ## P0 — Precio por margen global: aplicar, configurar y probar (acción del usuario)
 
 Implementado 2026-10-06 (D-068) y 2026-10-07 (D-069 categorías excluidas, `CURRENT_STATE.md`). La `065` ya está aplicada; **migraciones pendientes: `202610070066_pricing_excluded_categories.sql` (si todavía no se aplicó) y `202610070067_product_custom_margin.sql` (D-070, margen personalizado por producto; la tabla nace vacía)**. No recalcula nada: hasta que alguien guarde la configuración, el sistema se comporta como hoy.

@@ -259,6 +259,22 @@ export interface RpcNullOverrides {
       unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
     }[]
   }
+  // p_branch_id null = pantalla sin sucursal (precio global de la organización).
+  create_signage_display: {
+    Args: { p_branch_id?: string | null; p_name: string }
+    Returns: Json
+  }
+  save_signage_display: {
+    Args: {
+      p_branch_id: string | null
+      p_display_id: string
+      p_enabled: boolean
+      p_name: string
+      p_product_ids: string[]
+      p_slide_duration_seconds: number
+    }
+    Returns: Json
+  }
   // p_margin_bps null = quitar el margen personalizado del producto (vuelve a la regla general).
   set_product_custom_margin: {
     Args: {
