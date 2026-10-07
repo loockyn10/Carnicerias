@@ -141,9 +141,14 @@ describe("Productos → Precios (D-068)", () => {
     expect(manage).toContain("p_reprice: costToSave === null");
     // El margen se valida antes de escribir cualquier cosa (primer rpc: set_product_pack_size / save_product).
     expect(manage.indexOf("parseCustomMarginForm")).toBeLessThan(manage.indexOf("rpcOrThrow("));
-    // Ni la carga masiva ni la importación del Admin envían un margen: sólo costos.
+    // La carga masiva edita costo y margen por la MISMA fuente de verdad que el editor del producto: set_product_custom_margin (sin repreciar
+    // si la fila trae costo) + bulk_set_product_costs. Nunca escribe la tabla ni un precio por su cuenta.
     const bulk = actions.slice(actions.indexOf("export async function bulkSetProductCostsAction"), actions.indexOf("async function commercialRpc"));
-    expect(bulk).not.toMatch(/p_margin|custom_margin|marginBps/);
+    expect(bulk).toContain('"set_product_custom_margin"');
+    expect(bulk).toContain("p_reprice: item.costCents === undefined");
+    expect(bulk).toContain('"bulk_set_product_costs"');
+    expect(bulk.indexOf('"set_product_custom_margin"')).toBeLessThan(bulk.indexOf('"bulk_set_product_costs"'));
+    expect(bulk).not.toMatch(/product_custom_margins|set_product_price|p_price_cents/);
     expect(source("./bulk-cost-editor.tsx")).not.toContain('name="margin');
     // Un margen propio nunca viaja al POS: el modal sólo lo manda a la acción del Admin.
     expect(source("./product-manage-modal.tsx")).toContain("ProductMarginField");

@@ -13,6 +13,7 @@ import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
 import { resolveNewProductPricing } from "../../lib/new-product-pricing";
+import { parseBulkItems } from "../../lib/bulk-costs";
 import { parseCurrentCustomMargin, parseCustomMarginForm } from "../../lib/product-margin";
 import { parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
 import type { Database } from "@carnicerias/database";
@@ -386,6 +387,8 @@ export interface BulkCostState {
   error?: string;
   successToken?: string;
   applied?: number;
+  /** Productos cuyo margen propio se puso, cambió o quitó en este guardado. */
+  marginsChanged?: number;
   repriced?: number;
   scheduledPrice?: number;
   /** Costos guardados de productos de categorías excluidas del margen (precio manual): su precio NO cambió. */
@@ -420,16 +423,31 @@ export async function closeBranchPriceOverridesAction(): Promise<CloseOverridesS
 export async function bulkSetProductCostsAction(_: BulkCostState, formData: FormData): Promise<BulkCostState> {
   try {
     const raw = text(formData, "items");
-    const items = raw ? (JSON.parse(raw) as { productId: string; costCents: number }[]) : [];
+    const items = parseBulkItems(raw ? JSON.parse(raw) : []);
     if (!items.length) throw new Error("No hay cambios para guardar");
-    const result = await rpcOrThrow("bulk_set_product_costs", { p_items: items }) as { applied?: number; repriced?: number; scheduledPrice?: number; manualPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null;
+    // Margen primero (D-070): una fila con costo Y margen guarda el margen SIN repreciar y deja que el costo forme el precio una sola vez
+    // con el margen nuevo (mismo patrón que manageProductAction). Una fila sólo de margen reprecia con el costo vigente (o conserva el
+    // precio manual en una categoría excluida: lo decide el servidor, no esta acción).
+    let marginRepriced = 0;
+    let marginScheduled = 0;
+    for (const item of items) {
+      if (item.marginBps === undefined) continue;
+      const outcome = await rpcOrThrow("set_product_custom_margin", { p_product_id: item.productId, p_margin_bps: item.marginBps, p_reprice: item.costCents === undefined }) as { outcome?: string } | null;
+      if (outcome?.outcome === "REPRICED") marginRepriced += 1;
+      else if (outcome?.outcome === "SCHEDULED") marginScheduled += 1;
+    }
+    const costItems = items.filter((item) => item.costCents !== undefined).map((item) => ({ productId: item.productId, costCents: item.costCents }));
+    const result = costItems.length
+      ? await rpcOrThrow("bulk_set_product_costs", { p_items: costItems }) as { applied?: number; repriced?: number; scheduledPrice?: number; manualPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null
+      : null;
     revalidatePath("/admin/products");
     return {
-      successToken: crypto.randomUUID(), applied: result?.applied ?? items.length, repriced: result?.repriced ?? 0,
-      scheduledPrice: result?.scheduledPrice ?? 0, manualPrice: result?.manualPrice ?? 0, marginConfigured: result?.marginConfigured ?? false, branchOverrides: result?.branchOverrides ?? 0
+      successToken: crypto.randomUUID(), applied: result?.applied ?? costItems.length, repriced: (result?.repriced ?? 0) + marginRepriced,
+      marginsChanged: items.filter((item) => item.marginBps !== undefined).length,
+      scheduledPrice: (result?.scheduledPrice ?? 0) + marginScheduled, manualPrice: result?.manualPrice ?? 0, marginConfigured: result?.marginConfigured ?? true, branchOverrides: result?.branchOverrides ?? 0
     };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "No se pudieron guardar los costos" };
+    return { error: error instanceof Error ? error.message : "No se pudieron guardar los cambios" };
   }
 }
 

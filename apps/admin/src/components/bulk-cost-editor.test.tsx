@@ -12,12 +12,12 @@ const rows: BulkCostRow[] = [
   { id: "vacio", name: "Vacío", categoryName: "Carnes", unitType: "WEIGHT", currentCostCents: null, currentPriceCents: null, manualPrice: false }
 ];
 
-describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio actual", () => {
+describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Margen | Precio actual", () => {
   const html = renderToStaticMarkup(<BulkCostEditor marginConfigured rows={rows} />);
 
   it("las columnas van en ese orden: el input editable es «Nuevo costo» y «Precio actual» es sólo referencia", () => {
     const headers = [...html.matchAll(/<th(?:\s[^>]*)?>(.*?)<\/th>/g)].map((match) => match[1]);
-    expect(headers).toEqual(["Producto", "Categoría", "Tipo de venta", "Nuevo costo", "Precio actual"]);
+    expect(headers).toEqual(["Producto", "Categoría", "Tipo de venta", "Nuevo costo", "Margen", "Precio actual"]);
   });
 
   it("hay un input de costo por fila, en la columna «Nuevo costo», con el costo actual como placeholder", () => {
@@ -28,7 +28,8 @@ describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio ac
     const firstRow = html.split("<tr").find((chunk) => chunk.includes("Aceite Cañuelas")) ?? "";
     const cells = firstRow.split("<td");
     expect(cells[4]).toContain("<input");
-    expect(cells[5]).not.toContain("<input");
+    expect(cells[5]).toContain("Margen de Aceite");
+    expect(cells[6]).not.toContain("<input");
   });
 
   it("«Precio actual» muestra el precio de lista vigente con su unidad, sin input", () => {
@@ -54,34 +55,42 @@ describe("BulkCostEditor: Producto | Categoría | Tipo | Nuevo costo | Precio ac
   });
 
   it("un producto de categoría excluida (precio manual) muestra su precio actual y «Precio manual»; los automáticos no", () => {
-    expect(html).not.toContain("manual-price-badge");
+    expect(html).not.toContain("Precio manual");
     const manual = renderToStaticMarkup(<BulkCostEditor marginBps={3_000} marginConfigured rows={[{ id: "vacio", name: "Vacío", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 800_000, currentPriceCents: 1_250_000, manualPrice: true }, ...rows.slice(0, 1)]} />);
     const vacioRow = manual.split("<tr").find((chunk) => chunk.includes("Vacío")) ?? "";
     expect(vacioRow).toContain("$ 12.500 /kg");
     expect(vacioRow).toContain("Precio manual");
-    expect(manual.match(/manual-price-badge/g)).toHaveLength(1);
+    expect(manual.match(/Precio manual</g)).toHaveLength(1);
   });
 
-  it("D-070: debajo del precio actual muestra la regla de margen de cada fila (Global 40% / Propio 30% / Precio manual), sin ningún input de margen", () => {
+  it("la columna Margen muestra el margen efectivo editable y su origen (Global / Propio / Precio manual) sin crear overrides", () => {
     const ruled: BulkCostRow[] = [
       { id: "aceite", name: "Aceite", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 450_000, currentPriceCents: 750_000, manualPrice: false, marginRule: { kind: "GLOBAL", bps: 4_000 } },
-      { id: "yerba", name: "Yerba", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 378_000, currentPriceCents: 540_000, manualPrice: false, marginRule: { kind: "CUSTOM", bps: 3_000 } },
-      { id: "vacio", name: "Vacío manual", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 800_000, currentPriceCents: 1_100_000, manualPrice: true, marginRule: { kind: "MANUAL", bps: null } },
-      { id: "costilla", name: "Costilla propia", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 900_000, currentPriceCents: 1_200_000, manualPrice: false, marginRule: { kind: "CUSTOM", bps: 2_500 } }
+      { id: "yerba", name: "Yerba", categoryName: "Almacén", unitType: "UNIT", currentCostCents: 378_000, currentPriceCents: 540_000, manualPrice: false, marginRule: { kind: "CUSTOM", bps: 500 } },
+      { id: "vacio", name: "Vacío manual", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 800_000, currentPriceCents: 1_100_000, manualPrice: true, excludedCategory: true, marginRule: { kind: "MANUAL", bps: null } },
+      { id: "costilla", name: "Costilla propia", categoryName: "Vaca", unitType: "WEIGHT", currentCostCents: 900_000, currentPriceCents: 1_200_000, manualPrice: false, excludedCategory: true, marginRule: { kind: "CUSTOM", bps: 2_500 } }
     ];
     const out = renderToStaticMarkup(<BulkCostEditor marginBps={4_000} marginConfigured rows={ruled} />);
     const row = (name: string) => out.split("<tr").find((chunk) => chunk.includes(name)) ?? "";
-    expect(row("Aceite")).toContain("Global 40%");
-    expect(row("Yerba")).toContain("Propio 30%");
-    expect(row("Vacío manual")).toContain("Precio manual");
-    expect(row("Costilla propia")).toContain("Propio 25%");
-    expect(out.match(/data-testid="margin-rule-badge"/g)).toHaveLength(3);
-    expect(out.match(/manual-price-badge/g)).toHaveLength(1);
-    // La carga masiva es para costos de boletas: ningún input de margen ni de precio.
-    expect(out).not.toContain("custom_margin");
-    expect(out).not.toContain("margin_mode");
+    const marginInputOf = (name: string) => /aria-label="Margen de [^"]*"[^>]*value="([^"]*)"/.exec(row(name))?.[1];
+    expect(marginInputOf("Aceite")).toBe("40");
+    expect(row("Aceite")).toContain(">Global<");
+    expect(marginInputOf("Yerba")).toBe("5");
+    expect(row("Yerba")).toContain(">Propio<");
+    expect(row("Yerba")).toContain("Usar global");
+    expect(marginInputOf("Vacío manual")).toBe("");
+    expect(row("Vacío manual")).toContain(">Precio manual<");
+    expect(row("Vacío manual")).not.toContain("margin-reset");
+    expect(marginInputOf("Costilla propia")).toBe("25");
+    expect(row("Costilla propia")).toContain("Usar precio manual");
+    // «Usar global» sólo aparece donde hay un override persistido: la fila con margen global no lo tiene.
+    expect(out.match(/data-testid="margin-reset"/g)).toHaveLength(2);
+    // Nada se guarda por sólo mostrar: sin cambios el formulario no envía filas.
+    expect(out).toContain('type="hidden" name="items" value="[]"');
+    expect(out).toContain("Sin cambios");
     expect(out).not.toContain('name="price"');
     expect(out.match(/<input[^>]*type="number"/g)).toHaveLength(4);
+    expect(out.match(/<input[^>]*aria-label="Margen de /g)).toHaveLength(4);
   });
 
   it("sin filas lo dice", () => {
