@@ -44,6 +44,9 @@ importers:
       '@carnicerias/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@pdf-lib/standard-fonts':
+        specifier: 1.0.0
+        version: 1.0.0
       '@supabase/ssr':
         specifier: ^0.10.0
         version: 0.10.3(@supabase/supabase-js@2.116.0)

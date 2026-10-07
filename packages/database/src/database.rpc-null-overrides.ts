@@ -275,6 +275,16 @@ export interface RpcNullOverrides {
     }
     Returns: Json
   }
+  // Etiquetas (D-073): p_group_id null = crear el grupo; p_branch_id null = grupo sin sucursal (precio global de la organización).
+  save_label_group: {
+    Args: { p_active?: boolean; p_branch_id: string | null; p_group_id: string | null; p_name: string }
+    Returns: Json
+  }
+  // Agregar y/o quitar en lote: cualquiera de las dos listas puede faltar (null = ninguna).
+  set_label_group_products: {
+    Args: { p_add: string[] | null; p_group_id: string; p_remove?: string[] | null }
+    Returns: Json
+  }
   // p_margin_bps null = quitar el margen personalizado del producto (vuelve a la regla general).
   set_product_custom_margin: {
     Args: {

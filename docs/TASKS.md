@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Etiquetas en lote: aplicar y probar con papel (acción del usuario)
+
+Implementado 2026-10-07 (D-073). **Migración pendiente: `202610070070_product_label_groups.sql`** (tablas nuevas vacías, sin tocar nada existente; va después de la 069 si ésta tampoco se aplicó).
+
+1. `supabase db push --dry-run` (debe listar sólo las pendientes: 069 y/o 070) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel). Dependencia nueva: `pdf-lib` (+ `@pdf-lib/standard-fonts`).
+2. Productos → Etiquetas → «Nuevo grupo» (nombre + sucursal) → «+ Agregar productos» (buscar, «Seleccionar todos los resultados», agregar) → «Seleccionar todos» → «Generar PDF».
+3. Imprimir el PDF en una impresora común **al 100 % / tamaño real** (sin «ajustar a la página»): medir una etiqueta con regla (70 × 50 mm), comprobar que el precio y los textos no se cortan en las columnas de los bordes y que el corte por las guías es cómodo. Si la impresora recorta mucho el borde, subir `LABEL_PAD_X_MM` en `lib/label-spec.ts`.
+4. Cambiar un precio (o la promoción) → volver a la pantalla: ese producto debe decir «Precio cambió»; «Seleccionar precios cambiados» + «Generar PDF» imprime sólo ese y el grupo vuelve a «Actualizada».
+5. Pendiente de producto (no urgente): promociones por peso en la etiqueta WEIGHT, código de barras, descargar de nuevo un PDF histórico, reordenar productos del grupo, `pnpm db:types` real (los tipos se parchearon a mano).
+
 ## P0 — Cartelería digital: aplicar y probar en un televisor (acción del usuario)
 
 Implementado 2026-10-07 (D-072). **Migración pendiente: `202610070069_digital_signage.sql`** (tablas nuevas vacías; no toca nada existente).

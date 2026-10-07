@@ -1,36 +1,50 @@
-import type { CSSProperties } from "react";
+import type { LabelLayout } from "../lib/label-layout";
+import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM, MM_PER_PT } from "../lib/label-spec";
 
-import { LABEL_HEIGHT_MM, LABEL_NOTE_SCALE, LABEL_PRICE_BASE_PT, LABEL_TITLE_SCALE, LABEL_UNIT_PRICE_SCALE, LABEL_WIDTH_MM, type ProductLabelData } from "../lib/product-label";
+const FONT_FAMILY = "Helvetica, Arial, 'Liberation Sans', sans-serif";
 
 /**
- * Etiqueta de góndola de 70 × 50 mm. Se dibuja SIEMPRE en milímetros/puntos reales (apta para imprimir tal cual); el preview en
- * pantalla sólo la escala con `scale` conservando la relación 1,4. Tipografía: `--label-price-font-size` es la única base y el resto
- * son proporciones suyas (nombre 70 %, aclaración 30 %, precio unitario 40 %).
+ * Etiqueta de góndola de 70 × 50 mm. Se dibuja a partir del MISMO layout que el PDF (`buildLabelLayout`, medidas de `label-spec.ts`):
+ * un SVG con viewBox en milímetros, así que preview y papel coinciden. `scale` sólo agranda la vista; la relación 1,4 se conserva.
+ * Una variante de un mismo componente: oferta «llevando N» (`PROMO`), precio unitario (`SIMPLE`), por kg (`WEIGHT`) o sin precio.
+ *
+ * Es puramente visual: recibe el layout ya resuelto (el servidor lo calcula y viaja serializado al navegador), así este componente no
+ * arrastra las métricas de fuentes al bundle del cliente.
  */
-export function ProductPriceLabel({ label, scale = 1 }: { label: ProductLabelData; scale?: number | undefined }) {
-  const style = {
-    width: `${String(LABEL_WIDTH_MM)}mm`,
-    height: `${String(LABEL_HEIGHT_MM)}mm`,
-    "--label-price-font-size": `${String(LABEL_PRICE_BASE_PT * label.priceFit)}pt`,
-    "--label-title-scale": String(LABEL_TITLE_SCALE),
-    "--label-note-scale": String(LABEL_NOTE_SCALE),
-    "--label-unit-price-scale": String(LABEL_UNIT_PRICE_SCALE),
-    "--label-title-fit": String(label.titleFit)
-  } as CSSProperties;
-  const box = (
-    <div className="box-border flex flex-col items-center justify-center overflow-hidden bg-white px-[3mm] py-[2.5mm] text-center text-black" data-label-height-mm={LABEL_HEIGHT_MM} data-label-variant={label.variant} data-label-width-mm={LABEL_WIDTH_MM} data-testid="product-price-label" style={style}>
-      <p className="w-full break-words font-bold" data-testid="label-title" style={{ fontSize: "calc(var(--label-price-font-size) * var(--label-title-scale) * var(--label-title-fit))", lineHeight: 1.1, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}>{label.name}</p>
-      <p className="whitespace-nowrap font-black leading-none" data-testid="label-price" style={{ fontSize: "var(--label-price-font-size)", marginTop: "2.2mm" }}>
-        {label.price ?? "Sin precio"}
-        {label.priceSuffix ? <span className="font-bold" style={{ fontSize: "calc(var(--label-price-font-size) * var(--label-unit-price-scale))" }}>{label.priceSuffix}</span> : null}
-      </p>
-      {label.note ? <p className="leading-tight" data-testid="label-note" style={{ fontSize: "calc(var(--label-price-font-size) * var(--label-note-scale))", marginTop: "1.2mm" }}>{label.note}</p> : null}
-      {label.unitPrice ? <p className="font-medium leading-tight" data-testid="label-unit-price" style={{ fontSize: "calc(var(--label-price-font-size) * var(--label-unit-price-scale))", marginTop: "1.8mm" }}>{label.unitPrice}</p> : null}
-    </div>
+export function ProductPriceLabel({ layout, scale = 1, fluid = false }: { layout: LabelLayout; scale?: number | undefined; fluid?: boolean | undefined }) {
+  // `fluid`: ocupa el ancho disponible (hasta el tamaño ampliado `scale`) sin desbordar la columna; la relación 1,4 la conserva el viewBox.
+  const size = fluid
+    ? { style: { background: "#fff", display: "block", width: "100%", maxWidth: `${String(LABEL_WIDTH_MM * scale)}mm`, height: "auto" } }
+    : { style: { background: "#fff", display: "block" }, width: `${String(LABEL_WIDTH_MM * scale)}mm`, height: `${String(LABEL_HEIGHT_MM * scale)}mm` };
+  return (
+    <svg
+      aria-label="Etiqueta de góndola"
+      data-label-height-mm={LABEL_HEIGHT_MM}
+      data-label-variant={layout.variant}
+      data-label-width-mm={LABEL_WIDTH_MM}
+      data-testid="product-price-label"
+      role="img"
+      viewBox={`0 0 ${String(LABEL_WIDTH_MM)} ${String(LABEL_HEIGHT_MM)}`}
+      xmlns="http://www.w3.org/2000/svg"
+      {...size}
+    >
+      <rect fill="#fff" height={LABEL_HEIGHT_MM} width={LABEL_WIDTH_MM} x={0} y={0} />
+      {layout.rules.map((rule) => <line data-label-part={rule.id} key={rule.id} stroke="#000" strokeWidth={rule.widthMm} x1={rule.x1} x2={rule.x2} y1={rule.y1} y2={rule.y2} />)}
+      {layout.texts.map((text) => (
+        <text
+          data-label-part={text.id}
+          fill="#000"
+          fontFamily={FONT_FAMILY}
+          fontSize={Math.round(text.sizePt * MM_PER_PT * 1000) / 1000}
+          fontStyle={text.style === "boldItalic" ? "italic" : "normal"}
+          fontWeight={text.style === "regular" ? 400 : 700}
+          key={text.id}
+          style={{ fontKerning: "none", whiteSpace: "pre" }}
+          textAnchor={text.anchor}
+          x={text.x}
+          y={text.y}
+        >{text.text}</text>
+      ))}
+    </svg>
   );
-  if (scale === 1) return box;
-  // El contenedor ocupa el tamaño escalado (layout correcto) y la etiqueta real se transforma dentro.
-  return <div style={{ width: `calc(${String(LABEL_WIDTH_MM)}mm * ${String(scale)})`, height: `calc(${String(LABEL_HEIGHT_MM)}mm * ${String(scale)})` }}>
-    <div style={{ transform: `scale(${String(scale)})`, transformOrigin: "top left" }}>{box}</div>
-  </div>;
 }

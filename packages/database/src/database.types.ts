@@ -2135,6 +2135,229 @@ export type Database = {
           },
         ]
       }
+      product_label_group_items: {
+        Row: {
+          active: boolean
+          created_at: string
+          group_id: string
+          id: string
+          organization_id: string
+          position: number
+          product_id: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          group_id: string
+          id?: string
+          organization_id: string
+          position: number
+          product_id: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          group_id?: string
+          id?: string
+          organization_id?: string
+          position?: number
+          product_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_label_group_items_group_id_organization_id_fkey"
+            columns: ["group_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "product_label_groups"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "product_label_group_items_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      product_label_groups: {
+        Row: {
+          active: boolean
+          branch_id: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          branch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          branch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_label_groups_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "product_label_groups_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_label_groups_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_label_print_run_items: {
+        Row: {
+          condition_text: string | null
+          copies: number
+          displayed_name: string
+          generated_at: string
+          group_id: string
+          id: string
+          list_price_cents: number
+          organization_id: string
+          position: number
+          product_id: string
+          promo_discount_bps: number | null
+          promo_minimum_units: number | null
+          promo_price_cents: number | null
+          run_id: string
+          unit_type: Database["public"]["Enums"]["unit_type"]
+          variant: string
+        }
+        Insert: {
+          condition_text?: string | null
+          copies: number
+          displayed_name: string
+          generated_at: string
+          group_id: string
+          id?: string
+          list_price_cents: number
+          organization_id: string
+          position: number
+          product_id: string
+          promo_discount_bps?: number | null
+          promo_minimum_units?: number | null
+          promo_price_cents?: number | null
+          run_id: string
+          unit_type: Database["public"]["Enums"]["unit_type"]
+          variant: string
+        }
+        Update: {
+          condition_text?: string | null
+          copies?: number
+          displayed_name?: string
+          generated_at?: string
+          group_id?: string
+          id?: string
+          list_price_cents?: number
+          organization_id?: string
+          position?: number
+          product_id?: string
+          promo_discount_bps?: number | null
+          promo_minimum_units?: number | null
+          promo_price_cents?: number | null
+          run_id?: string
+          unit_type?: Database["public"]["Enums"]["unit_type"]
+          variant?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_label_print_run_items_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "product_label_print_run_items_run_id_organization_id_fkey"
+            columns: ["run_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "product_label_print_runs"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      product_label_print_runs: {
+        Row: {
+          branch_id: string | null
+          generated_at: string
+          generated_by: string | null
+          group_id: string
+          id: string
+          label_count: number
+          organization_id: string
+          product_count: number
+        }
+        Insert: {
+          branch_id?: string | null
+          generated_at?: string
+          generated_by?: string | null
+          group_id: string
+          id?: string
+          label_count: number
+          organization_id: string
+          product_count: number
+        }
+        Update: {
+          branch_id?: string | null
+          generated_at?: string
+          generated_by?: string | null
+          group_id?: string
+          id?: string
+          label_count?: number
+          organization_id?: string
+          product_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_label_print_runs_generated_by_fkey"
+            columns: ["generated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_label_print_runs_group_id_organization_id_fkey"
+            columns: ["group_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "product_label_groups"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       product_pack_versions: {
         Row: {
           created_at: string
@@ -4166,6 +4389,7 @@ export type Database = {
         }[]
       }
       get_import_batch: { Args: { p_batch_id: string }; Returns: Json }
+      get_label_group: { Args: { p_group_id: string }; Returns: Json }
       get_mercadopago_branch_pos: {
         Args: never
         Returns: {
@@ -4333,6 +4557,7 @@ export type Database = {
         Args: { p_batch_id: string }
         Returns: Json
       }
+      list_label_groups: { Args: { p_include_inactive?: boolean }; Returns: Json }
       list_organization_members: {
         Args: never
         Returns: {
@@ -4513,6 +4738,10 @@ export type Database = {
         }
         Returns: Json
       }
+      record_label_print_run: {
+        Args: { p_group_id: string; p_items: Json }
+        Returns: Json
+      }
       record_shift_heartbeat: {
         Args: {
           p_device_id: string
@@ -4636,6 +4865,15 @@ export type Database = {
             }
             Returns: string
           }
+      save_label_group: {
+        Args: {
+          p_active?: boolean
+          p_branch_id: string
+          p_group_id: string
+          p_name: string
+        }
+        Returns: Json
+      }
       save_pricing_config: {
         Args: {
           p_card_surcharge_bps: number
@@ -4772,6 +5010,10 @@ export type Database = {
       set_employee_pos_pin: {
         Args: { p_pin: string; p_profile_id: string }
         Returns: undefined
+      }
+      set_label_group_products: {
+        Args: { p_add: string[]; p_group_id: string; p_remove?: string[] }
+        Returns: Json
       }
       set_mercadopago_branch_pos: {
         Args: {

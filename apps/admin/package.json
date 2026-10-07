@@ -15,6 +15,7 @@
     "@carnicerias/database": "workspace:*",
     "@carnicerias/types": "workspace:*",
     "@carnicerias/ui": "workspace:*",
+    "@pdf-lib/standard-fonts": "1.0.0",
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.57.2",
     "@tailwindcss/postcss": "^4.1.13",
