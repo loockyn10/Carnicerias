@@ -52,11 +52,12 @@ describe("PrinterSettingsModal", () => {
     expect(modal(DEFAULT_PRINTER_SETTINGS, [])).toContain("No hay impresoras instaladas");
   });
 
-  it("offers the code page and ticket name as advanced options", () => {
+  it("offers the code page as an advanced option (the header is fixed, paper is 58 mm)", () => {
     const html = modal(DEFAULT_PRINTER_SETTINGS);
     expect(html).toContain("Opciones avanzadas");
     expect(html).toContain("Windows-1252");
-    expect(html).toContain("Carnicerías Fran");
+    expect(html).not.toContain("Nombre en el ticket");
+    expect(html).toContain("58 mm");
   });
 });
 

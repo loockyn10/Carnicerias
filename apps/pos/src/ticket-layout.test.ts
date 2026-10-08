@@ -77,3 +77,18 @@ describe("ancho de la columna del ticket", () => {
     expect(source).toMatch(/className="pos-ticket flex[^"]*lg:min-h-0[^"]*lg:overflow-hidden/);
   });
 });
+
+describe("impresión de tickets: capacidad de la computadora, no de la sucursal", () => {
+  it("la visibilidad de la impresora (botón, auto-print y Reimprimir) depende sólo del escritorio, nunca de centralPos ni de production_branch_id", () => {
+    expect(source).toMatch(/const printerVisible = desktop;/);
+    expect(source).not.toMatch(/printerVisible\s*=[^;]*(centralPos|productionBranch|production_branch)/);
+    const printing = source.slice(source.indexOf("const printerVisible"), source.indexOf("function postSalePrintView"));
+    expect(printing).not.toMatch(/centralPos|production_branch|productionBranch/);
+  });
+
+  it("un fallo de impresión sólo actualiza el estado de impresión (la venta ya está confirmada)", () => {
+    const run = source.slice(source.indexOf("const runPrint"), source.indexOf("const runPrint") + 600);
+    expect(run).toContain("printSaleReceipt");
+    expect(run).not.toMatch(/confirmSale|cancelSale|setPostSale\(null\)/);
+  });
+});

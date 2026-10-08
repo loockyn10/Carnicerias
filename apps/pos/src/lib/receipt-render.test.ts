@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { buildSaleReceipt } from "./receipt";
 import {
-  columnsForPaperWidth, documentToText, formatReceiptDate, formatReceiptMoney, formatReceiptPercent, formatReceiptWeight,
+  RECEIPT_COLUMNS, RECEIPT_HEADER, RECEIPT_PAPER_WIDTH_MM, documentToText, formatReceiptDate, formatReceiptMoney, formatReceiptPercent, formatReceiptWeight,
   renderSaleReceipt, renderTestPage, wrapText, type PrintDocument
 } from "./receipt-render";
 import { item, packItem, promoItem, receiptSource, unitItem, weightItem } from "./receipt-fixtures";
 import type { LocalSaleReceiptSource } from "./local-database";
 
-const COLUMNS = 42;
+const COLUMNS = RECEIPT_COLUMNS;
 const render = (source: LocalSaleReceiptSource, options: { reprint?: boolean; columns?: number } = {}): string[] =>
-  renderSaleReceipt(buildSaleReceipt(source), { columns: options.columns ?? COLUMNS, businessName: "Carnicerías Fran", ...(options.reprint ? { reprint: true } : {}) }).lines.map((line) => line.text);
+  renderSaleReceipt(buildSaleReceipt(source), { columns: options.columns ?? COLUMNS, ...(options.reprint ? { reprint: true } : {}) }).lines.map((line) => line.text);
 const doc = (source: LocalSaleReceiptSource, options: { reprint?: boolean; columns?: number } = {}): PrintDocument =>
-  renderSaleReceipt(buildSaleReceipt(source), { columns: options.columns ?? COLUMNS, businessName: "Carnicerías Fran", ...(options.reprint ? { reprint: true } : {}) });
+  renderSaleReceipt(buildSaleReceipt(source), { columns: options.columns ?? COLUMNS, ...(options.reprint ? { reprint: true } : {}) });
 const right = (text: string, width = COLUMNS) => text.padStart(width);
 const row = (left: string, amount: string, width = COLUMNS) => left + amount.padStart(width - left.length);
 const RULE = "-".repeat(COLUMNS);
@@ -27,9 +27,8 @@ function body(lines: string[]): string[] {
 describe("renderSaleReceipt — formato", () => {
   it("is explicitly a NON-fiscal receipt and shows header, date in Argentina time, ticket id and operator", () => {
     const lines = render(receiptSource([unitItem()]));
-    expect(lines.slice(0, 9)).toEqual([
-      center("CARNICERÍAS FRAN"),
-      center("CENTRAL"),
+    expect(lines.slice(0, 8)).toEqual([
+      center("SUPER OFERTAS", COLUMNS / 2),
       "",
       center("COMPROBANTE NO FISCAL"),
       "",
@@ -43,11 +42,11 @@ describe("renderSaleReceipt — formato", () => {
   });
 
   it("UNIT simple: name, quantity x price and the amount aligned to the right", () => {
-    expect(body(render(receiptSource([unitItem()])))).toEqual(["Coca Cola", "2 x $2.500", right("$5.000")]);
+    expect(body(render(receiptSource([unitItem()])))).toEqual(["Coca Cola", "2 u x $2.500", right("$5.000")]);
   });
 
   it("WEIGHT: kg with three decimals and the per-kg price", () => {
-    expect(body(render(receiptSource([weightItem()])))).toEqual(["Vacio", "1,250 kg x $12.000/kg", right("$15.000")]);
+    expect(body(render(receiptSource([weightItem()])))).toEqual(["Vacio", "1,250 kg x $12.000", right("$15.000")]);
   });
 
   it("Pack 25 %: 1 pack x 8 u, the real percentage and the discount, then the total of the line", () => {
@@ -70,34 +69,34 @@ describe("renderSaleReceipt — formato", () => {
 
   it("branch promotion 15 % from 3 units: list price, the discount and the discounted total", () => {
     expect(body(render(receiptSource([promoItem()])))).toEqual([
-      "Coca Cola", "4 x $1.000", row("15% OFF desde 3", "-$600"), right("$3.400")
+      "Coca Cola", "4 u x $1.000", row("15% OFF desde 3", "-$600"), right("$3.400")
     ]);
   });
 
   it("a manual price prints the price actually charged and does not announce the modification to the customer", () => {
     const manual = item({ productName: "Coca Cola", quantityUnits: 1, originalPriceCents: "1200000", chargedPriceCents: "1000000", subtotalCents: "1000000", manualPriceApplied: true, manualUnitPriceCents: "1000000" });
     const lines = render(receiptSource([manual]));
-    expect(body(lines)).toEqual(["Coca Cola", "1 x $10.000", right("$10.000")]);
+    expect(body(lines)).toEqual(["Coca Cola", "1 u x $10.000", right("$10.000")]);
     expect(lines.join("\n")).not.toMatch(/MODIFICADO|manual|\$12\.000/i);
   });
 
   it("a manual WEIGHT price is per kg", () => {
     const manual = weightItem({ chargedPriceCents: "1100000", subtotalCents: "1375000", manualPriceApplied: true, manualUnitPriceCents: "1100000" });
-    expect(body(render(receiptSource([manual])))).toEqual(["Vacio", "1,250 kg x $11.000/kg", right("$13.750")]);
+    expect(body(render(receiptSource([manual])))).toEqual(["Vacio", "1,250 kg x $11.000", right("$13.750")]);
   });
 
   it("a WEIGHT promotion keeps its percentage and a fixed pack total keeps its list price and the saving", () => {
     const percentage = weightItem({ chargedPriceCents: "1080000", subtotalCents: "1350000", promotionDiscountCents: "150000", discountType: "PERCENTAGE", discountValue: 1000 });
-    expect(body(render(receiptSource([percentage])))).toEqual(["Vacio", "1,250 kg x $12.000/kg", row("Promo 10% OFF", "-$1.500"), right("$13.500")]);
+    expect(body(render(receiptSource([percentage])))).toEqual(["Vacio", "1,250 kg x $12.000", row("Promo 10% OFF", "-$1.500"), right("$13.500")]);
     const fixedTotal = weightItem({ chargedPriceCents: "1440000", subtotalCents: "1800000", promotionDiscountCents: "1200000", promotionMode: "PACK_FIXED_TOTAL", weightGrams: 2500, originalPriceCents: "1200000" });
-    expect(body(render(receiptSource([fixedTotal])))).toEqual(["Vacio", "2,500 kg x $12.000/kg", row("Promo pack", "-$12.000"), right("$18.000")]);
+    expect(body(render(receiptSource([fixedTotal])))).toEqual(["Vacio", "2,500 kg x $12.000", row("Promo pack", "-$12.000"), right("$18.000")]);
   });
 
   it("a card surcharge on a plain line is inside the printed price; on a discounted line it is an explicit row", () => {
     const plain = unitItem({ chargedPriceCents: "275000", subtotalCents: "550000", cardSurchargeCents: "50000" });
-    expect(body(render(receiptSource([plain], { payment: { method: "DEBIT", provider: null, verificationStatus: "NOT_REQUIRED" } })))).toEqual(["Coca Cola", "2 x $2.750", right("$5.500")]);
+    expect(body(render(receiptSource([plain], { payment: { method: "DEBIT", provider: null, verificationStatus: "NOT_REQUIRED" } })))).toEqual(["Coca Cola", "2 u x $2.750", right("$5.500")]);
     const discounted = promoItem({ chargedPriceCents: "93500", subtotalCents: "374000", cardSurchargeCents: "34000" });
-    expect(body(render(receiptSource([discounted])))).toEqual(["Coca Cola", "4 x $1.000", row("15% OFF desde 3", "-$600"), row("Recargo tarjeta", "+$340"), right("$3.740")]);
+    expect(body(render(receiptSource([discounted])))).toEqual(["Coca Cola", "4 u x $1.000", row("15% OFF desde 3", "-$600"), row("Recargo tarjeta", "+$340"), right("$3.740")]);
   });
 
   it("the general discount is shown apart at the end with the real percentage (also with decimals)", () => {
@@ -126,8 +125,7 @@ describe("renderSaleReceipt — formato", () => {
   it("matches the agreed example ticket line by line", () => {
     const source = receiptSource([packItem(2500), promoItem(), weightItem()], { ticketDiscountBps: 500, ticketDiscountCents: "122000" });
     expect(render(source)).toEqual([
-      center("CARNICERÍAS FRAN"),
-      center("CENTRAL"),
+      center("SUPER OFERTAS", COLUMNS / 2),
       "",
       center("COMPROBANTE NO FISCAL"),
       "",
@@ -137,20 +135,20 @@ describe("renderSaleReceipt — formato", () => {
       RULE,
       "Leche Entera",
       "1 pack x 8 u",
-      "Pack 25% OFF                       -$2.000",
-      "                                    $6.000",
+      row("Pack 25% OFF", "-$2.000"),
+      right("$6.000"),
       "",
       "Coca Cola",
-      "4 x $1.000",
-      "15% OFF desde 3                      -$600",
-      "                                    $3.400",
+      "4 u x $1.000",
+      row("15% OFF desde 3", "-$600"),
+      right("$3.400"),
       "",
       "Vacio",
-      "1,250 kg x $12.000/kg",
-      "                                   $15.000",
+      "1,250 kg x $12.000",
+      right("$15.000"),
       RULE,
-      "Subtotal                           $24.400",
-      "Desc. general 5%                   -$1.220",
+      row("Subtotal", "$24.400"),
+      row("Desc. general 5%", "-$1.220"),
       RULE,
       row("TOTAL", "$23.180", COLUMNS / 2),
       "",
@@ -159,6 +157,59 @@ describe("renderSaleReceipt — formato", () => {
       RULE,
       center("Gracias por su compra")
     ]);
+  });
+});
+
+describe("renderSaleReceipt — 58 mm, encabezado y sucursal", () => {
+  const BRANCHES = ["Central", "Avenida", "Janssen"];
+
+  it.each(BRANCHES)("a sale from %s prints SUPER OFERTAS and never the branch name", (branchName) => {
+    const text = documentToText(doc(receiptSource([unitItem(), weightItem()], { branchName })));
+    expect(text).toContain("SUPER OFERTAS");
+    expect(text.toLowerCase()).not.toContain(branchName.toLowerCase());
+    expect(text).not.toMatch(/sucursal/i);
+  });
+
+  it("Central, Avenida and Janssen tickets are identical (same header and format) apart from nothing: no branch data reaches the paper", () => {
+    const [central, avenida, janssen] = BRANCHES.map((branchName) => documentToText(doc(receiptSource([packItem(2500), weightItem()], { branchName }))));
+    expect(avenida).toBe(central);
+    expect(janssen).toBe(central);
+  });
+
+  it("the header is double-size, centered, and the reprint banner goes above it", () => {
+    const lines = doc(receiptSource([unitItem()]), { reprint: true }).lines;
+    expect(lines[0]?.text).toBe(center("*** REIMPRESION ***"));
+    expect(lines[2]).toEqual({ text: center("SUPER OFERTAS", COLUMNS / 2), style: "double" });
+    expect(RECEIPT_HEADER).toBe("SUPER OFERTAS");
+  });
+
+  it("UNIT with a long name wraps the name and keeps quantity, price and line total visible", () => {
+    const lines = render(receiptSource([unitItem({ productName: "YERBA AGUANTADORA X 1KG", quantityUnits: 3, chargedPriceCents: "540000", subtotalCents: "1377000" })]));
+    expect(body(lines)).toEqual(["YERBA AGUANTADORA X 1KG", "3 u x $5.400", right("$13.770")]);
+    const long = render(receiptSource([unitItem({ productName: "Hamburguesa de carne vacuna premium con queso cheddar", quantityUnits: 3, chargedPriceCents: "540000", subtotalCents: "1377000" })]));
+    expect(body(long).slice(-2)).toEqual(["3 u x $5.400", right("$13.770")]);
+    for (const line of long) expect(Array.from(line).length).toBeLessThanOrEqual(COLUMNS);
+  });
+
+  it("WEIGHT prints the snapshot weight, price and line total", () => {
+    const lines = render(receiptSource([weightItem({ productName: "MOLIDA VACUNA", weightGrams: 2000, chargedPriceCents: "1100000", subtotalCents: "2200000" })]));
+    expect(body(lines)).toEqual(["MOLIDA VACUNA", "2,000 kg x $11.000", right("$22.000")]);
+  });
+
+  it("a total that does not fit double-size falls back to bold at full width, never clipped", () => {
+    const big = render(receiptSource([unitItem({ quantityUnits: 1, chargedPriceCents: "1234567800", subtotalCents: "1234567800" })]));
+    const total = doc(receiptSource([unitItem({ quantityUnits: 1, chargedPriceCents: "1234567800", subtotalCents: "1234567800" })])).lines.find((line) => line.text.startsWith("TOTAL"));
+    expect(total?.style).toBe("bold");
+    expect(total?.text).toBe(row("TOTAL", "$12.345.678", COLUMNS));
+    expect(big).toContain(row("TOTAL", "$12.345.678", COLUMNS));
+  });
+
+  it("no line of a full ticket (promo, pack, card, general discount) exceeds the 58 mm profile", () => {
+    const source = receiptSource([packItem(2500), promoItem(), weightItem(), unitItem({ productName: "Nombre larguísimo ".repeat(6) })], { ticketDiscountBps: 1234, ticketDiscountCents: "122000", payment: { method: "CREDIT", provider: null, verificationStatus: "NOT_REQUIRED" } });
+    for (const line of doc(source).lines) {
+      expect(Array.from(line.text).length, line.text).toBeLessThanOrEqual(line.style === "double" ? RECEIPT_COLUMNS / 2 : RECEIPT_COLUMNS);
+    }
+    expect(render(source)).toContain("Pago: Tarjeta de crédito");
   });
 });
 
@@ -193,12 +244,12 @@ describe("renderSaleReceipt — reimpresión", () => {
   it("a historical sale keeps the Pack, price and promotion it was sold with (only snapshots are read)", () => {
     // Venta vieja: pack de 8 al 20 %, lista $1.000. Hoy el producto puede valer más, tener otro pack o llamarse distinto:
     // el recibo sólo conoce lo que la venta guardó.
-    const old = receiptSource([packItem(2000, 1, { productName: "Leche Entera (nombre de entonces)" })], { branchName: "Avenida", operatorName: "Ana" });
+    const old = receiptSource([packItem(2000, 1, { productName: "Leche Entera (de entonces)" })], { branchName: "Avenida", operatorName: "Ana" });
     const lines = render(old, { reprint: true });
-    expect(lines).toContain("Leche Entera (nombre de entonces)");
+    expect(lines).toContain("Leche Entera (de entonces)");
     expect(lines).toContain("1 pack x 8 u");
     expect(lines).toContain(row("Pack 20% OFF", "-$1.600"));
-    expect(lines).toContain(center("AVENIDA"));
+    expect(lines.join(" ")).not.toMatch(/AVENIDA/i);
     expect(lines).toContain("Atendió: Ana");
     expect(render(old, { reprint: true })).toEqual(lines);
   });
@@ -253,10 +304,11 @@ describe("renderSaleReceipt — ancho y alineación", () => {
     expect(wrapText("   ", 10)).toEqual([""]);
   });
 
-  it("58 mm paper uses 32 columns and 80 mm uses 42", () => {
-    expect(columnsForPaperWidth(58)).toBe(32);
-    expect(columnsForPaperWidth(80)).toBe(42);
-    expect(render(receiptSource([unitItem()]), { columns: 32 })).toContain("-".repeat(32));
+  it("the layout profile is 58 mm / 32 columns and renders at that width by default", () => {
+    expect(RECEIPT_PAPER_WIDTH_MM).toBe(58);
+    expect(RECEIPT_COLUMNS).toBe(32);
+    const lines = renderSaleReceipt(buildSaleReceipt(receiptSource([unitItem()])), {}).lines;
+    expect(lines.map((line) => line.text)).toContain("-".repeat(32));
   });
 });
 

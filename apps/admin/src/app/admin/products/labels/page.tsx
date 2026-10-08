@@ -71,7 +71,7 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
     <SectionTabs tabs={PRODUCTOS_TABS} />
     <div className="mt-6">
       <h2 className="text-xl font-black">Etiquetas de góndola</h2>
-      <p className="mt-1 text-sm text-stone-600">Armá un grupo con los productos que llevan etiqueta física, elegí cuáles imprimir y descargá un PDF A4 (15 etiquetas de 70 × 50 mm por hoja) para imprimir al 100 % y cortar con tijera.</p>
+      <p className="mt-1 text-sm text-stone-600">Armá un grupo con los productos que llevan etiqueta física, elegí cuáles imprimir y descargá un PDF A4 (21 etiquetas de 60 × 40 mm por hoja) para imprimir al 100 % y cortar con tijera.</p>
     </div>
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error}</p> : null}
     <LabelGroupsWorkspace

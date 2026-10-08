@@ -21,33 +21,36 @@ const many = (count: number) => Array.from({ length: count }, (_, index) => must
 const render = (count: number) => renderLabelSheetPdf(many(count), options);
 
 describe("hoja A4: geometría", () => {
-  it("210 × 297 mm, 3 columnas × 5 filas de 70 × 50 mm = 15 por hoja", () => {
+  it("210 × 297 mm, 3 columnas × 7 filas de 60 × 40 mm = 21 por hoja", () => {
     expect([A4_WIDTH_MM, A4_HEIGHT_MM]).toEqual([210, 297]);
-    expect([LABEL_WIDTH_MM, LABEL_HEIGHT_MM]).toEqual([70, 50]);
+    expect([LABEL_WIDTH_MM, LABEL_HEIGHT_MM]).toEqual([60, 40]);
+    expect(LABEL_WIDTH_MM / LABEL_HEIGHT_MM).toBe(1.5);
     expect(SHEET_COLUMNS).toBe(3);
-    expect(SHEET_ROWS).toBe(5);
-    expect(LABELS_PER_SHEET).toBe(15);
-    expect(SHEET_COLUMNS * LABEL_WIDTH_MM).toBe(A4_WIDTH_MM);
+    expect(SHEET_ROWS).toBe(7);
+    expect(LABELS_PER_SHEET).toBe(21);
+    expect(SHEET_COLUMNS * LABEL_WIDTH_MM).toBeLessThanOrEqual(A4_WIDTH_MM);
   });
 
-  it("los 47 mm verticales que sobran se reparten arriba y abajo (23,5 mm)", () => {
-    expect(A4_HEIGHT_MM - SHEET_ROWS * LABEL_HEIGHT_MM).toBe(47);
-    expect(SHEET_GRID_TOP_MM).toBe(23.5);
-    expect(SHEET_GRID_LEFT_MM).toBe(0);
+  it("el bloque de 180 × 280 mm queda centrado (15 mm laterales, 8,5 mm arriba y abajo)", () => {
+    expect(A4_HEIGHT_MM - SHEET_ROWS * LABEL_HEIGHT_MM).toBe(17);
+    expect(SHEET_COLUMNS * LABEL_WIDTH_MM).toBe(180);
+    expect(SHEET_ROWS * LABEL_HEIGHT_MM).toBe(280);
+    expect(SHEET_GRID_TOP_MM).toBe(8.5);
+    expect(SHEET_GRID_LEFT_MM).toBe(15);
   });
 
-  it("las celdas se llenan izquierda → derecha y arriba → abajo, 15 por página", () => {
-    expect(sheetCell(0)).toMatchObject({ page: 0, row: 0, column: 0, xMm: 0, yMm: 23.5 });
-    expect(sheetCell(1)).toMatchObject({ column: 1, xMm: 70, yMm: 23.5 });
-    expect(sheetCell(2)).toMatchObject({ column: 2, xMm: 140 });
-    expect(sheetCell(3)).toMatchObject({ row: 1, column: 0, xMm: 0, yMm: 73.5 });
-    expect(sheetCell(14)).toMatchObject({ page: 0, row: 4, column: 2, xMm: 140, yMm: 223.5 });
-    expect(sheetCell(15)).toMatchObject({ page: 1, row: 0, column: 0, yMm: 23.5 });
+  it("las celdas se llenan izquierda → derecha y arriba → abajo, 21 por página", () => {
+    expect(sheetCell(0)).toMatchObject({ page: 0, row: 0, column: 0, xMm: 15, yMm: 8.5 });
+    expect(sheetCell(1)).toMatchObject({ column: 1, xMm: 75, yMm: 8.5 });
+    expect(sheetCell(2)).toMatchObject({ column: 2, xMm: 135 });
+    expect(sheetCell(3)).toMatchObject({ row: 1, column: 0, xMm: 15, yMm: 48.5 });
+    expect(sheetCell(20)).toMatchObject({ page: 0, row: 6, column: 2, xMm: 135, yMm: 248.5 });
+    expect(sheetCell(21)).toMatchObject({ page: 1, row: 0, column: 0, yMm: 8.5 });
     expect(() => sheetCell(-1)).toThrow();
   });
 
-  it("páginas: 7 → 1, 15 → 1, 16 → 2, 37 → 3", () => {
-    expect([0, 7, 15, 16, 30, 31, 37].map(sheetPageCount)).toEqual([0, 1, 1, 2, 2, 3, 3]);
+  it("páginas: 1–21 → 1, 22 → 2, 42 → 2, 43 → 3", () => {
+    expect([0, 7, 21, 22, 42, 43].map(sheetPageCount)).toEqual([0, 1, 1, 2, 2, 3]);
   });
 
   it("copias: cada producto se repite junto, en el orden recibido", () => {
@@ -65,31 +68,31 @@ describe("PDF real", () => {
     expect(mmOf(pages[0]?.heightPt ?? 0)).toBeCloseTo(297, 2);
   });
 
-  it("7 etiquetas → 1 página; 15 → 1; 16 → 2; 37 → 3", async () => {
-    const counts = await Promise.all([7, 15, 16, 37].map(async (count) => (await inspectPdf(await render(count))).length));
-    expect(counts).toEqual([1, 1, 2, 3]);
+  it("7 etiquetas → 1 página; 21 → 1; 22 → 2; 42 → 2; 43 → 3", async () => {
+    const counts = await Promise.all([7, 21, 22, 42, 43].map(async (count) => (await inspectPdf(await render(count))).length));
+    expect(counts).toEqual([1, 1, 2, 2, 3]);
   });
 
-  it("una página llena tiene 15 celdas de exactamente 70 × 50 mm, en 3 columnas × 5 filas, centradas en vertical", async () => {
-    const [page] = await inspectPdf(await render(15));
+  it("una página llena tiene 21 celdas de exactamente 60 × 40 mm, en 3 columnas × 7 filas, centradas", async () => {
+    const [page] = await inspectPdf(await render(21));
     const rects = page?.rects ?? [];
-    expect(rects).toHaveLength(15);
+    expect(rects).toHaveLength(21);
     for (const rect of rects) {
-      expect(mmOf(rect.width)).toBeCloseTo(70, 3);
-      expect(mmOf(rect.height)).toBeCloseTo(50, 3);
+      expect(mmOf(rect.width)).toBeCloseTo(60, 3);
+      expect(mmOf(rect.height)).toBeCloseTo(40, 3);
     }
     const columns = [...new Set(rects.map((rect) => Math.round(mmOf(rect.x) * 100) / 100))].sort((a, b) => a - b);
-    expect(columns).toEqual([0, 70, 140]);
+    expect(columns).toEqual([15, 75, 135]);
     // el origen de PDF es abajo: la fila superior queda a 23,5 mm del borde superior y la inferior a 23,5 mm del borde inferior
     const bottoms = [...new Set(rects.map((rect) => Math.round(mmOf(rect.y) * 100) / 100))].sort((a, b) => a - b);
-    expect(bottoms).toHaveLength(5);
-    expect(bottoms[0]).toBeCloseTo(23.5, 2);
-    expect((bottoms[4] ?? 0) + 50).toBeCloseTo(297 - 23.5, 2);
+    expect(bottoms).toHaveLength(7);
+    expect(bottoms[0]).toBeCloseTo(8.5, 2);
+    expect((bottoms[6] ?? 0) + 40).toBeCloseTo(297 - 8.5, 2);
   });
 
   it("la última página sólo tiene guías de las celdas ocupadas", async () => {
-    const pages = await inspectPdf(await render(16));
-    expect(pages[0]?.rects).toHaveLength(15);
+    const pages = await inspectPdf(await render(22));
+    expect(pages[0]?.rects).toHaveLength(21);
     expect(pages[1]?.rects).toHaveLength(1);
   });
 
@@ -110,10 +113,10 @@ describe("PDF real", () => {
     const price = texts.find((entry) => entry.text === "$ 6.250");
     expect(price?.sizePt).toBe(aceite.texts.find((entry) => entry.id === "price")?.sizePt);
     expect(price?.font).toBe("Helvetica-Bold");
-    // cada etiqueta i queda en su columna: el precio de la tercera (Bicarbonato) cae en la columna 3 (x entre 140 y 210 mm)
+    // cada etiqueta i queda en su columna: el precio de la tercera (Bicarbonato) cae en la columna 3 (x entre 135 y 195 mm)
     const third = texts.find((entry) => entry.text === "$ 765");
-    expect(mmOf(third?.x ?? 0)).toBeGreaterThan(140 + 5);
-    expect(mmOf(third?.x ?? 0)).toBeLessThan(210 - 5);
+    expect(mmOf(third?.x ?? 0)).toBeGreaterThan(135 + 4);
+    expect(mmOf(third?.x ?? 0)).toBeLessThan(195 - 4);
   });
 
   it("la misma etiqueta repetida (copias) aparece en celdas consecutivas y en el orden pedido", async () => {
@@ -125,15 +128,15 @@ describe("PDF real", () => {
     expect(names.map((entry) => entry.text.split(" ")[0])).toEqual(["MAYONESA", "MAYONESA", "ACEITE", "BICARBONATO", "BICARBONATO", "BICARBONATO"]);
   });
 
-  it("nada se escala: ningún texto de etiqueta queda a menos de 5 mm del borde de su celda", async () => {
-    const [page] = await inspectPdf(await render(15));
+  it("nada se escala: ningún texto de etiqueta queda a menos de 4 mm del borde de su celda", async () => {
+    const [page] = await inspectPdf(await render(21));
     const body = (page?.texts ?? []).filter((entry) => !entry.text.includes("Página"));
-    expect(body.length).toBeGreaterThan(15 * 4);
+    expect(body.length).toBeGreaterThan(21 * 4);
     for (const entry of body) {
-      const column = Math.min(2, Math.floor(mmOf(entry.x) / 70));
-      const relativeX = mmOf(entry.x) - column * 70;
+      const column = Math.min(2, Math.floor((mmOf(entry.x) - 15) / 60));
+      const relativeX = mmOf(entry.x) - 15 - column * 60;
       // los textos «start» arrancan ≥ 5 mm; los centrados y «end» tienen el origen más adentro
-      expect(relativeX).toBeGreaterThanOrEqual(4.9);
+      expect(relativeX).toBeGreaterThanOrEqual(3.9);
     }
   });
 

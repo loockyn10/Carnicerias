@@ -4,6 +4,7 @@ import {
   DEFAULT_PRINTER_SETTINGS, describePrintError, printTestPage, printerApi,
   type InstalledPrinter, type PrinterApi, type PrinterCodePage, type PrinterSettings
 } from "./lib/printer";
+import { RECEIPT_PAPER_WIDTH_MM } from "./lib/receipt-render";
 
 interface PrinterSettingsModalProps {
   /** Lo guardado en esta computadora (null = todavía no se pudo leer). */
@@ -70,7 +71,7 @@ export function PrinterSettingsModal({ settings, onSaved, onClose, api = printer
     if (missing) return;
     setStatus({ kind: "busy", label: "Guardando…" });
     try {
-      const saved = await api.setSettings({ ...draft, autoPrint: draft.enabled && draft.autoPrint });
+      const saved = await api.setSettings({ ...draft, paperWidthMm: RECEIPT_PAPER_WIDTH_MM, autoPrint: draft.enabled && draft.autoPrint });
       onSaved(saved);
       onClose();
     } catch (error) {
@@ -83,6 +84,7 @@ export function PrinterSettingsModal({ settings, onSaved, onClose, api = printer
       <section className="pos-modal-panel w-full max-w-md rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
         <p className="text-sm font-bold uppercase tracking-wider text-rose-400">Esta computadora</p>
         <h2 id="printer-settings-title" className="mt-1 text-3xl font-black">Impresora de tickets</h2>
+        <p className="mt-1 text-xs font-bold text-stone-500">Papel térmico de 58 mm</p>
 
         <label className="mt-5 grid gap-2 text-sm font-bold text-stone-300">
           Impresora
@@ -126,10 +128,6 @@ export function PrinterSettingsModal({ settings, onSaved, onClose, api = printer
 
         <details className="mt-4 text-sm text-stone-300">
           <summary className="cursor-pointer font-bold text-stone-400">Opciones avanzadas</summary>
-          <label className="mt-3 grid gap-1 font-bold">
-            Nombre en el ticket
-            <input className="rounded-xl border border-stone-600 bg-stone-950 px-3 py-2 outline-none focus:border-emerald-500" maxLength={40} value={draft.businessName} onChange={(event) => setDraft({ ...draft, businessName: event.target.value })} />
-          </label>
           <label className="mt-3 grid gap-1 font-bold">
             Juego de caracteres
             <select className="rounded-xl border border-stone-600 bg-stone-950 px-3 py-2 outline-none focus:border-emerald-500" value={draft.codePage} onChange={(event) => setDraft({ ...draft, codePage: event.target.value as PrinterCodePage })}>

@@ -4,15 +4,15 @@ import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM, MM_PER_PT } from "../lib/label-spec";
 const FONT_FAMILY = "Helvetica, Arial, 'Liberation Sans', sans-serif";
 
 /**
- * Etiqueta de góndola de 70 × 50 mm. Se dibuja a partir del MISMO layout que el PDF (`buildLabelLayout`, medidas de `label-spec.ts`):
- * un SVG con viewBox en milímetros, así que preview y papel coinciden. `scale` sólo agranda la vista; la relación 1,4 se conserva.
+ * Etiqueta de góndola de 60 × 40 mm. Se dibuja a partir del MISMO layout que el PDF (`buildLabelLayout`, medidas de `label-spec.ts`):
+ * un SVG con viewBox en milímetros, así que preview y papel coinciden. `scale` sólo agranda la vista; la relación 1,5 se conserva.
  * Una variante de un mismo componente: oferta «llevando N» (`PROMO`), precio unitario (`SIMPLE`), por kg (`WEIGHT`) o sin precio.
  *
  * Es puramente visual: recibe el layout ya resuelto (el servidor lo calcula y viaja serializado al navegador), así este componente no
  * arrastra las métricas de fuentes al bundle del cliente.
  */
 export function ProductPriceLabel({ layout, scale = 1, fluid = false }: { layout: LabelLayout; scale?: number | undefined; fluid?: boolean | undefined }) {
-  // `fluid`: ocupa el ancho disponible (hasta el tamaño ampliado `scale`) sin desbordar la columna; la relación 1,4 la conserva el viewBox.
+  // `fluid`: ocupa el ancho disponible (hasta el tamaño ampliado `scale`) sin desbordar la columna; la relación 1,5 la conserva el viewBox.
   const size = fluid
     ? { style: { background: "#fff", display: "block", width: "100%", maxWidth: `${String(LABEL_WIDTH_MM * scale)}mm`, height: "auto" } }
     : { style: { background: "#fff", display: "block" }, width: `${String(LABEL_WIDTH_MM * scale)}mm`, height: `${String(LABEL_HEIGHT_MM * scale)}mm` };

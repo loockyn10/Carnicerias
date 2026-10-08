@@ -1588,9 +1588,9 @@ export default function App() {
   useEffect(() => { if (ticket.length > 0) setPostSale(null); }, [ticket.length]);
 
   // ---- Ticket impreso no fiscal ---------------------------------------------------------------------------
-  // Por ahora sólo en el POS de la sucursal productiva (`centralPos`, la capacidad que informa el servidor: nunca el nombre);
-  // el resto de la capa de impresión no sabe de sucursales, así que habilitarla en otra es sólo cambiar esta condición.
-  const printerVisible = desktop && centralPos;
+  // La impresión es una capacidad de la computadora (impresora instalada y configurada localmente), no de la sucursal:
+  // todo POS de escritorio puede imprimir. `centralPos` (reglas comerciales de Central) no interviene.
+  const printerVisible = desktop;
   const printerReady = printerVisible && isPrinterReady(printerSettings);
   useEffect(() => {
     if (!desktop) return;

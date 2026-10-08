@@ -58,7 +58,7 @@ export function buildRunSelection(items: readonly SelectableItem[], selected: Re
   return result;
 }
 
-/** Hojas necesarias para `labelCount` etiquetas (15 por hoja A4). */
+/** Hojas necesarias para `labelCount` etiquetas (21 por hoja A4). */
 export function sheetsFor(labelCount: number, perSheet = LABELS_PER_SHEET): number {
   return labelCount <= 0 ? 0 : Math.ceil(labelCount / perSheet);
 }

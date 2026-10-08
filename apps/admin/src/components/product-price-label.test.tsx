@@ -11,35 +11,35 @@ const visibleText = (html: string) => [...html.matchAll(/<text[^>]*>([^<]*)<\/te
 const mayonesa: ProductLabelInput = { name: "Mayonesa Hellmann's 250gr", unitType: "UNIT", listPriceCents: 205_000n, bulk };
 
 describe("preview SVG de la etiqueta de góndola", () => {
-  it("mide 70 × 50 mm (viewBox en milímetros, relación 1,4) y no usa px para la tipografía", () => {
+  it("mide 60 × 40 mm (viewBox en milímetros, relación 1,5) y no usa px para la tipografía", () => {
     const html = render(mayonesa);
-    expect(html).toContain('width="70mm"');
-    expect(html).toContain('height="50mm"');
-    expect(html).toContain('viewBox="0 0 70 50"');
-    expect(html).toContain('data-label-width-mm="70"');
-    expect(html).toContain('data-label-height-mm="50"');
+    expect(html).toContain('width="60mm"');
+    expect(html).toContain('height="40mm"');
+    expect(html).toContain('viewBox="0 0 60 40"');
+    expect(html).toContain('data-label-width-mm="60"');
+    expect(html).toContain('data-label-height-mm="40"');
     expect(html).not.toMatch(/font-size="[\d.]+px"/);
   });
 
   it("el preview ampliado conserva la relación de aspecto", () => {
     const html = render(mayonesa, 3);
-    expect(html).toContain('width="210mm"');
-    expect(html).toContain('height="150mm"');
-    expect(html).toContain('viewBox="0 0 70 50"');
+    expect(html).toContain('width="180mm"');
+    expect(html).toContain('height="120mm"');
+    expect(html).toContain('viewBox="0 0 60 40"');
   });
 
-  it("modo fluido: ocupa el ancho de su columna (hasta el tamaño ampliado) y conserva la relación 1,4 por el viewBox", () => {
+  it("modo fluido: ocupa el ancho de su columna (hasta el tamaño ampliado) y conserva la relación 1,5 por el viewBox", () => {
     const html = renderToStaticMarkup(<ProductPriceLabel fluid layout={buildLabelLayout(buildProductLabel(mayonesa))} scale={3.2} />);
     expect(html).toContain("width:100%");
-    expect(html).toContain("max-width:224mm");
+    expect(html).toContain("max-width:192mm");
     expect(html).toContain("height:auto");
-    expect(html).toContain('viewBox="0 0 70 50"');
+    expect(html).toContain('viewBox="0 0 60 40"');
     expect(html.slice(0, html.indexOf(">"))).not.toMatch(/ (width|height)="/);
   });
 
   it("oferta UNIT: OFERTA!!!, nombre, POR 3 UNIDADES, Descuento 15 %, precio promocional, PRECIO NORMAL y precio normal", () => {
     const text = visibleText(render(mayonesa));
-    expect(text).toEqual(["OFERTA!!!", "MAYONESA HELLMANN&#x27;S", "250GR", "POR 3 UNIDADES", "Descuento 15%", "$ 1.742,50", "PRECIO NORMAL", "$ 2.050"]);
+    expect(text).toEqual(["OFERTA!!!", "MAYONESA HELLMANN&#x27;S 250GR", "POR 3 UNIDADES", "Descuento 15%", "$ 1.742,50", "PRECIO NORMAL", "$ 2.050"]);
     const html = render(mayonesa);
     expect(html).toContain('data-label-variant="PROMO"');
     expect(html).toContain('data-label-part="condition-underline"');

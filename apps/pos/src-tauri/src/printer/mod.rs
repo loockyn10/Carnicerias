@@ -101,7 +101,7 @@ impl Default for PrinterSettings {
         Self {
             enabled: false,
             printer_name: None,
-            paper_width_mm: 80,
+            paper_width_mm: 58,
             auto_print: false,
             auto_cut: true,
             code_page: CodePage::default(),
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn settings_json_from_an_older_or_partial_save_gets_defaults_for_the_rest() {
         let parsed: PrinterSettings = serde_json::from_str(r#"{"enabled":true,"printerName":"P"}"#).unwrap();
-        assert_eq!(parsed.paper_width_mm, 80);
+        assert_eq!(parsed.paper_width_mm, 58);
         assert!(parsed.auto_cut);
         assert!(!parsed.auto_print);
         assert_eq!(parsed.code_page, CodePage::Cp858);

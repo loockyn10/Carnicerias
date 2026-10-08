@@ -29,9 +29,10 @@ const samples: [string, LabelLayout][] = [
   ["sin precio", layoutOf({ name: "Sin precio", unitType: "UNIT", listPriceCents: null, bulk: null })]
 ];
 
-describe("layout: especificación 70 × 50 mm", () => {
-  it("la etiqueta mide exactamente 70 × 50 mm", () => {
-    for (const [, layout] of samples) expect([layout.widthMm, layout.heightMm]).toEqual([70, 50]);
+describe("layout: especificación 60 × 40 mm", () => {
+  it("la etiqueta mide exactamente 60 × 40 mm (relación 1,5)", () => {
+    for (const [, layout] of samples) expect(layout.widthMm / layout.heightMm).toBe(1.5);
+    for (const [, layout] of samples) expect([layout.widthMm, layout.heightMm]).toEqual([60, 40]);
   });
 
   it("oferta UNIT: orden vertical OFERTA → nombre → POR N UNIDADES → Descuento → precio → fila PRECIO NORMAL", () => {
@@ -44,7 +45,7 @@ describe("layout: especificación 70 × 50 mm", () => {
 
   it("tipografía: OFERTA!!! en negrita cursiva grande, nombre/condición/descuento en negrita, todo centrado salvo la fila inferior", () => {
     const layout = promo("Bicarbonato Alicante x 50", 90_000n);
-    expect(text(layout, "headline")).toMatchObject({ text: "OFERTA!!!", style: "boldItalic", sizePt: LABEL_TYPE.headline.pt, anchor: "middle", x: 35 });
+    expect(text(layout, "headline")).toMatchObject({ text: "OFERTA!!!", style: "boldItalic", sizePt: LABEL_TYPE.headline.pt, anchor: "middle", x: 30 });
     expect(text(layout, "name-1")).toMatchObject({ style: "bold", sizePt: LABEL_TYPE.name.maxPt, anchor: "middle" });
     expect(text(layout, "condition")).toMatchObject({ text: "POR 3 UNIDADES", style: "bold", sizePt: LABEL_TYPE.condition.pt, anchor: "middle" });
     expect(text(layout, "discount")).toMatchObject({ text: "Descuento 15%", style: "bold", sizePt: LABEL_TYPE.discount.pt, anchor: "middle" });
@@ -96,7 +97,7 @@ describe("layout: especificación 70 × 50 mm", () => {
     expect(suffix.sizePt).toBeCloseTo(price.sizePt * LABEL_TYPE.priceSuffix.scale, 1);
     const left = textExtentMm(price).left;
     const right = textExtentMm(suffix).right;
-    expect((left + right) / 2).toBeCloseTo(35, 0);
+    expect((left + right) / 2).toBeCloseTo(30, 0);
   });
 
   it("ningún texto invade el margen interno lateral ni se sale del alto útil (todas las variantes, incluso nombre y precio larguísimos)", () => {
@@ -134,7 +135,7 @@ describe("layout: especificación 70 × 50 mm", () => {
   it("nombre: hasta 2 líneas; el nombre largo reduce la letra (piso 7 pt) y, si aun así no entra, se corta con «...»", () => {
     const short = promo("Bicarbonato Alicante x 50", 90_000n);
     expect(ids(short).filter((id) => id.startsWith("name-"))).toEqual(["name-1"]);
-    const medium = promo("Mayonesa Hellmann's 250gr", 205_000n);
+    const medium = promo("Mayonesa Hellmann's Light Premium 250gr", 205_000n);
     expect(ids(medium).filter((id) => id.startsWith("name-"))).toEqual(["name-1", "name-2"]);
     // con 2 líneas el alto es justo: la tipografía se reduce apenas (≤ 10 %) para conservar el aire entre bloques
     expect(text(medium, "name-1").sizePt).toBeGreaterThanOrEqual(LABEL_TYPE.name.maxPt * 0.9);
@@ -154,7 +155,7 @@ describe("layout: especificación 70 × 50 mm", () => {
     expect(text(layout, "price").sizePt).toBeGreaterThanOrEqual(LABEL_TYPE.price.minPt);
   });
 
-  it("aprovecha el alto de 50 mm: el contenido ocupa casi todo el alto útil", () => {
+  it("aprovecha el alto de 40 mm: el contenido ocupa casi todo el alto útil", () => {
     for (const [name, layout] of samples.filter(([, entry]) => entry.variant === "PROMO")) {
       const first = must(layout.texts[0]);
       const last = must(layout.texts[layout.texts.length - 1]);

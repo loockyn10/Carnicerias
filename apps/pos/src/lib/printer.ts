@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { isDesktopRuntime, localDatabase, type LocalSaleReceiptSource } from "./local-database";
 import { buildSaleReceipt, receiptPrintability } from "./receipt";
-import { columnsForPaperWidth, renderSaleReceipt, renderTestPage, type PrintDocument } from "./receipt-render";
+import { RECEIPT_PAPER_WIDTH_MM, renderSaleReceipt, renderTestPage, type PrintDocument } from "./receipt-render";
 
 export type PrinterCodePage = "CP858" | "WPC1252";
 
@@ -28,7 +28,7 @@ export interface InstalledPrinter { name: string; isDefault: boolean }
 export interface PrintTarget { printerName: string; autoCut: boolean; codePage: PrinterCodePage }
 
 export const DEFAULT_PRINTER_SETTINGS: PrinterSettings = {
-  enabled: false, printerName: null, paperWidthMm: 80, autoPrint: false, autoCut: true, codePage: "CP858", businessName: "Carnicerías Fran"
+  enabled: false, printerName: null, paperWidthMm: RECEIPT_PAPER_WIDTH_MM, autoPrint: false, autoCut: true, codePage: "CP858", businessName: "Carnicerías Fran"
 };
 
 function desktopInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -110,7 +110,7 @@ export async function printSaleReceipt(saleId: string, options: { reprint: boole
     const settings = await deps.getSettings();
     if (!settings.enabled) return { ok: false, code: "DISABLED", message: "La impresora de tickets no está habilitada en esta caja." };
     const document = renderSaleReceipt(buildSaleReceipt(source), {
-      columns: columnsForPaperWidth(settings.paperWidthMm), businessName: settings.businessName, reprint: options.reprint
+      reprint: options.reprint
     });
     await deps.print(document);
     return { ok: true };
@@ -123,7 +123,7 @@ export async function printSaleReceipt(saleId: string, options: { reprint: boole
 /** Hoja de prueba con lo que está en la pantalla de configuración (guardado o no). */
 export async function printTestPage(settings: PrinterSettings, printerName: string, api: PrinterApi = printerApi, now: Date = new Date()): Promise<PrintOutcome> {
   try {
-    const document = renderTestPage({ printerName, now, columns: columnsForPaperWidth(settings.paperWidthMm) });
+    const document = renderTestPage({ printerName, now });
     await api.print(document, { printerName, autoCut: settings.autoCut, codePage: settings.codePage });
     return { ok: true };
   } catch (error) {

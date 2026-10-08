@@ -9,10 +9,10 @@ import {
 } from "./label-spec";
 
 /**
- * PDF A4 real (vectorial, texto seleccionable) con las etiquetas de góndola de 70 × 50 mm, 15 por hoja. Sin Chromium ni capturas: se
+ * PDF A4 real (vectorial, texto seleccionable) con las etiquetas de góndola de 60 × 40 mm, 21 por hoja. Sin Chromium ni capturas: se
  * dibuja con pdf-lib y las fuentes estándar de PDF (Helvetica), a partir de los MISMOS layouts que usa el preview.
  *
- * La página mide exactamente 210 × 297 mm y cada celda 70 × 50 mm: hay que imprimir al 100 % / tamaño real (sin «ajustar a la página»).
+ * La página mide exactamente 210 × 297 mm y cada celda 60 × 40 mm: hay que imprimir al 100 % / tamaño real (sin «ajustar a la página»).
  */
 
 const FONT_FOR: Record<LabelFontStyle, StandardFonts> = {

@@ -3,7 +3,7 @@ import {
 } from "./label-spec";
 
 /**
- * Hoja A4 de etiquetas: 3 columnas × 5 filas de 70 × 50 mm (15 por hoja), llenando izquierda → derecha y arriba → abajo en el orden
+ * Hoja A4 de etiquetas: 3 columnas × 7 filas de 60 × 40 mm (21 por hoja), llenando izquierda → derecha y arriba → abajo en el orden
  * recibido. Puro y sin PDF: lo usan el generador y las pruebas (cantidad de páginas, posición exacta de cada celda).
  */
 

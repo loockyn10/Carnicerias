@@ -147,14 +147,14 @@ describe("generar: PDF + registro", () => {
     expect(calls.getGroup).toEqual([GROUP, GROUP]);
   });
 
-  it("copias: 16 etiquetas → 2 páginas; 37 → 3; el conteo registrado es de etiquetas físicas", async () => {
+  it("copias: 22 etiquetas → 2 páginas; 43 → 3; el conteo registrado es de etiquetas físicas", async () => {
     const sixteen = deps();
-    const r16 = await executeLabelRun(sixteen.value, request([{ productId: MAYO, copies: 10 }, { productId: ACEITE, copies: 6 }]), context);
-    expect(r16).toMatchObject({ labelCount: 16, pageCount: 2 });
+    const r16 = await executeLabelRun(sixteen.value, request([{ productId: MAYO, copies: 12 }, { productId: ACEITE, copies: 10 }]), context);
+    expect(r16).toMatchObject({ labelCount: 22, pageCount: 2 });
     expect(await inspectPdf(r16.pdf)).toHaveLength(2);
     const thirtySeven = deps();
-    const r37 = await executeLabelRun(thirtySeven.value, request([{ productId: MAYO, copies: 20 }, { productId: ACEITE, copies: 17 }]), context);
-    expect(r37).toMatchObject({ labelCount: 37, pageCount: 3 });
+    const r37 = await executeLabelRun(thirtySeven.value, request([{ productId: MAYO, copies: 25 }, { productId: ACEITE, copies: 18 }]), context);
+    expect(r37).toMatchObject({ labelCount: 43, pageCount: 3 });
   });
 
   it("otra organización (la base devuelve NULL por RLS) → 404, sin PDF ni registro", async () => {

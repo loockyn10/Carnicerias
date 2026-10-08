@@ -46,7 +46,7 @@ describe("selección de etiquetas", () => {
     expect(buildRunSelection(many, new Set(many.map((item) => item.productId)), Object.fromEntries(many.map((item) => [item.productId, "99"]))).overLimit).toBe(true);
   });
 
-  it("hojas A4 necesarias (15 por hoja)", () => {
-    expect([0, 1, 15, 16, 30, 37].map((count) => sheetsFor(count))).toEqual([0, 1, 1, 2, 2, 3]);
+  it("hojas A4 necesarias (21 por hoja)", () => {
+    expect([0, 1, 21, 22, 42, 43].map((count) => sheetsFor(count))).toEqual([0, 1, 1, 2, 2, 3]);
   });
 });

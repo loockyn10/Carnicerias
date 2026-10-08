@@ -48,7 +48,7 @@ describe("printSaleReceipt", () => {
   it("a reprint adds the REIMPRESION banner", async () => {
     const { built, printed } = deps(receiptSource([unitItem()]));
     await printSaleReceipt("a8f4k2d1", { reprint: true }, built);
-    expect(documentToText(only(printed)).startsWith("           *** REIMPRESION ***")).toBe(true);
+    expect(documentToText(only(printed)).startsWith("      *** REIMPRESION ***")).toBe(true);
   });
 
   it("works completely offline: only local data and the printer, no network at all", async () => {
@@ -92,8 +92,8 @@ describe("printSaleReceipt", () => {
     expect(printed).toHaveLength(0);
   });
 
-  it("58 mm paper renders in 32 columns", async () => {
-    const { built, printed } = deps(receiptSource([unitItem()]), { settings: { ...READY, paperWidthMm: 58 } });
+  it("always renders at the 58 mm profile, even if this machine still has 80 mm saved from before", async () => {
+    const { built, printed } = deps(receiptSource([unitItem()]), { settings: { ...READY, paperWidthMm: 80 } });
     await printSaleReceipt("x", { reprint: false }, built);
     expect(printed[0]?.lines.every((line) => Array.from(line.text).length <= 32)).toBe(true);
   });

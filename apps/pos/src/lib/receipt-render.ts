@@ -11,10 +11,15 @@ export type PrintStyle = "normal" | "bold" | "double";
 export interface PrintLine { text: string; style: PrintStyle }
 export interface PrintDocument { lines: PrintLine[] }
 
-/** Columnas de la fuente A según el ancho de papel. 42 sirve tanto a las térmicas de 42 como de 48 columnas. */
-export function columnsForPaperWidth(paperWidthMm: number): number {
-  return paperWidthMm <= 58 ? 32 : 42;
-}
+/**
+ * Perfil único del ticket: papel de 58 mm. Las térmicas de 58 mm imprimen 384 puntos (48 mm útiles) y la fuente A
+ * ESC/POS ocupa 12 puntos por carácter => 32 columnas seguras. Es la única fuente del ancho: nada del layout asume 80 mm
+ * ni lo lee de la configuración local (una caja con "80" guardado de antes igual imprime a 58).
+ */
+export const RECEIPT_PAPER_WIDTH_MM = 58;
+export const RECEIPT_COLUMNS = 32;
+/** Encabezado impreso, igual en todas las sucursales (el ticket nunca lleva el nombre de la sucursal). */
+export const RECEIPT_HEADER = "SUPER OFERTAS";
 
 export const RECEIPT_TITLE = "COMPROBANTE NO FISCAL";
 export const REPRINT_BANNER = "*** REIMPRESION ***";
@@ -150,12 +155,12 @@ function renderProductLine(line: ReceiptLine, width: number): string[] {
 
   let detail: string;
   if (line.unitType === "WEIGHT") {
-    detail = `${formatReceiptWeight(line.weightGrams ?? 0)} x ${formatReceiptMoney(unitPrice)}/kg`;
+    detail = `${formatReceiptWeight(line.weightGrams ?? 0)} x ${formatReceiptMoney(unitPrice)}`;
   } else if (line.packCount !== null && line.packSizeUnitsSnapshot !== null) {
     const units = line.packCount * line.packSizeUnitsSnapshot;
     detail = `${String(line.packCount)} ${line.packCount === 1 ? "pack" : "packs"} x ${String(line.packSizeUnitsSnapshot)} u${line.packCount > 1 ? ` = ${String(units)} u` : ""}`;
   } else {
-    detail = `${String(line.quantityUnits ?? 0)} x ${formatReceiptMoney(unitPrice)}`;
+    detail = `${String(line.quantityUnits ?? 0)} u x ${formatReceiptMoney(unitPrice)}`;
   }
   out.push(...wrapText(detail, width));
 
@@ -168,10 +173,8 @@ function renderProductLine(line: ReceiptLine, width: number): string[] {
 }
 
 export interface ReceiptRenderOptions {
-  /** Columnas de la fuente A (ver `columnsForPaperWidth`). */
-  columns: number;
-  /** Encabezado del ticket (configuración local de la caja). */
-  businessName: string;
+  /** Columnas de la fuente A. Por defecto `RECEIPT_COLUMNS` (58 mm). */
+  columns?: number;
   /** Agrega `*** REIMPRESION ***` arriba. */
   reprint?: boolean;
 }
@@ -180,12 +183,14 @@ const normal = (text: string): PrintLine => ({ text, style: "normal" });
 const bold = (text: string): PrintLine => ({ text, style: "bold" });
 
 export function renderSaleReceipt(receipt: SaleReceipt, options: ReceiptRenderOptions): PrintDocument {
-  const width = Math.max(20, options.columns);
+  const width = Math.max(20, options.columns ?? RECEIPT_COLUMNS);
   const lines: PrintLine[] = [];
 
   if (options.reprint) lines.push(bold(center(REPRINT_BANNER, width)), normal(""));
-  for (const text of wrapText(options.businessName.toLocaleUpperCase("es-AR"), width)) lines.push(bold(center(text, width)));
-  if (receipt.branchName) for (const text of wrapText(receipt.branchName.toLocaleUpperCase("es-AR"), width)) lines.push(normal(center(text, width)));
+  // Doble ancho/alto = la mitad de columnas; si el encabezado no entra así, queda en negrita al ancho completo.
+  const half = Math.floor(width / 2);
+  if (Array.from(RECEIPT_HEADER).length <= half) lines.push({ text: center(RECEIPT_HEADER, half), style: "double" });
+  else lines.push(bold(center(RECEIPT_HEADER, width)));
   lines.push(normal(""), bold(center(RECEIPT_TITLE, width)), normal(""));
   lines.push(normal(formatReceiptDate(receipt.soldAt)));
   lines.push(normal(`Ticket: ${receipt.saleId.slice(0, 8).toUpperCase()}`));
@@ -203,8 +208,10 @@ export function renderSaleReceipt(receipt: SaleReceipt, options: ReceiptRenderOp
     lines.push(normal(row(`Desc. general ${formatReceiptPercent(receipt.ticketDiscountBps)}`, signed(receipt.ticketDiscount, "-"), width)));
     lines.push(normal(rule(width)));
   }
-  // Doble ancho = la mitad de columnas.
-  lines.push({ text: row("TOTAL", formatReceiptMoney(receipt.total), Math.floor(width / 2)), style: "double" });
+  // Doble ancho = la mitad de columnas; un total que no entra así (millones) pasa a negrita al ancho completo, nunca recortado.
+  const totalText = formatReceiptMoney(receipt.total);
+  if (Array.from(`TOTAL ${totalText}`).length <= half) lines.push({ text: row("TOTAL", totalText, half), style: "double" });
+  else lines.push(bold(row("TOTAL", totalText, width)));
   lines.push(normal(""));
   lines.push(...wrapText(`Pago: ${paymentLabel(receipt.paymentMethod, receipt.paymentProvider)}`, width).map(normal));
   lines.push(normal(""), normal(rule(width)), normal(center(RECEIPT_THANKS, width)));
@@ -212,8 +219,8 @@ export function renderSaleReceipt(receipt: SaleReceipt, options: ReceiptRenderOp
 }
 
 /** Hoja de prueba: nombre de la impresora, hora y los caracteres que más suelen salir mal. */
-export function renderTestPage(input: { printerName: string; now: Date; columns: number }): PrintDocument {
-  const width = Math.max(20, input.columns);
+export function renderTestPage(input: { printerName: string; now: Date; columns?: number }): PrintDocument {
+  const width = Math.max(20, input.columns ?? RECEIPT_COLUMNS);
   const lines: PrintLine[] = [
     bold(center("CARNICERIAS POS", width)), normal(""),
     normal(center("Prueba de impresion", width)), normal(""),
