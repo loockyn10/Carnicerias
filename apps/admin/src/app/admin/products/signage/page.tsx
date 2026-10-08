@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { SignageCreateForm, SignageEditor, type BranchOption } from "../../../../components/signage-editor";
 import { SectionTabs } from "../../../../components/section-tabs";
+import { SignageSubnav } from "../../../../components/signage-subnav";
 import { requireAdminContext } from "../../../../lib/admin";
 import { buildEditorDisplay } from "../../../../lib/signage";
 import { createClient } from "../../../../lib/supabase/server";
@@ -28,7 +29,8 @@ export default async function SignagePage({ searchParams }: { searchParams: Prom
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div>
-    <SectionTabs tabs={PRODUCTOS_TABS} />
+    <SectionTabs active="/admin/products/artwork" tabs={PRODUCTOS_TABS} />
+    <SignageSubnav active="screens" />
     <div className="mt-6">
       <h2 className="text-xl font-black">Cartelería digital</h2>
       <p className="mt-1 text-sm text-stone-600">Un televisor abre su enlace y muestra las ofertas en un carrusel, con los precios y promociones vigentes del sistema. Se actualiza solo.</p>

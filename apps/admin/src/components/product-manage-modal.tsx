@@ -6,6 +6,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { manageProductAction, type ProductManageState } from "../app/admin/actions";
 import { bpsToPercentField } from "../lib/product-margin";
 import { ProductMarginField, type MarginMode } from "./product-margin-field";
+import { ProductArtworkPhotoField } from "./product-artwork-photo-field";
 import { ProductPricingFields } from "./product-pricing-fields";
 import { ProductCategoryField } from "./product-category-field";
 import { ProductPackFields } from "./product-pack-fields";
@@ -122,6 +123,7 @@ export function ProductManageModal({ product, price, promotion, categories, bran
               <label className="flex items-center gap-2"><input defaultChecked={product.inventoryRole === "RAW_MATERIAL" || product.inventoryRole === "BOTH"} name="is_raw_material" type="checkbox" /> Materia prima (insumo de desposte)</label>
             </div>
           </div>
+          <ProductArtworkPhotoField productId={product.id} />
           <div className="rounded-lg bg-stone-50 p-3"><p className="text-sm font-bold">Promoción</p><p className="mt-1 text-sm text-stone-600">{promotion?.label ?? "Sin promoción activa"}</p><Link className="mt-2 inline-block text-sm font-bold text-rose-800 hover:underline" href={promotionHref}>{promotion ? "Editar promoción" : "Crear promoción"}</Link></div>
           <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" ref={activeRef} type="checkbox" /> Producto activo</label>
           {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{state.error}</p> : null}

@@ -564,6 +564,13 @@ export type Database = {
             foreignKeyName: "digital_signage_displays_branch_id_organization_id_fkey"
             columns: ["branch_id", "organization_id"]
             isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
+          {
+            foreignKeyName: "digital_signage_displays_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
             referencedRelation: "branches"
             referencedColumns: ["id", "organization_id"]
           },
@@ -1933,6 +1940,54 @@ export type Database = {
           },
         ]
       }
+      product_artwork_photos: {
+        Row: {
+          content_type: string
+          created_at: string
+          created_by: string | null
+          organization_id: string
+          product_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at: string
+        }
+        Insert: {
+          content_type: string
+          created_at?: string
+          created_by?: string | null
+          organization_id: string
+          product_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at?: string
+        }
+        Update: {
+          content_type?: string
+          created_at?: string
+          created_by?: string | null
+          organization_id?: string
+          product_id?: string
+          size_bytes?: number
+          storage_path?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_artwork_photos_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_artwork_photos_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       product_barcodes: {
         Row: {
           barcode: string
@@ -2215,6 +2270,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "product_label_groups_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
           {
             foreignKeyName: "product_label_groups_branch_id_organization_id_fkey"
             columns: ["branch_id", "organization_id"]
@@ -4471,6 +4533,14 @@ export type Database = {
         Returns: Json
       }
       get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json }
+      get_product_artwork: {
+        Args: { p_branch_id?: string; p_product_id: string }
+        Returns: Json
+      }
+      get_product_artwork_photo: {
+        Args: { p_product_id: string }
+        Returns: Json
+      }
       get_production_batch_detail: {
         Args: { p_batch_id: string }
         Returns: Json
@@ -4557,7 +4627,10 @@ export type Database = {
         Args: { p_batch_id: string }
         Returns: Json
       }
-      list_label_groups: { Args: { p_include_inactive?: boolean }; Returns: Json }
+      list_label_groups: {
+        Args: { p_include_inactive?: boolean }
+        Returns: Json
+      }
       list_organization_members: {
         Args: never
         Returns: {
@@ -4769,6 +4842,10 @@ export type Database = {
       }
       register_pos_device: {
         Args: { p_branch_id: string; p_device_id: string; p_label?: string }
+        Returns: Json
+      }
+      remove_product_artwork_photo: {
+        Args: { p_product_id: string }
         Returns: Json
       }
       remove_production_batch_output: {
@@ -5043,6 +5120,10 @@ export type Database = {
           p_price_cents: number
           p_product_id: string
         }
+        Returns: Json
+      }
+      set_product_artwork_photo: {
+        Args: { p_product_id: string; p_storage_path: string }
         Returns: Json
       }
       set_product_barcodes: {

@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Cartelería «Producto protagonista»: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-08 (D-074). **Migración pendiente: `202610080071_product_artwork_photos.sql`** (bucket privado de Storage + tabla nueva vacía + 4 RPC + políticas de `storage.objects`; no toca nada existente). **No incluye logo ni fotos reales:** la marca es texto y las muestras del sprint usan fotos sintéticas.
+
+1. `supabase db push --dry-run` (debe listar sólo las pendientes: 071 y, si no se aplicaron, 069/070) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel). Sin dependencias nuevas ni variables de entorno. Primera vez con Storage en este proyecto: confirmar en el panel de Supabase que existe el bucket `product-artwork` (privado, 5 MB).
+2. Productos → Administrar un producto → **Foto para cartelería** → subir una foto (PNG recortado con fondo transparente o JPG con fondo blanco). Probar también un WebP (se convierte a PNG) y una foto de celular grande (se reduce).
+3. Productos → **Cartelería → Piezas**: elegir el producto y la sucursal (Central), mirar TV / Feed / Story y descargar **Feed PNG** y **Story PNG**. Comprobar contra el POS de esa sucursal: precio igual, «llevando 3 unidades» y precio normal sólo donde hay promoción, `$ X/kg` en productos por peso. Abrir los PNG en el celular y mandar la Story por WhatsApp Estado para ver las zonas seguras.
+4. Cambiar el precio de un producto y volver a generar: la pieza debe salir con el precio nuevo (no se guarda nada).
+5. Pendiente de producto (Sprint 2+): logo/wordmark real, teléfono de contacto (hoy no hay dónde cargarlo), historial de exportaciones (el `snapshot` ya se arma, falta persistirlo), slideshow de piezas en TV, grillas de 4 productos, mayorista, recorte automático de fondo.
+
 ## P0 — Etiquetas en lote: aplicar y probar con papel (acción del usuario)
 
 Implementado 2026-10-07 (D-073). **Migración pendiente: `202610070070_product_label_groups.sql`** (tablas nuevas vacías, sin tocar nada existente; va después de la 069 si ésta tampoco se aplicó).
@@ -20,7 +30,7 @@ Implementado 2026-10-07 (D-072). **Migración pendiente: `202610070069_digital_s
 2. Productos → Cartelería → crear la pantalla (nombre + sucursal) y **copiar el enlace en ese momento** (no se vuelve a mostrar; si se pierde: «Regenerar enlace»). Cargar 3–4 productos, «Guardar y publicar» y abrir el enlace en el navegador del TV (o «Abrir vista TV» en la PC).
 3. Verificar en el TV: precio igual al del POS de esa sucursal, «llevando 3 unidades» sólo donde corresponde, rotación en bucle y que un cambio de precio/orden aparece solo en < 1 min.
 4. Cortar el Wi-Fi del TV 1–2 min: debe seguir mostrando las ofertas sin error y recuperarse solo.
-5. Pendiente de producto (no urgente): foto del producto en la plantilla, exportar PNG/WhatsApp, más plantillas, promociones `PACK_FIXED_TOTAL`/packs en la cartelería y permiso propio.
+5. Pendiente de producto (no urgente): usar la foto y las piezas de D-074 en el carrusel del TV, más plantillas, promociones `PACK_FIXED_TOTAL`/packs en la cartelería y permiso propio.
 
 ## P0 — Precio por margen global: aplicar, configurar y probar (acción del usuario)
 

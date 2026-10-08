@@ -4,5 +4,5 @@ export const PRODUCTOS_TABS = [
   { label: "Precios", href: "/admin/products?tab=pricing" },
   { label: "Promociones", href: "/admin/promotions" },
   { label: "Etiquetas", href: "/admin/products/labels" },
-  { label: "Cartelería", href: "/admin/products/signage" }
+  { label: "Cartelería", href: "/admin/products/artwork" }
 ];
