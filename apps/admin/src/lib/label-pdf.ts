@@ -33,17 +33,9 @@ export interface LabelSheetOptions {
 
 type Fonts = Record<LabelFontStyle, PDFFont>;
 
-function drawGuides(page: PDFPage, cellCount: number) {
+function drawGuides(page: PDFPage) {
   const color = rgb(CUT_GUIDE.gray, CUT_GUIDE.gray, CUT_GUIDE.gray);
   const pageHeight = mm(A4_HEIGHT_MM);
-  // Un borde fino alrededor de cada celda ocupada: se corta por dentro de la línea.
-  for (let index = 0; index < cellCount; index += 1) {
-    const cell = sheetCell(index);
-    page.drawRectangle({
-      x: mm(cell.xMm), y: pageHeight - mm(cell.yMm + LABEL_HEIGHT_MM), width: mm(LABEL_WIDTH_MM), height: mm(LABEL_HEIGHT_MM),
-      borderColor: color, borderWidth: CUT_GUIDE.widthPt
-    });
-  }
   // Marcas de corte en los márgenes superior e inferior, a 70 y 140 mm (en los bordes del papel no caben).
   const gridBottom = SHEET_GRID_TOP_MM + SHEET_ROWS * LABEL_HEIGHT_MM;
   for (let column = 1; column < SHEET_COLUMNS; column += 1) {
@@ -56,6 +48,12 @@ function drawGuides(page: PDFPage, cellCount: number) {
 function drawLabel(page: PDFPage, fonts: Fonts, layout: LabelLayout, xMm: number, yMm: number) {
   const pageHeight = mm(A4_HEIGHT_MM);
   const black = rgb(0, 0, 0);
+  const white = rgb(1, 1, 1);
+  for (const rect of layout.rects) {
+    const geometry = { x: mm(xMm + rect.x), y: pageHeight - mm(yMm + rect.y + rect.height), width: mm(rect.width), height: mm(rect.height) };
+    if (rect.fill) page.drawRectangle({ ...geometry, color: black });
+    else page.drawRectangle({ ...geometry, borderColor: black, borderWidth: mm(rect.strokeMm) });
+  }
   for (const rule of layout.rules) {
     page.drawLine({
       start: { x: mm(xMm + rule.x1), y: pageHeight - mm(yMm + rule.y1) }, end: { x: mm(xMm + rule.x2), y: pageHeight - mm(yMm + rule.y2) },
@@ -66,7 +64,7 @@ function drawLabel(page: PDFPage, fonts: Fonts, layout: LabelLayout, xMm: number
     const width = textWidthPt(text.text, text.sizePt, text.style);
     const anchorShift = text.anchor === "middle" ? width / 2 : text.anchor === "end" ? width : 0;
     page.drawText(text.text, {
-      x: mm(xMm + text.x) - anchorShift, y: pageHeight - mm(yMm + text.y), size: text.sizePt, font: fonts[text.style], color: black
+      x: mm(xMm + text.x) - anchorShift, y: pageHeight - mm(yMm + text.y), size: text.sizePt, font: fonts[text.style], color: text.inverse ? white : black
     });
   }
 }
@@ -92,7 +90,7 @@ export async function renderLabelSheetPdf(layouts: readonly LabelLayout[], optio
     const page = doc.addPage([mm(A4_WIDTH_MM), mm(A4_HEIGHT_MM)]);
     const first = pageIndex * SHEET_COLUMNS * SHEET_ROWS;
     const onPage = layouts.slice(first, first + SHEET_COLUMNS * SHEET_ROWS);
-    drawGuides(page, onPage.length);
+    drawGuides(page);
 
     const headerText = toLabelText(`${header}  -  Página ${String(pageIndex + 1)} de ${String(pages)}  -  Imprimir al 100% (tamaño real)`);
     const headerWidth = textWidthPt(headerText, SHEET_HEADER.pt, SHEET_HEADER.style);

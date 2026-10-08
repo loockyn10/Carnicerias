@@ -8,12 +8,12 @@ const bulk: BulkPromotionFact = { minimumUnits: 3, discountBps: 1_500 };
 const unit = (name: string, listPriceCents: bigint | null, promo: BulkPromotionFact | null = bulk) => buildProductLabel({ name, unitType: "UNIT", listPriceCents, bulk: promo });
 
 describe("contenido de la etiqueta: variante UNIT con «llevando 3u»", () => {
-  it("Bicarbonato: OFERTA, nombre, POR 3 UNIDADES, Descuento 15 %, precio promocional y precio normal", () => {
+  it("Bicarbonato: SUPER OFERTAS, nombre, LLEVANDO 3 UNIDADES, precio promocional y precio normal", () => {
     const label = unit("Bicarbonato Alicante x 50", 90_000n);
     expect(label.variant).toBe("PROMO");
-    expect(label.headline).toBe("OFERTA!!!");
+    expect(label.headline).toBe("SUPER OFERTAS");
     expect(label.name).toBe("BICARBONATO ALICANTE X 50");
-    expect(label.conditionLine).toBe("POR 3 UNIDADES");
+    expect(label.conditionLine).toBe("LLEVANDO 3 UNIDADES");
     expect(label.discountLine).toBe("Descuento 15%");
     expect(label.price).toBe("$ 765");
     expect(label.normalLabel).toBe("PRECIO NORMAL");
@@ -34,7 +34,7 @@ describe("contenido de la etiqueta: variante UNIT con «llevando 3u»", () => {
 
   it("respeta la cantidad mínima y el porcentaje de la regla de la sucursal (no asume 3 / 15 %)", () => {
     const label = unit("Fideos", 100_000n, { minimumUnits: 6, discountBps: 1_250 });
-    expect(label.conditionLine).toBe("POR 6 UNIDADES");
+    expect(label.conditionLine).toBe("LLEVANDO 6 UNIDADES");
     expect(label.discountLine).toBe("Descuento 12,5%");
     expect(label.price).toBe("$ 875");
   });
@@ -55,11 +55,10 @@ describe("contenido de la etiqueta: sin promoción no inventa ofertas", () => {
     for (const promo of [null, { minimumUnits: 3, discountBps: 0 }]) {
       const label = unit("Mayonesa Hellmann's 250gr", 205_000n, promo);
       expect(label.variant).toBe("SIMPLE");
-      expect(label.headline).toBeNull();
+      expect(label.headline).toBe("SUPER OFERTAS");
       expect(label.conditionLine).toBeNull();
       expect(label.discountLine).toBeNull();
       expect(label.normalLabel).toBeNull();
-      expect(label.topLabel).toBe("PRECIO");
       expect(label.price).toBe("$ 2.050");
       expect(label.footLabel).toBe("PRECIO UNITARIO");
       expect(label.values?.promoPriceCents).toBeNull();
@@ -69,7 +68,7 @@ describe("contenido de la etiqueta: sin promoción no inventa ofertas", () => {
   it("una regla inválida del motor (mínimo < 2) cae al precio unitario, nunca a una oferta falsa", () => {
     const label = unit("Mayonesa", 205_000n, { minimumUnits: 1, discountBps: 1_500 });
     expect(label.variant).toBe("SIMPLE");
-    expect(label.headline).toBeNull();
+    expect(label.headline).toBe("SUPER OFERTAS");
   });
 });
 
@@ -79,7 +78,7 @@ describe("contenido de la etiqueta: WEIGHT y sin precio", () => {
     expect(label.variant).toBe("WEIGHT");
     expect(label.price).toBe("$ 11.000");
     expect(label.priceSuffix).toBe("/kg");
-    expect(label.headline).toBeNull();
+    expect(label.headline).toBe("SUPER OFERTAS");
     expect(label.footLabel).toBe("PRECIO POR KILO");
     expect(label.values?.promoPriceCents).toBeNull();
   });
@@ -90,7 +89,7 @@ describe("contenido de la etiqueta: WEIGHT y sin precio", () => {
       expect(label.variant).toBe("NO_PRICE");
       expect(label.price).toBe("SIN PRECIO");
       expect(label.values).toBeNull();
-      expect(label.headline).toBeNull();
+      expect(label.headline).toBe("SUPER OFERTAS");
     }
   });
 });

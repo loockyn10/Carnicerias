@@ -68,12 +68,12 @@ describe("pantalla de etiquetas: grupos, selección y PDF", () => {
     expect(html).toContain("<strong>0</strong> etiquetas · 0 hojas A4 (21 por hoja)");
   });
 
-  it("vista previa: la etiqueta de 70 × 50 mm del primer producto, en el diseño nuevo", () => {
+  it("vista previa: la etiqueta de 60 × 40 mm del primer producto, en el diseño nuevo", () => {
     expect(html).toContain('data-testid="product-price-label"');
     expect(html).toContain("max-width:192mm");
     expect(html).toContain('viewBox="0 0 60 40"');
-    expect(html).toContain("OFERTA!!!");
-    expect(html).toContain("POR 3 UNIDADES");
+    expect(html).toContain("SUPER OFERTAS");
+    expect(html).toContain("LLEVANDO 3 UNIDADES");
     expect(html).toContain("Tamaño: 60 × 40 mm");
   });
 

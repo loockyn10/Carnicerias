@@ -21,46 +21,40 @@ export const LABEL_HEIGHT_MM = 40;
  * ~3-4 mm: con 4 mm laterales ningún precio ni texto queda pegado al límite.
  */
 export const LABEL_PAD_X_MM = 4;
-export const LABEL_PAD_TOP_MM = 2.8;
+export const LABEL_PAD_TOP_MM = 1.8;
 export const LABEL_PAD_BOTTOM_MM = 2.8;
+
+/** Franja negra superior «SUPER OFERTAS» (texto blanco) y borde fino negro: guía de corte. Misma geometría en preview y PDF. */
+export const LABEL_BAND = { heightMm: 5.4 } as const;
+export const LABEL_BORDER = { widthMm: 0.25 } as const;
 
 export const MM_PER_PT = 25.4 / 72;
 export const PT_PER_MM = 72 / 25.4;
 
 /** Tipografía por rol (pt). El precio es SIEMPRE el elemento más grande de la etiqueta. */
 export const LABEL_TYPE = {
-  /** «OFERTA!!!» — grande, extra negrita, cursiva, centrado. */
-  headline: { pt: 14, style: "boldItalic" },
+  /** «SUPER OFERTAS» — en la franja negra, blanco, negrita, centrado. */
+  headline: { pt: 9.5, style: "bold" },
   /** Nombre del producto — negrita, centrado, hasta 2 líneas (se achica de maxPt a minPt hasta que entre). */
   name: { maxPt: 9, minPt: 6, stepPt: 0.25, lineHeightEm: 1.12, maxLines: 2, style: "bold" },
-  /** «POR 3 UNIDADES» — destacado, negrita, subrayado. */
-  condition: { pt: 9, style: "bold" },
-  /** «Descuento 15%» — debajo, negrita. */
-  discount: { pt: 8, style: "bold" },
-  /** «PRECIO» sobre el precio grande de la variante simple. */
-  topLabel: { pt: 11, style: "bold" },
-  /** Precio promocional (o el precio normal en la variante simple): el más grande. Se reduce sólo si no entra a lo ancho. */
-  price: { promoMaxPt: 32, simpleMaxPt: 38, minPt: 16, style: "bold" },
+  /** «LLEVANDO 3 UNIDADES» — bajo el precio promocional, negrita. */
+  condition: { pt: 8.5, style: "bold" },
+  /** Precio promocional (o el precio unitario en la variante simple): el más grande. Se reduce sólo si no entra a lo ancho. */
+  price: { promoMaxPt: 30, simpleMaxPt: 36, minPt: 16, style: "bold" },
   /** Sufijo «/kg» pegado al precio, como proporción de su tamaño. */
   priceSuffix: { scale: 0.4, style: "bold" },
   /** Fila inferior de la oferta: «PRECIO NORMAL» a la izquierda y el precio normal a la derecha. */
   normalLabel: { pt: 7, style: "bold" },
-  normalPrice: { pt: 10.5, style: "bold" },
+  normalPrice: { pt: 9, style: "bold" },
   /** «PRECIO UNITARIO» / «PRECIO POR KILO» bajo el precio de la variante simple. */
-  footLabel: { pt: 7, style: "bold" },
-  /** Subrayado de la condición: distancia bajo la línea base y grosor, como proporción del tamaño de la letra. */
-  underline: { offsetEm: 0.14, thicknessEm: 0.065 }
+  footLabel: { pt: 7.5, style: "bold" }
 } as const satisfies Record<string, Record<string, number | string>>;
 
 /** Separaciones MÍNIMAS entre bloques (mm). Si sobra alto, se reparten (hasta duplicarlas) y el resto se centra. */
 export const LABEL_GAPS_MM = {
-  afterHeadline: 1.8,
-  afterName: 2.2,
-  conditionToDiscount: 1.3,
-  afterDiscount: 2.4,
-  afterPrice: 2.4,
-  nameToTopLabel: 2.4,
-  topLabelToPrice: 1.6,
+  nameToPrice: 2.4,
+  priceToCondition: 1.8,
+  conditionToNormal: 2.6,
   priceToFootLabel: 2,
   /** Cuánto puede crecer cada separación respecto de su mínimo cuando sobra alto (1 = hasta el doble). */
   maxGrowth: 1
@@ -88,7 +82,7 @@ export const LABELS_PER_SHEET = SHEET_COLUMNS * SHEET_ROWS;
 export const SHEET_GRID_TOP_MM = (A4_HEIGHT_MM - SHEET_ROWS * LABEL_HEIGHT_MM) / 2;
 export const SHEET_GRID_LEFT_MM = (A4_WIDTH_MM - SHEET_COLUMNS * LABEL_WIDTH_MM) / 2;
 
-/** Guías de corte: línea fina gris alrededor de cada celda + marcas cortas en los márgenes superior e inferior. */
+/** Guías de corte: marcas cortas en los márgenes superior e inferior (el borde de cada celda es el borde negro de la etiqueta). */
 export const CUT_GUIDE = { gray: 0.55, widthPt: 0.3, tickMm: 2.5 } as const;
 
 /** Encabezado de control en el margen superior (grupo, fecha y página): fuera del área de las etiquetas. */

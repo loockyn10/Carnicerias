@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { textWidthPt } from "./label-font";
 import { buildLabelLayout, textExtentMm, type LabelLayout, type LabelText } from "./label-layout";
-import { LABEL_HEIGHT_MM, LABEL_PAD_BOTTOM_MM, LABEL_PAD_TOP_MM, LABEL_PAD_X_MM, LABEL_TYPE, LABEL_WIDTH_MM, MM_PER_PT } from "./label-spec";
+import { LABEL_HEIGHT_MM, LABEL_PAD_BOTTOM_MM, LABEL_PAD_TOP_MM, LABEL_BAND, LABEL_PAD_X_MM, LABEL_TYPE, LABEL_WIDTH_MM, MM_PER_PT } from "./label-spec";
 import { buildProductLabel, type ProductLabelInput } from "./product-label";
 import { must } from "./test-support/must";
 
@@ -35,37 +34,36 @@ describe("layout: especificación 60 × 40 mm", () => {
     for (const [, layout] of samples) expect([layout.widthMm, layout.heightMm]).toEqual([60, 40]);
   });
 
-  it("oferta UNIT: orden vertical OFERTA → nombre → POR N UNIDADES → Descuento → precio → fila PRECIO NORMAL", () => {
+  it("oferta UNIT: orden vertical SUPER OFERTAS → nombre → precio → LLEVANDO N UNIDADES → fila PRECIO NORMAL (sin descuento)", () => {
     const layout = promo("Bicarbonato Alicante x 50", 90_000n);
-    expect(ids(layout)).toEqual(["headline", "name-1", "condition", "discount", "price", "normal-label", "normal-price"]);
-    const baselines = ["headline", "name-1", "condition", "discount", "price", "normal-label"].map((id) => text(layout, id).y);
+    expect(ids(layout)).toEqual(["headline", "name-1", "price", "condition", "normal-label", "normal-price"]);
+    const baselines = ["headline", "name-1", "price", "condition", "normal-label"].map((id) => text(layout, id).y);
     expect([...baselines].sort((a, b) => a - b)).toEqual(baselines);
     expect(text(layout, "normal-label").y).toBe(text(layout, "normal-price").y);
+    expect(layout.texts.map((entry) => entry.text).join("|")).not.toMatch(/Descuento|% OFF|%|^OFERTA|\|OFERTA/);
   });
 
-  it("tipografía: OFERTA!!! en negrita cursiva grande, nombre/condición/descuento en negrita, todo centrado salvo la fila inferior", () => {
+  it("franja negra superior con SUPER OFERTAS en blanco y borde fino negro", () => {
+    for (const [name, layout] of samples) {
+      const band = must(layout.rects.find((rect) => rect.id === "band"));
+      const border = must(layout.rects.find((rect) => rect.id === "border"));
+      expect(band, name).toMatchObject({ x: 0, y: 0, width: 60, height: LABEL_BAND.heightMm, fill: true });
+      expect(border.fill, name).toBe(false);
+      expect(border.strokeMm, name).toBeLessThanOrEqual(0.3);
+      const headline = text(layout, "headline");
+      expect(headline, name).toMatchObject({ text: "SUPER OFERTAS", style: "bold", anchor: "middle", x: 30, inverse: true, sizePt: LABEL_TYPE.headline.pt });
+      expect(headline.y, name).toBeLessThan(LABEL_BAND.heightMm);
+      expect(layout.texts.filter((entry) => entry.inverse), name).toHaveLength(1);
+    }
+  });
+
+  it("tipografía: nombre/condición en negrita, todo centrado salvo la fila inferior", () => {
     const layout = promo("Bicarbonato Alicante x 50", 90_000n);
-    expect(text(layout, "headline")).toMatchObject({ text: "OFERTA!!!", style: "boldItalic", sizePt: LABEL_TYPE.headline.pt, anchor: "middle", x: 30 });
     expect(text(layout, "name-1")).toMatchObject({ style: "bold", sizePt: LABEL_TYPE.name.maxPt, anchor: "middle" });
-    expect(text(layout, "condition")).toMatchObject({ text: "POR 3 UNIDADES", style: "bold", sizePt: LABEL_TYPE.condition.pt, anchor: "middle" });
-    expect(text(layout, "discount")).toMatchObject({ text: "Descuento 15%", style: "bold", sizePt: LABEL_TYPE.discount.pt, anchor: "middle" });
-    expect(text(layout, "normal-label")).toMatchObject({ text: "PRECIO NORMAL", anchor: "start", x: LABEL_PAD_X_MM });
-    expect(text(layout, "normal-price")).toMatchObject({ text: "$ 900", anchor: "end", x: LABEL_WIDTH_MM - LABEL_PAD_X_MM });
-  });
-
-  it("«POR 3 UNIDADES» va subrayado (una línea fina bajo su línea base, del ancho del texto)", () => {
-    const layout = promo("Bicarbonato Alicante x 50", 90_000n);
-    const condition = text(layout, "condition");
-    const rule = layout.rules.find((entry) => entry.id === "condition-underline");
-    expect(rule).toBeDefined();
-    expect(rule?.y1).toBeGreaterThan(condition.y);
-    expect(rule?.y1).toBe(rule?.y2);
-    const width = textWidthPt(condition.text, condition.sizePt, condition.style) * MM_PER_PT;
-    expect((rule?.x2 ?? 0) - (rule?.x1 ?? 0)).toBeCloseTo(width, 1);
-    expect(rule?.widthMm).toBeGreaterThan(0.1);
-    expect(rule?.widthMm).toBeLessThan(0.5);
-    // las variantes sin oferta no llevan subrayado
-    expect(simple("Aceite", 625_000n).rules).toEqual([]);
+    expect(text(layout, "condition")).toMatchObject({ text: "LLEVANDO 3 UNIDADES", style: "bold", sizePt: LABEL_TYPE.condition.pt, anchor: "middle" });
+    expect(text(layout, "normal-label")).toMatchObject({ text: "PRECIO NORMAL", style: "bold", anchor: "start", x: LABEL_PAD_X_MM });
+    expect(text(layout, "normal-price")).toMatchObject({ text: "$ 900", style: "bold", anchor: "end", x: LABEL_WIDTH_MM - LABEL_PAD_X_MM });
+    expect(layout.rules).toEqual([]);
   });
 
   it("el precio es SIEMPRE el elemento más grande de la etiqueta", () => {
@@ -77,14 +75,13 @@ describe("layout: especificación 60 × 40 mm", () => {
     expect(text(promo("Bicarbonato Alicante x 50", 90_000n), "price").sizePt).toBe(LABEL_TYPE.price.promoMaxPt);
   });
 
-  it("sin promoción: nombre, «PRECIO», precio grande y «PRECIO UNITARIO» (sin OFERTA, sin POR N UNIDADES, sin Descuento)", () => {
+  it("sin promoción: SUPER OFERTAS, nombre, precio grande y «PRECIO UNITARIO» (sin LLEVANDO, sin descuento, sin precio normal)", () => {
     const layout = simple("Mayonesa Hellmann's 250gr", 205_000n);
-    expect(ids(layout)).toEqual(["name-1", "name-2", "top-label", "price", "foot-label"].filter((id) => ids(layout).includes(id)));
-    expect(text(layout, "top-label").text).toBe("PRECIO");
+    expect(ids(layout)).toEqual(["headline", "name-1", "name-2", "price", "foot-label"].filter((id) => ids(layout).includes(id)));
     expect(text(layout, "price").text).toBe("$ 2.050");
     expect(text(layout, "foot-label").text).toBe("PRECIO UNITARIO");
     const joined = layout.texts.map((entry) => entry.text).join("|");
-    expect(joined).not.toMatch(/OFERTA|POR \d|Descuento|NORMAL/);
+    expect(joined).not.toMatch(/LLEVANDO|POR \d|Descuento|%|NORMAL/);
     expect(text(layout, "price").sizePt).toBe(LABEL_TYPE.price.simpleMaxPt);
   });
 
@@ -106,7 +103,7 @@ describe("layout: especificación 60 × 40 mm", () => {
         const { left, right } = textExtentMm(entry);
         expect(left, `${name}: ${entry.id} izquierda`).toBeGreaterThanOrEqual(LABEL_PAD_X_MM - 0.05);
         expect(right, `${name}: ${entry.id} derecha`).toBeLessThanOrEqual(LABEL_WIDTH_MM - LABEL_PAD_X_MM + 0.05);
-        expect(entry.y, `${name}: ${entry.id} arriba`).toBeGreaterThan(LABEL_PAD_TOP_MM);
+        expect(entry.y, `${name}: ${entry.id} arriba`).toBeGreaterThan(entry.inverse ? 0 : LABEL_BAND.heightMm + LABEL_PAD_TOP_MM);
         expect(entry.y, `${name}: ${entry.id} abajo`).toBeLessThanOrEqual(LABEL_HEIGHT_MM - LABEL_PAD_BOTTOM_MM + 0.05);
       }
     }
@@ -157,10 +154,10 @@ describe("layout: especificación 60 × 40 mm", () => {
 
   it("aprovecha el alto de 40 mm: el contenido ocupa casi todo el alto útil", () => {
     for (const [name, layout] of samples.filter(([, entry]) => entry.variant === "PROMO")) {
-      const first = must(layout.texts[0]);
+      const name1 = must(layout.texts.find((entry) => entry.id === "name-1"));
       const last = must(layout.texts[layout.texts.length - 1]);
-      expect(first.y - first.sizePt * MM_PER_PT * 0.718, name).toBeLessThan(LABEL_PAD_TOP_MM + 2);
-      expect(LABEL_HEIGHT_MM - last.y, name).toBeLessThan(LABEL_PAD_BOTTOM_MM + 2);
+      expect(name1.y - name1.sizePt * MM_PER_PT * 0.718, name).toBeLessThan(LABEL_BAND.heightMm + LABEL_PAD_TOP_MM + 2.5);
+      expect(LABEL_HEIGHT_MM - last.y, name).toBeLessThan(LABEL_PAD_BOTTOM_MM + 2.5);
     }
   });
 

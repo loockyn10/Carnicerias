@@ -1,12 +1,12 @@
 import { capHeightEm, textWidthPt, type LabelFontStyle } from "./label-font";
 import {
-  LABEL_FIT_STEP, LABEL_GAPS_MM, LABEL_HEIGHT_MM, LABEL_MIN_FIT, LABEL_PAD_BOTTOM_MM, LABEL_PAD_TOP_MM, LABEL_PAD_X_MM, LABEL_TYPE,
+  LABEL_BAND, LABEL_BORDER, LABEL_FIT_STEP, LABEL_GAPS_MM, LABEL_HEIGHT_MM, LABEL_MIN_FIT, LABEL_PAD_BOTTOM_MM, LABEL_PAD_TOP_MM, LABEL_PAD_X_MM, LABEL_TYPE,
   LABEL_WIDTH_MM, MM_PER_PT, PT_PER_MM
 } from "./label-spec";
 import type { ProductLabelData, ProductLabelVariant } from "./product-label";
 
 /**
- * Geometría de UNA etiqueta de 70 × 50 mm: a partir del contenido (`ProductLabelData`) y de las medidas de `label-spec.ts` decide dónde va
+ * Geometría de UNA etiqueta de 60 × 40 mm: a partir del contenido (`ProductLabelData`) y de las medidas de `label-spec.ts` decide dónde va
  * cada texto (coordenadas en mm, línea base) y a qué tamaño (pt). El resultado es una lista de primitivas simples:
  *   - el preview las dibuja como SVG (viewBox en mm);
  *   - el PDF las dibuja con pdf-lib, mm → pt.
@@ -26,6 +26,19 @@ export interface LabelText {
   sizePt: number;
   style: LabelFontStyle;
   anchor: LabelTextAnchor;
+  /** Texto blanco (sobre la franja negra). */
+  inverse?: boolean;
+}
+
+/** Rectángulo (mm): relleno negro (franja) o sólo contorno (borde de la etiqueta). */
+export interface LabelRect {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill: boolean;
+  strokeMm: number;
 }
 
 export interface LabelRule {
@@ -43,6 +56,7 @@ export interface LabelLayout {
   variant: ProductLabelVariant;
   texts: LabelText[];
   rules: LabelRule[];
+  rects: LabelRect[];
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -52,7 +66,8 @@ const capMm = (pt: number, style: LabelFontStyle) => ptToMm(pt) * capHeightEm(st
 const INNER_WIDTH_MM = LABEL_WIDTH_MM - 2 * LABEL_PAD_X_MM;
 const INNER_WIDTH_PT = INNER_WIDTH_MM * PT_PER_MM;
 const CENTER_X_MM = LABEL_WIDTH_MM / 2;
-const AVAILABLE_HEIGHT_MM = LABEL_HEIGHT_MM - LABEL_PAD_TOP_MM - LABEL_PAD_BOTTOM_MM;
+const CONTENT_TOP_MM = LABEL_BAND.heightMm + LABEL_PAD_TOP_MM;
+const AVAILABLE_HEIGHT_MM = LABEL_HEIGHT_MM - CONTENT_TOP_MM - LABEL_PAD_BOTTOM_MM;
 const ELLIPSIS = "...";
 
 interface Output {
@@ -144,21 +159,12 @@ function nameBlock(name: string, fit: number): Block {
 // Otros bloques
 // ---------------------------------------------------------------------------------------------------------------------
 
-function textBlock(id: string, text: string, sizePt: number, style: LabelFontStyle, options: { underline?: boolean } = {}): Block {
+function textBlock(id: string, text: string, sizePt: number, style: LabelFontStyle): Block {
   return {
     heightMm: capMm(sizePt, style),
     gapBeforeMm: 0,
     draw: (top, out) => {
-      const baseline = top + capMm(sizePt, style);
-      out.texts.push({ id, text, x: CENTER_X_MM, y: round2(baseline), sizePt: round2(sizePt), style, anchor: "middle" });
-      if (options.underline) {
-        const widthMm = textWidthPt(text, sizePt, style) * MM_PER_PT;
-        const y = baseline + ptToMm(sizePt) * LABEL_TYPE.underline.offsetEm;
-        out.rules.push({
-          id: `${id}-underline`, x1: round2(CENTER_X_MM - widthMm / 2), x2: round2(CENTER_X_MM + widthMm / 2), y1: round2(y), y2: round2(y),
-          widthMm: round2(ptToMm(sizePt) * LABEL_TYPE.underline.thicknessEm)
-        });
-      }
+      out.texts.push({ id, text, x: CENTER_X_MM, y: round2(top + capMm(sizePt, style)), sizePt: round2(sizePt), style, anchor: "middle" });
     }
   };
 }
@@ -224,31 +230,22 @@ function blocksFor(data: ProductLabelData, fit: number): Block[] {
   switch (data.variant) {
     case "PROMO": {
       return [
-        textBlock("headline", data.headline ?? "", type.headline.pt * fit, type.headline.style),
-        withGap(name, gaps.afterHeadline),
-        withGap(textBlock("condition", data.conditionLine ?? "", type.condition.pt * fit, type.condition.style, { underline: true }), gaps.afterName),
-        withGap(textBlock("discount", data.discountLine ?? "", type.discount.pt * fit, type.discount.style), gaps.conditionToDiscount),
-        withGap(price, gaps.afterDiscount),
-        withGap(normalRowBlock(data.normalLabel ?? "", data.normalPrice ?? "", fit), gaps.afterPrice)
-      ];
-    }
-    case "SIMPLE": {
-      return [
         name,
-        withGap(textBlock("top-label", data.topLabel ?? "", type.topLabel.pt * fit, type.topLabel.style), gaps.nameToTopLabel),
-        withGap(price, gaps.topLabelToPrice),
-        withGap(textBlock("foot-label", data.footLabel ?? "", type.footLabel.pt * fit, type.footLabel.style), gaps.priceToFootLabel)
+        withGap(price, gaps.nameToPrice),
+        withGap(textBlock("condition", data.conditionLine ?? "", type.condition.pt * fit, type.condition.style), gaps.priceToCondition),
+        withGap(normalRowBlock(data.normalLabel ?? "", data.normalPrice ?? "", fit), gaps.conditionToNormal)
       ];
     }
+    case "SIMPLE":
     case "WEIGHT": {
       return [
         name,
-        withGap(price, gaps.nameToTopLabel),
+        withGap(price, gaps.nameToPrice),
         withGap(textBlock("foot-label", data.footLabel ?? "", type.footLabel.pt * fit, type.footLabel.style), gaps.priceToFootLabel)
       ];
     }
     case "NO_PRICE": {
-      return [name, withGap(price, gaps.nameToTopLabel)];
+      return [name, withGap(price, gaps.nameToPrice)];
     }
   }
 }
@@ -269,19 +266,31 @@ export function buildLabelLayout(data: ProductLabelData): LabelLayout {
   const extra = Math.max(0, AVAILABLE_HEIGHT_MM - totalOf(blocks));
   const growthPerGap = gapCount > 0 ? extra / gapCount : 0;
   const out: Output = { texts: [], rules: [] };
+  // Borde fino (inset medio trazo, para que no se recorte) y franja negra con «SUPER OFERTAS» en blanco.
+  const half = LABEL_BORDER.widthMm / 2;
+  const rects: LabelRect[] = [
+    { id: "band", x: 0, y: 0, width: LABEL_WIDTH_MM, height: LABEL_BAND.heightMm, fill: true, strokeMm: 0 },
+    { id: "border", x: half, y: half, width: LABEL_WIDTH_MM - LABEL_BORDER.widthMm, height: LABEL_HEIGHT_MM - LABEL_BORDER.widthMm, fill: false, strokeMm: LABEL_BORDER.widthMm }
+  ];
+  const headlinePt = LABEL_TYPE.headline.pt;
+  const headlineCap = capMm(headlinePt, LABEL_TYPE.headline.style);
+  out.texts.push({
+    id: "headline", text: data.headline, x: CENTER_X_MM, y: round2((LABEL_BAND.heightMm + headlineCap) / 2), sizePt: headlinePt,
+    style: LABEL_TYPE.headline.style, anchor: "middle", inverse: true
+  });
   let used = 0;
   const placed = blocks.map((block) => {
     const gap = block.gapBeforeMm > 0 ? block.gapBeforeMm + Math.min(growthPerGap, block.gapBeforeMm * LABEL_GAPS_MM.maxGrowth) : 0;
     used += gap + block.heightMm;
     return { block, gap };
   });
-  let top = LABEL_PAD_TOP_MM + Math.max(0, AVAILABLE_HEIGHT_MM - used) / 2;
+  let top = CONTENT_TOP_MM + Math.max(0, AVAILABLE_HEIGHT_MM - used) / 2;
   for (const { block, gap } of placed) {
     top += gap;
     block.draw(top, out);
     top += block.heightMm;
   }
-  return { widthMm: LABEL_WIDTH_MM, heightMm: LABEL_HEIGHT_MM, variant: data.variant, texts: out.texts, rules: out.rules };
+  return { widthMm: LABEL_WIDTH_MM, heightMm: LABEL_HEIGHT_MM, variant: data.variant, texts: out.texts, rules: out.rules, rects };
 }
 
 /** Extremos horizontales (mm) de un texto ya ubicado: sirve para verificar márgenes y que nada se pise. */

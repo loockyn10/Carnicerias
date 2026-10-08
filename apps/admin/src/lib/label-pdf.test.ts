@@ -6,7 +6,7 @@ import { expandCopies, sheetCell, sheetPageCount } from "./label-sheet";
 import {
   A4_HEIGHT_MM, A4_WIDTH_MM, LABEL_HEIGHT_MM, LABEL_WIDTH_MM, LABELS_PER_SHEET, PT_PER_MM, SHEET_COLUMNS, SHEET_GRID_LEFT_MM, SHEET_GRID_TOP_MM, SHEET_ROWS
 } from "./label-spec";
-import { inspectPdf, mmOf } from "./test-support/pdf-inspect";
+import { inspectPdf, mmOf, type PdfRect } from "./test-support/pdf-inspect";
 import { buildProductLabel } from "./product-label";
 import { must } from "./test-support/must";
 
@@ -75,31 +75,34 @@ describe("PDF real", () => {
 
   it("una página llena tiene 21 celdas de exactamente 60 × 40 mm, en 3 columnas × 7 filas, centradas", async () => {
     const [page] = await inspectPdf(await render(21));
-    const rects = page?.rects ?? [];
+    // por etiqueta: borde negro fino (la franja es un relleno, no un contorno); el borde es la celda (inset de medio trazo)
+    const rects = (page?.rects ?? []).filter((rect) => mmOf(rect.height) > 30);
     expect(rects).toHaveLength(21);
     for (const rect of rects) {
-      expect(mmOf(rect.width)).toBeCloseTo(60, 3);
-      expect(mmOf(rect.height)).toBeCloseTo(40, 3);
+      expect(mmOf(rect.width)).toBeCloseTo(60, 0);
+      expect(mmOf(rect.height)).toBeCloseTo(40, 0);
     }
-    const columns = [...new Set(rects.map((rect) => Math.round(mmOf(rect.x) * 100) / 100))].sort((a, b) => a - b);
+    const columns = [...new Set(rects.map((rect) => Math.round(mmOf(rect.x))))].sort((a, b) => a - b);
     expect(columns).toEqual([15, 75, 135]);
     // el origen de PDF es abajo: la fila superior queda a 23,5 mm del borde superior y la inferior a 23,5 mm del borde inferior
-    const bottoms = [...new Set(rects.map((rect) => Math.round(mmOf(rect.y) * 100) / 100))].sort((a, b) => a - b);
+    const bottoms = [...new Set(rects.map((rect) => Math.round(mmOf(rect.y) * 10) / 10))].sort((a, b) => a - b);
     expect(bottoms).toHaveLength(7);
-    expect(bottoms[0]).toBeCloseTo(8.5, 2);
-    expect((bottoms[6] ?? 0) + 40).toBeCloseTo(297 - 8.5, 2);
+    expect(bottoms[0]).toBeCloseTo(8.6, 1);
+    expect((bottoms[6] ?? 0) + 40).toBeCloseTo(297 - 8.5, 0);
   });
 
   it("la última página sólo tiene guías de las celdas ocupadas", async () => {
     const pages = await inspectPdf(await render(22));
-    expect(pages[0]?.rects).toHaveLength(21);
-    expect(pages[1]?.rects).toHaveLength(1);
+    const cells = (rects: PdfRect[] | undefined) => (rects ?? []).filter((rect) => mmOf(rect.height) > 30);
+    expect(cells(pages[0]?.rects)).toHaveLength(21);
+    expect(cells(pages[1]?.rects)).toHaveLength(1);
   });
 
-  it("el texto del PDF es el del layout: OFERTA, nombre, POR 3 UNIDADES, Descuento, precio promocional, PRECIO NORMAL y precio normal", async () => {
+  it("el texto del PDF es el del layout: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES, PRECIO NORMAL y precio normal", async () => {
     const [page] = await inspectPdf(await renderLabelSheetPdf([bicarbonato], options));
     const texts = (page?.texts ?? []).map((entry) => entry.text);
-    for (const expected of ["OFERTA!!!", "BICARBONATO ALICANTE X 50", "POR 3 UNIDADES", "Descuento 15%", "$ 765", "PRECIO NORMAL", "$ 900"]) expect(texts).toContain(expected);
+    for (const expected of ["SUPER OFERTAS", "BICARBONATO ALICANTE X 50", "$ 765", "LLEVANDO 3 UNIDADES", "PRECIO NORMAL", "$ 900"]) expect(texts).toContain(expected);
+    for (const absent of ["OFERTA!!!", "Descuento 15%"]) expect(texts).not.toContain(absent);
     const header = texts.find((entry) => entry.includes("Página 1 de 1"));
     expect(header).toContain("Góndolas Despensa Central");
     expect(header).toContain("100%");

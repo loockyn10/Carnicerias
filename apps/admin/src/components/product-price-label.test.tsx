@@ -37,26 +37,28 @@ describe("preview SVG de la etiqueta de góndola", () => {
     expect(html.slice(0, html.indexOf(">"))).not.toMatch(/ (width|height)="/);
   });
 
-  it("oferta UNIT: OFERTA!!!, nombre, POR 3 UNIDADES, Descuento 15 %, precio promocional, PRECIO NORMAL y precio normal", () => {
+  it("oferta UNIT: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES, PRECIO NORMAL y precio normal (sin porcentaje)", () => {
     const text = visibleText(render(mayonesa));
-    expect(text).toEqual(["OFERTA!!!", "MAYONESA HELLMANN&#x27;S 250GR", "POR 3 UNIDADES", "Descuento 15%", "$ 1.742,50", "PRECIO NORMAL", "$ 2.050"]);
+    expect(text).toEqual(["SUPER OFERTAS", "MAYONESA HELLMANN&#x27;S 250GR", "$ 1.742,50", "LLEVANDO 3 UNIDADES", "PRECIO NORMAL", "$ 2.050"]);
     const html = render(mayonesa);
     expect(html).toContain('data-label-variant="PROMO"');
-    expect(html).toContain('data-label-part="condition-underline"');
-    expect(html).toContain('font-style="italic"');
+    expect(html).toContain('data-label-part="band"');
+    expect(html).toContain('data-label-part="border"');
+    expect(html).not.toMatch(/Descuento|% OFF|>OFERTA|font-style="italic"/);
     expect(html).toContain('text-anchor="middle"');
   });
 
   it("sin promoción NO inventa oferta, condición ni descuento", () => {
     const html = render({ ...mayonesa, bulk: null });
     expect(html).toContain('data-label-variant="SIMPLE"');
-    expect(html).not.toMatch(/OFERTA|POR 3|Descuento|PRECIO NORMAL|<line/);
+    expect(html).not.toMatch(/LLEVANDO|POR 3|Descuento|% OFF|PRECIO NORMAL|<line/);
+    expect(visibleText(html)).toContain("SUPER OFERTAS");
     expect(visibleText(html)).toContain("PRECIO UNITARIO");
     expect(visibleText(html)).toContain("$ 2.050");
   });
 
   it("por kg y sin precio son variantes del mismo componente", () => {
-    expect(visibleText(render({ name: "Molida vacuna", unitType: "WEIGHT", listPriceCents: 1_100_000n, bulk: null }))).toEqual(["MOLIDA VACUNA", "$ 11.000", "/kg", "PRECIO POR KILO"]);
+    expect(visibleText(render({ name: "Molida vacuna", unitType: "WEIGHT", listPriceCents: 1_100_000n, bulk: null }))).toEqual(["SUPER OFERTAS", "MOLIDA VACUNA", "$ 11.000", "/kg", "PRECIO POR KILO"]);
     const none = render({ name: "Sin precio", unitType: "UNIT", listPriceCents: null, bulk: null });
     expect(none).toContain('data-label-variant="NO_PRICE"');
     expect(visibleText(none)).toContain("SIN PRECIO");

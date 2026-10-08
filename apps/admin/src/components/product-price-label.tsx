@@ -4,7 +4,7 @@ import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM, MM_PER_PT } from "../lib/label-spec";
 const FONT_FAMILY = "Helvetica, Arial, 'Liberation Sans', sans-serif";
 
 /**
- * Etiqueta de góndola de 60 × 40 mm. Se dibuja a partir del MISMO layout que el PDF (`buildLabelLayout`, medidas de `label-spec.ts`):
+ * Etiqueta de góndola de 60 × 40 mm (franja negra «SUPER OFERTAS», borde fino). Se dibuja a partir del MISMO layout que el PDF (`buildLabelLayout`, medidas de `label-spec.ts`):
  * un SVG con viewBox en milímetros, así que preview y papel coinciden. `scale` sólo agranda la vista; la relación 1,5 se conserva.
  * Una variante de un mismo componente: oferta «llevando N» (`PROMO`), precio unitario (`SIMPLE`), por kg (`WEIGHT`) o sin precio.
  *
@@ -29,11 +29,17 @@ export function ProductPriceLabel({ layout, scale = 1, fluid = false }: { layout
       {...size}
     >
       <rect fill="#fff" height={LABEL_HEIGHT_MM} width={LABEL_WIDTH_MM} x={0} y={0} />
+      {layout.rects.map((rect) => (
+        <rect
+          data-label-part={rect.id} fill={rect.fill ? "#000" : "none"} height={rect.height} key={rect.id} stroke={rect.fill ? "none" : "#000"}
+          strokeWidth={rect.strokeMm} width={rect.width} x={rect.x} y={rect.y}
+        />
+      ))}
       {layout.rules.map((rule) => <line data-label-part={rule.id} key={rule.id} stroke="#000" strokeWidth={rule.widthMm} x1={rule.x1} x2={rule.x2} y1={rule.y1} y2={rule.y2} />)}
       {layout.texts.map((text) => (
         <text
           data-label-part={text.id}
-          fill="#000"
+          fill={text.inverse ? "#fff" : "#000"}
           fontFamily={FONT_FAMILY}
           fontSize={Math.round(text.sizePt * MM_PER_PT * 1000) / 1000}
           fontStyle={text.style === "boldItalic" ? "italic" : "normal"}

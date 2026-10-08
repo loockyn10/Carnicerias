@@ -3,7 +3,7 @@ import { calculateBranchPromotionLinePricing, formatBasisPointsPercent, formatCu
 import { toLabelText } from "./label-font";
 
 /**
- * Contenido de la etiqueta de góndola (70 × 50 mm). Puro: decide QUÉ texto lleva cada etiqueta; DÓNDE va cada cosa lo decide
+ * Contenido de la etiqueta de góndola (60 × 40 mm). Puro: decide QUÉ texto lleva cada etiqueta; DÓNDE va cada cosa lo decide
  * `label-layout.ts` (con las medidas de `label-spec.ts`), y el dibujo lo hacen el preview SVG y el PDF a partir de ese layout.
  *
  * No hay fórmula de descuento propia: el precio de la oferta «llevando N» sale del mismo motor que usa el POS
@@ -36,14 +36,12 @@ export interface ProductLabelData {
   variant: ProductLabelVariant;
   /** Nombre ya en mayúsculas y saneado (lo que se dibuja). */
   name: string;
-  /** «OFERTA!!!» (sólo si hay una promoción real). */
-  headline: string | null;
-  /** «POR 3 UNIDADES». */
+  /** «SUPER OFERTAS»: identidad del negocio, en TODAS las etiquetas. */
+  headline: string;
+  /** «LLEVANDO 3 UNIDADES» (sólo con promoción). */
   conditionLine: string | null;
-  /** «Descuento 15%». */
+  /** «Descuento 15%»: sólo para el historial; NO se dibuja en la etiqueta. */
   discountLine: string | null;
-  /** «PRECIO» sobre el precio grande (variante simple). */
-  topLabel: string | null;
   /** Precio dominante, ya formateado ("$ 1.742,50"); «SIN PRECIO» si el producto no tiene precio vigente. */
   price: string;
   /** Sufijo pequeño pegado al precio ("/kg"). */
@@ -57,7 +55,7 @@ export interface ProductLabelData {
   values: LabelValues | null;
 }
 
-export const OFFER_HEADLINE = "OFERTA!!!";
+export const OFFER_HEADLINE = "SUPER OFERTAS";
 export const NO_PRICE_TEXT = "SIN PRECIO";
 
 export interface ProductLabelInput {
@@ -75,7 +73,7 @@ export function labelDisplayName(name: string): string {
 }
 
 const EMPTY_TEXTS = {
-  headline: null, conditionLine: null, discountLine: null, topLabel: null, priceSuffix: null, normalLabel: null, normalPrice: null, footLabel: null
+  headline: OFFER_HEADLINE, conditionLine: null, discountLine: null, priceSuffix: null, normalLabel: null, normalPrice: null, footLabel: null
 } as const;
 
 export function buildProductLabel(input: ProductLabelInput): ProductLabelData {
@@ -109,8 +107,7 @@ export function buildProductLabel(input: ProductLabelInput): ProductLabelData {
       if (pricing && pricing.cashPriceCents > 0n && pricing.cashPriceCents < list) {
         return {
           ...EMPTY_TEXTS, variant: "PROMO", name,
-          headline: OFFER_HEADLINE,
-          conditionLine: `POR ${String(bulk.minimumUnits)} UNIDADES`,
+          conditionLine: `LLEVANDO ${String(bulk.minimumUnits)} UNIDADES`,
           discountLine: `Descuento ${formatBasisPointsPercent(bulk.discountBps)}%`,
           price: formatCurrency(pricing.cashPriceCents),
           normalLabel: "PRECIO NORMAL", normalPrice: listText,
@@ -121,10 +118,11 @@ export function buildProductLabel(input: ProductLabelInput): ProductLabelData {
       // Regla inválida (p. ej. mínimo < 2): se imprime el precio unitario, que siempre es correcto.
     }
   }
-  return { ...EMPTY_TEXTS, variant: "SIMPLE", name, topLabel: "PRECIO", price: listText, footLabel: "PRECIO UNITARIO", values: values(null) };
+  return { ...EMPTY_TEXTS, variant: "SIMPLE", name, price: listText, footLabel: "PRECIO UNITARIO", values: values(null) };
 }
 
-/** Texto de la condición para el historial: «POR 3 UNIDADES - Descuento 15%»; null si la etiqueta no lleva oferta. */
+/** Texto de la condición para el historial (sin cambios): «POR 3 UNIDADES - Descuento 15%»; null si la etiqueta no lleva oferta. */
 export function conditionText(label: ProductLabelData): string | null {
-  return label.conditionLine && label.discountLine ? `${label.conditionLine} - ${label.discountLine}` : null;
+  const units = label.values?.promoMinimumUnits;
+  return label.conditionLine && label.discountLine && units ? `POR ${String(units)} UNIDADES - ${label.discountLine}` : null;
 }
