@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildPhotoPath, extensionFor, fitWithin, formatBytes, isAcceptedInputType, isValidPhotoPath, MAX_PHOTO_BYTES, MAX_PHOTO_SIDE, planPhoto, PHOTO_TYPE_ERROR
+  buildLogoPath, buildPhotoPath, extensionFor, fitWithin, formatBytes, isAcceptedInputType, isValidLogoPath, isValidPhotoPath, MAX_PHOTO_BYTES, MAX_PHOTO_SIDE, planPhoto, PHOTO_TYPE_ERROR
 } from "./artwork-photo";
 
 const ORG = "c2000000-0000-4000-8000-000000000001";
@@ -69,5 +69,37 @@ describe("formatBytes", () => {
   it("KB y MB legibles", () => {
     expect(formatBytes(120_000)).toBe("117 KB");
     expect(formatBytes(5 * 1024 * 1024)).toBe("5,0 MB");
+  });
+});
+
+describe("ruta del logo de la organización", () => {
+  const LOGO = "c7000000-0000-4000-8000-000000000001";
+
+  it("el logo vive en <organización>/branding/<uuid>.<ext>", () => {
+    expect(buildLogoPath(ORG, LOGO, "image/png")).toBe(`${ORG}/branding/${LOGO}.png`);
+    expect(buildLogoPath(ORG.toUpperCase(), LOGO.toUpperCase(), "image/jpeg")).toBe(`${ORG}/branding/${LOGO}.jpg`);
+  });
+
+  it("sólo se acepta el logo de ESTA organización", () => {
+    const path = buildLogoPath(ORG, LOGO, "image/png");
+    expect(isValidLogoPath(path, ORG)).toBe(true);
+    expect(isValidLogoPath(path, OTHER_ORG)).toBe(false);
+    expect(isValidLogoPath(`${OTHER_ORG}/branding/${LOGO}.png`, ORG)).toBe(false);
+  });
+
+  it("rechaza rutas que no son de logo (foto de producto, otra carpeta, extensión, traversal, no-texto)", () => {
+    expect(isValidLogoPath(buildPhotoPath(ORG, PRODUCT, FILE, "image/png"), ORG)).toBe(false);
+    expect(isValidLogoPath(`${ORG}/otra/${LOGO}.png`, ORG)).toBe(false);
+    expect(isValidLogoPath(`${ORG}/branding/${LOGO}.webp`, ORG)).toBe(false);
+    // El punto de la extensión es un punto de verdad (no «cualquier carácter»).
+    expect(isValidLogoPath(`${ORG}/branding/${LOGO}xpng`, ORG)).toBe(false);
+    expect(isValidLogoPath(`${ORG}/branding/../${LOGO}.png`, ORG)).toBe(false);
+    expect(isValidLogoPath(`${ORG}/branding/${LOGO}.png/extra`, ORG)).toBe(false);
+    expect(isValidLogoPath(null, ORG)).toBe(false);
+    expect(isValidLogoPath(42, ORG)).toBe(false);
+  });
+
+  it("una ruta de logo no sirve como foto de producto (y viceversa)", () => {
+    expect(isValidPhotoPath(buildLogoPath(ORG, LOGO, "image/png"), ORG, PRODUCT)).toBe(false);
   });
 });

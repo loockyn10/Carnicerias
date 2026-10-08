@@ -129,8 +129,99 @@ export const SAMPLE_FACTS: Record<keyof typeof PRODUCT_IDS, Facts> = {
   largo: base(PRODUCT_IDS.largo, "Hamburguesa de carne vacuna congelada premium x 12 unidades caja 1,2 kg", "UNIT", 1_149_900, { photo: photo(PRODUCT_IDS.largo) })
 };
 
+/** «Corte» de color liso (sobre transparente) para los collages de prueba: distingue un producto de otro a simple vista. */
+export function makeBlobPhoto(color: readonly [number, number, number]): Uint8Array {
+  const [r, g, b] = color;
+  return makePng(800, 560, (x, y) => {
+    if (inEllipse(x, y, 400, 290, 360, 210)) {
+      if (inEllipse(x, y, 330, 230, 150, 70)) return [Math.min(255, r + 40), Math.min(255, g + 40), Math.min(255, b + 40), 255];
+      return [r, g, b, 255];
+    }
+    return TRANSPARENT;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Collage: productos de pollo y cajas de milanesa (productos por unidad, por peso y con promoción)
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const COLLAGE_IDS = {
+  pataMuslo: "c5000000-0000-4000-8000-000000000011",
+  pechuga: "c5000000-0000-4000-8000-000000000012",
+  filet: "c5000000-0000-4000-8000-000000000013",
+  alitas: "c5000000-0000-4000-8000-000000000014",
+  polloEntero: "c5000000-0000-4000-8000-000000000015",
+  milaCerdo: "c5000000-0000-4000-8000-000000000016",
+  milaVacuna: "c5000000-0000-4000-8000-000000000017",
+  milaPollo: "c5000000-0000-4000-8000-000000000018"
+} as const;
+
+const COLLAGE_COLORS: Record<keyof typeof COLLAGE_IDS, readonly [number, number, number]> = {
+  pataMuslo: [232, 178, 120], pechuga: [244, 196, 176], filet: [238, 170, 160], alitas: [226, 160, 96], polloEntero: [240, 200, 150],
+  milaCerdo: [214, 170, 110], milaVacuna: [200, 140, 80], milaPollo: [230, 190, 120]
+};
+
+export const COLLAGE_FACTS: Record<keyof typeof COLLAGE_IDS, Facts> = {
+  pataMuslo: base(COLLAGE_IDS.pataMuslo, "Pata muslo de pollo premium x 3 kg", "UNIT", 1_199_900, { photo: photo(COLLAGE_IDS.pataMuslo) }),
+  pechuga: base(COLLAGE_IDS.pechuga, "Pechuga entera x 3 kg", "UNIT", 1_799_900, { photo: photo(COLLAGE_IDS.pechuga) }),
+  filet: base(COLLAGE_IDS.filet, "Filet de pechuga x 2 kg", "UNIT", 1_799_900, { photo: photo(COLLAGE_IDS.filet) }),
+  alitas: base(COLLAGE_IDS.alitas, "Alitas de pollo premium x 2 kg", "UNIT", 549_900, { photo: photo(COLLAGE_IDS.alitas) }),
+  polloEntero: base(COLLAGE_IDS.polloEntero, "2 pollos grandes", "UNIT", 1_999_900, { photo: photo(COLLAGE_IDS.polloEntero) }),
+  milaCerdo: base(COLLAGE_IDS.milaCerdo, "Milanesas de cerdo", "UNIT", 3_149_900, { photo: photo(COLLAGE_IDS.milaCerdo) }),
+  milaVacuna: base(COLLAGE_IDS.milaVacuna, "Milanesas vacunas", "UNIT", 5_399_900, { photo: photo(COLLAGE_IDS.milaVacuna) }),
+  milaPollo: base(COLLAGE_IDS.milaPollo, "Milanesas de pollo", "UNIT", 3_149_900, { bulkMinimumUnits: 3, bulkDiscountBps: 1_000, photo: photo(COLLAGE_IDS.milaPollo) })
+};
+
+/** Los productos de los collages de la validación visual (en el orden de la pieza). */
+export const POLLO_SET = ["pataMuslo", "pechuga", "filet", "alitas", "polloEntero"] as const;
+export const MILANESA_SET = ["milaCerdo", "milaVacuna", "milaPollo"] as const;
+
+/** Hechos de cualquier producto de prueba (protagonista o collage) por id. */
+export function factsById(productId: string): Facts | null {
+  for (const facts of [...Object.values(SAMPLE_FACTS), ...Object.values(COLLAGE_FACTS)]) if (facts.productId === productId) return facts;
+  return null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Identidad: logo de la organización + contacto por sucursal (forma de `get_artwork_branding`)
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const BRANCH_AVENIDA_ID = "c3000000-0000-4000-8000-000000000002";
+export const LOGO_PATH = `${ORG}/branding/c7000000-0000-4000-8000-000000000001.png`;
+export const LOGO_SIZE = { width: 480, height: 120 } as const;
+
+export type BrandingBranch = "central" | "avenida" | null;
+
+const BRANCH_CONTACTS = {
+  central: { id: BRANCH_ID, name: "Central", phone: "3496-448808", address: "Güemes 2180", city: "Esperanza, Santa Fe" },
+  avenida: { id: BRANCH_AVENIDA_ID, name: "Avenida", phone: "0342 455-5555", address: "Av. Libertad 100", city: "Santa Fe, Santa Fe" }
+} as const;
+
+/** Respuesta de `get_artwork_branding` para una sucursal (null = precio general: sin contacto). `logo: false` = organización sin logo. */
+export function brandingPayload(branch: BrandingBranch, options: { logo?: boolean } = {}): Facts {
+  return {
+    organizationName: "AW Org",
+    logo: options.logo === false ? null : { storagePath: LOGO_PATH, contentType: "image/png", sizeBytes: 9_000, ...LOGO_SIZE },
+    branch: branch ? { ...BRANCH_CONTACTS[branch] } : null
+  };
+}
+
+/** Logo sintético apaisado (480 × 120, PNG transparente): barras blancas y un bloque rojo. No es el logo real del negocio. */
+export function makeLogoPng(): Uint8Array {
+  return makePng(LOGO_SIZE.width, LOGO_SIZE.height, (x, y) => {
+    if (x > 20 && x < 100 && y > 24 && y < 96) return [216, 32, 27, 255];
+    if (x > 120 && x < 460 && y > 30 && y < 56) return WHITE;
+    if (x > 120 && x < 360 && y > 70 && y < 94) return [255, 212, 0, 255];
+    return TRANSPARENT;
+  });
+}
+
 /** Bytes de la foto de cada caso (lo que devolvería Storage). */
 export function samplePhotoBytes(path: string): Uint8Array | null {
+  if (path === LOGO_PATH) return makeLogoPng();
+  for (const key of Object.keys(COLLAGE_IDS) as (keyof typeof COLLAGE_IDS)[]) {
+    if (path.includes(COLLAGE_IDS[key])) return makeBlobPhoto(COLLAGE_COLORS[key]);
+  }
   if (path.includes(PRODUCT_IDS.mayo)) return makeJarPhoto();
   if (path.includes(PRODUCT_IDS.largo)) return makeJarPhoto();
   if (path.includes(PRODUCT_IDS.pollo)) return makeMeatPhoto("white");

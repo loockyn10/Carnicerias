@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { OfferArtworkModel } from "../../lib/artwork";
 import { ARTWORK_FONT_700_BASE64, ARTWORK_FONT_900_BASE64, ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import { ARTWORK_FORMATS, type ArtworkFormat } from "../../lib/artwork-tokens";
-import { HeroOffer } from "./hero-offer";
+import { OfferArtwork } from "./offer-artwork";
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -14,7 +14,7 @@ const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weig
   + `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:700;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_700_BASE64}) format("woff")}`;
 
 /**
- * Preview de la pieza: dibuja el MISMO renderer que el PNG (`HeroOffer`) a su tamaño de diseño (1920 × 1080, 1080 × 1350 o
+ * Preview de la pieza: dibuja el MISMO renderer que el PNG (`OfferArtwork`) a su tamaño de diseño (1920 × 1080, 1080 × 1350 o
  * 1080 × 1920) y lo escala con `transform` al ancho disponible, sin scroll interno ni recortes. Cambiar de formato no crea otro
  * contenido: es la misma pieza (`model`) con otra composición.
  */
@@ -45,7 +45,7 @@ export function ArtworkPreview({ model, format, maxHeightVh = 72 }: { model: Off
   >
     <style dangerouslySetInnerHTML={{ __html: FONT_FACE_CSS }} />
     <div style={{ position: "absolute", left: 0, top: 0, width: spec.width, height: spec.height, transform: `scale(${String(scale)})`, transformOrigin: "top left" }}>
-      <HeroOffer format={format} model={model} />
+      <OfferArtwork format={format} model={model} />
     </div>
   </div>;
 }

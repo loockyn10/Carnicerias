@@ -1,4 +1,6 @@
-import { createArtworkUploadPathAction, registerArtworkPhotoAction, type ArtworkPhotoState } from "../app/admin/products/artwork/actions";
+import {
+  createArtworkLogoUploadPathAction, createArtworkUploadPathAction, registerArtworkLogoAction, registerArtworkPhotoAction, type ArtworkPhotoState, type BrandingLoadResult
+} from "../app/admin/products/artwork/actions";
 import {
   ARTWORK_BUCKET, MAX_PHOTO_BYTES, PHOTO_SIZE_ERROR, planPhoto, type StoredPhotoType
 } from "./artwork-photo";
@@ -68,4 +70,19 @@ export async function uploadArtworkPhoto(productId: string, file: File): Promise
   const { error } = await createClient().storage.from(ARTWORK_BUCKET).upload(target.path, prepared.blob, { contentType: prepared.type, upsert: false });
   if (error) return { error: `No se pudo subir la foto: ${error.message}` };
   return registerArtworkPhotoAction(productId, target.path);
+}
+
+/** Sube el logo de la organización a Storage (carpeta `<org>/branding/`) y lo registra. Mismas reglas de formato y peso que la foto. */
+export async function uploadArtworkLogo(file: File, branchId: string | null): Promise<BrandingLoadResult> {
+  let prepared: PreparedPhoto;
+  try {
+    prepared = await preparePhoto(file);
+  } catch (error) {
+    return { kind: "error", message: error instanceof Error ? error.message : "No se pudo preparar el logo" };
+  }
+  const target = await createArtworkLogoUploadPathAction(prepared.type);
+  if (target.error || !target.path) return { kind: "error", message: target.error ?? "No se pudo preparar la subida" };
+  const { error } = await createClient().storage.from(ARTWORK_BUCKET).upload(target.path, prepared.blob, { contentType: prepared.type, upsert: false });
+  if (error) return { kind: "error", message: `No se pudo subir el logo: ${error.message}` };
+  return registerArtworkLogoAction(target.path, branchId);
 }

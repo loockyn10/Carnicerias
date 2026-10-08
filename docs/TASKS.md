@@ -2,15 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
-## P0 — Cartelería «Producto protagonista»: aplicar y probar (acción del usuario)
+## P0 — Cartelería «Piezas» (protagonista + collage + identidad): aplicar y probar (acción del usuario)
 
-Implementado 2026-10-08 (D-074). **Migración pendiente: `202610080071_product_artwork_photos.sql`** (bucket privado de Storage + tabla nueva vacía + 4 RPC + políticas de `storage.objects`; no toca nada existente). **No incluye logo ni fotos reales:** la marca es texto y las muestras del sprint usan fotos sintéticas.
+Implementado 2026-10-08 y 2026-10-09 (D-074, D-075). **Migraciones pendientes: `202610080071_product_artwork_photos.sql`** (bucket privado de Storage + tabla de fotos + 4 RPC + políticas de `storage.objects`) **y `202610090072_artwork_branding.sql`** (tabla del logo + `branches.phone`/`city` + 4 RPC; aditiva, no toca nada existente). **Las muestras del sprint usan fotos y un logo sintéticos:** el logo real y las fotos las sube el usuario.
 
-1. `supabase db push --dry-run` (debe listar sólo las pendientes: 071 y, si no se aplicaron, 069/070) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel). Sin dependencias nuevas ni variables de entorno. Primera vez con Storage en este proyecto: confirmar en el panel de Supabase que existe el bucket `product-artwork` (privado, 5 MB).
-2. Productos → Administrar un producto → **Foto para cartelería** → subir una foto (PNG recortado con fondo transparente o JPG con fondo blanco). Probar también un WebP (se convierte a PNG) y una foto de celular grande (se reduce).
-3. Productos → **Cartelería → Piezas**: elegir el producto y la sucursal (Central), mirar TV / Feed / Story y descargar **Feed PNG** y **Story PNG**. Comprobar contra el POS de esa sucursal: precio igual, «llevando 3 unidades» y precio normal sólo donde hay promoción, `$ X/kg` en productos por peso. Abrir los PNG en el celular y mandar la Story por WhatsApp Estado para ver las zonas seguras.
-4. Cambiar el precio de un producto y volver a generar: la pieza debe salir con el precio nuevo (no se guarda nada).
-5. Pendiente de producto (Sprint 2+): logo/wordmark real, teléfono de contacto (hoy no hay dónde cargarlo), historial de exportaciones (el `snapshot` ya se arma, falta persistirlo), slideshow de piezas en TV, grillas de 4 productos, mayorista, recorte automático de fondo.
+1. `supabase db push --dry-run` (debe listar sólo las pendientes: 071, 072 y, si no se aplicaron, 069/070) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel). Sin dependencias nuevas ni variables de entorno. Primera vez con Storage en este proyecto: confirmar en el panel de Supabase que existe el bucket `product-artwork` (privado, 5 MB).
+2. Productos → **Cartelería → Piezas → Configurar identidad**: subir el **logo** de Super Ofertas (PNG transparente; si es apaisado se acuesta en la franja) y, con cada sucursal elegida, cargar **teléfono, dirección y ciudad** (p. ej. 3496-448808 · Güemes 2180 · Esperanza, Santa Fe). Comprobar que cada sucursal imprime lo suyo.
+3. Productos → Administrar un producto → **Foto para cartelería** → subir la foto de cada producto (PNG recortado con fondo transparente o JPG con fondo blanco). Probar también un WebP (se convierte a PNG) y una foto de celular grande (se reduce).
+4. **Producto protagonista:** elegir el producto y la sucursal (Central), mirar TV / Feed / Story y descargar **Feed PNG** y **Story PNG**. Comprobar contra el POS de esa sucursal: precio igual, «llevando 3 unidades» y precio normal sólo donde hay promoción, `$ X/kg` en productos por peso.
+5. **Collage:** elegir «Collage», agregar 2 a 5 productos (probar 2, 3, 4 y 5; reordenar con ↑ ↓; uno sin foto debe avisar), titular «OFERTAS DE POLLO» / «X MAYOR», y descargar Feed y Story. Abrir los PNG en el celular y mandar la Story por WhatsApp Estado para ver las zonas seguras y la legibilidad de los precios.
+6. Cambiar el precio de un producto y volver a generar: la pieza debe salir con el precio nuevo (no se guarda nada).
+7. Pendiente de producto (Sprint 2+): historial de exportaciones (el `snapshot` ya se arma, falta persistirlo), slideshow de piezas/collage en TV, mayorista, recorte automático de fondo; si hace falta, mostrar teléfono/ciudad también en el formulario de «Sucursales».
 
 ## P0 — Etiquetas en lote: aplicar y probar con papel (acción del usuario)
 

@@ -10,12 +10,21 @@ vi.mock("next/link", () => ({ default: ({ href, children, ...rest }: { href: str
 vi.mock("../app/admin/actions", () => ({ searchProductsAction: () => Promise.resolve([]) }));
 vi.mock("../app/admin/products/artwork/actions", () => ({
   loadArtworkAction: () => Promise.resolve({ kind: "not_found" }),
+  loadCollageAction: () => Promise.resolve({ kind: "error", message: "x" }),
+  loadBrandingAction: () => new Promise(() => undefined),
+  removeArtworkLogoAction: () => Promise.resolve({ kind: "error", message: "x" }),
+  saveBranchContactAction: () => Promise.resolve({ kind: "error", message: "x" }),
+  registerArtworkLogoAction: () => Promise.resolve({ kind: "error", message: "x" }),
+  createArtworkLogoUploadPathAction: () => Promise.resolve({ path: "x" }),
   getArtworkPhotoAction: () => Promise.resolve({ url: null }),
   removeArtworkPhotoAction: () => Promise.resolve({ url: null }),
   registerArtworkPhotoAction: () => Promise.resolve({ url: null }),
   createArtworkUploadPathAction: () => Promise.resolve({ path: "x" })
 }));
-vi.mock("../lib/artwork-photo-client", () => ({ uploadArtworkPhoto: () => Promise.resolve({ url: null }) }));
+vi.mock("../lib/artwork-photo-client", () => ({
+  uploadArtworkPhoto: () => Promise.resolve({ url: null }),
+  uploadArtworkLogo: () => Promise.resolve({ kind: "error", message: "x" })
+}));
 
 const branches = [{ id: "b1", name: "Central", active: true }, { id: "b2", name: "Avenida", active: true }, { id: "b3", name: "Vieja", active: false }];
 
@@ -38,7 +47,24 @@ describe("ArtworkWorkspace (Cartelería → Piezas)", () => {
   it("titular con OFERTA por defecto y los presets pedidos", () => {
     expect(html).toContain('value="OFERTA"');
     for (const preset of ["OFERTA", "X MAYOR", "IMPERDIBLE", "ESPECIAL"]) expect(html).toContain(`>${preset}</button>`);
-    expect(html).toContain('maxLength="16"');
+    expect(html).toContain('maxLength="20"');
+  });
+
+  it("selector de tipo de pieza: Producto protagonista (elegido) y Collage", () => {
+    expect(html).toContain("Tipo de pieza");
+    expect(html).toMatch(/aria-pressed="true"[^>]*data-testid="template-hero"|data-testid="template-hero"[^>]*aria-pressed="true"/);
+    expect(html).toMatch(/aria-pressed="false"[^>]*data-testid="template-collage"|data-testid="template-collage"[^>]*aria-pressed="false"/);
+    expect(html).toContain(">Producto protagonista<");
+    expect(html).toContain(">Collage<");
+    // Con «Producto protagonista» no se ve la lista de productos del collage.
+    expect(html).not.toContain('data-testid="collage-products"');
+  });
+
+  it("botón compacto «Configurar identidad» (deshabilitado hasta que se lea la identidad); la identidad no ocupa la pantalla", () => {
+    expect(html).toMatch(/data-testid="open-identity"[^>]*disabled|disabled[^>]*data-testid="open-identity"/);
+    expect(html).toContain("Configurar identidad");
+    expect(html).not.toMatch(/name="(phone|address|city)"/);
+    expect(html).not.toContain('data-testid="identity-modal"');
   });
 
   it("NO hay ningún campo para escribir precios", () => {

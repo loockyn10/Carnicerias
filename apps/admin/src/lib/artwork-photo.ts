@@ -75,3 +75,17 @@ export function isValidPhotoPath(path: unknown, organizationId: string, productI
   const match = PATH_PATTERN.exec(path);
   return match !== null && match[1] === organizationId.toLowerCase() && match[2] === productId.toLowerCase();
 }
+
+const LOGO_PATH_PATTERN = new RegExp(`^(${UUID_PART})/branding/${UUID_PART}\\.(jpg|png)$`);
+
+/** `<organización>/branding/<uuid>.<ext>`: el logo vive en la carpeta `branding` de la organización (mismo bucket y mismas políticas). */
+export function buildLogoPath(organizationId: string, fileId: string, type: StoredPhotoType): string {
+  return `${organizationId}/branding/${fileId}.${extensionFor(type)}`.toLowerCase();
+}
+
+/** ¿La ruta es el logo de ESTA organización? */
+export function isValidLogoPath(path: unknown, organizationId: string): path is string {
+  if (typeof path !== "string") return false;
+  const match = LOGO_PATH_PATTERN.exec(path);
+  return match !== null && match[1] === organizationId.toLowerCase();
+}

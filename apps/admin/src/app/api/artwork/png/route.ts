@@ -5,11 +5,11 @@ import { createClient } from "../../../../lib/supabase/server";
 import { getCurrentUser } from "../../../../lib/supabase/current-user";
 
 /**
- * Descarga el PNG de la pieza «Producto protagonista» (D-074): Feed 1080 × 1350 o Story 1080 × 1920.
+ * Descarga el PNG de la pieza «Producto protagonista» o «Collage» (D-074 / D-075): Feed 1080 × 1350 o Story 1080 × 1920.
  *
- * El navegador sólo manda `{ productId, branchId, headline, format }`. El producto, la foto, el precio vigente de la sucursal y la
- * promoción se resuelven acá contra la base con la sesión del usuario (la organización y el permiso los valida la RPC
- * `get_product_artwork`): un precio enviado por el cliente se ignora.
+ * El navegador sólo manda `{ template, productIds, branchId, headline, format }`. Los productos, las fotos, el precio vigente de la
+ * sucursal, la promoción, el logo y el contacto se resuelven acá contra la base con la sesión del usuario (la organización y el
+ * permiso los valida cada RPC: `get_product_artwork`, `get_artwork_branding`): un precio enviado por el cliente se ignora.
  */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,6 +44,11 @@ export async function POST(request: Request) {
   const deps: ArtworkExportDeps = {
     getFacts: async (productId, branchId) => {
       const { data, error } = await supabase.rpc("get_product_artwork", { p_product_id: productId, ...(branchId ? { p_branch_id: branchId } : {}) });
+      if (error) throw new ArtworkExportError(error.code === "42501" ? 403 : 500, error.message);
+      return data;
+    },
+    getBranding: async (branchId) => {
+      const { data, error } = await supabase.rpc("get_artwork_branding", branchId ? { p_branch_id: branchId } : {});
       if (error) throw new ArtworkExportError(error.code === "42501" ? 403 : 500, error.message);
       return data;
     },

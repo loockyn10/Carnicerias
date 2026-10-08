@@ -40,6 +40,20 @@ describe("wrapLines", () => {
     expect(lines.join(" ")).toBe("HAMBURGUESA DE CARNE VACUNA CONGELADA PREMIUM");
   });
 
+  it("«X 3 KG», «X 2» y «250 GR» no se separan: ni la X ni el número quedan solos al final de un renglón", () => {
+    // Con este ancho, una partición por palabras dejaría «PECHUGA ENTERA X» arriba y «3 KG» abajo.
+    const width = textWidth("PECHUGA ENTERA X", 60) + 4;
+    expect(wrapLines("PECHUGA ENTERA X 3 KG", 60, width)).toEqual(["PECHUGA ENTERA", "X 3 KG"]);
+    expect(wrapLines("FILET DE PECHUGA X 2 KG", 60, textWidth("FILET DE PECHUGA X", 60) + 4)).toEqual(["FILET DE PECHUGA", "X 2 KG"]);
+    expect(wrapLines("MAYONESA HELLMANNS 250 GR", 60, textWidth("MAYONESA HELLMANNS 250", 60) + 4)).toEqual(["MAYONESA HELLMANNS", "250 GR"]);
+  });
+
+  it("si el grupo entero no entra en la caja se vuelve a separar (nunca desborda)", () => {
+    const lines = wrapLines("X 3 KG", 100, textWidth("X 3", 100) + 2);
+    for (const line of lines) expect(textWidth(line, 100)).toBeLessThanOrEqual(textWidth("X 3", 100) + 2);
+    expect(lines.join(" ")).toBe("X 3 KG");
+  });
+
   it("una palabra más ancha que la caja se parte por letras (nunca desborda)", () => {
     const lines = wrapLines("ELECTROENCEFALOGRAFISTA", 100, 400);
     expect(lines.length).toBeGreaterThan(1);

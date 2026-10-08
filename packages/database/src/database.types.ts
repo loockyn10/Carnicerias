@@ -438,31 +438,37 @@ export type Database = {
         Row: {
           active: boolean
           address: string | null
+          city: string | null
           code: string
           created_at: string
           id: string
           name: string
           organization_id: string
+          phone: string | null
           updated_at: string
         }
         Insert: {
           active?: boolean
           address?: string | null
+          city?: string | null
           code: string
           created_at?: string
           id?: string
           name: string
           organization_id: string
+          phone?: string | null
           updated_at?: string
         }
         Update: {
           active?: boolean
           address?: string | null
+          city?: string | null
           code?: string
           created_at?: string
           id?: string
           name?: string
           organization_id?: string
+          phone?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -1377,6 +1383,57 @@ export type Database = {
           result?: string
         }
         Relationships: []
+      }
+      organization_artwork_logos: {
+        Row: {
+          content_type: string
+          created_at: string
+          created_by: string | null
+          height_px: number
+          organization_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at: string
+          width_px: number
+        }
+        Insert: {
+          content_type: string
+          created_at?: string
+          created_by?: string | null
+          height_px: number
+          organization_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at?: string
+          width_px: number
+        }
+        Update: {
+          content_type?: string
+          created_at?: string
+          created_by?: string | null
+          height_px?: number
+          organization_id?: string
+          size_bytes?: number
+          storage_path?: string
+          updated_at?: string
+          width_px?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_artwork_logos_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_artwork_logos_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       organization_cash_discounts: {
         Row: {
@@ -4372,6 +4429,7 @@ export type Database = {
         Returns: undefined
       }
       get_admin_dashboard: { Args: { p_branch_id?: string }; Returns: Json }
+      get_artwork_branding: { Args: { p_branch_id?: string }; Returns: Json }
       get_branch_carry_plan: {
         Args: { p_branch_id?: string }
         Returns: {
@@ -4844,6 +4902,7 @@ export type Database = {
         Args: { p_branch_id: string; p_device_id: string; p_label?: string }
         Returns: Json
       }
+      remove_organization_artwork_logo: { Args: never; Returns: Json }
       remove_product_artwork_photo: {
         Args: { p_product_id: string }
         Returns: Json
@@ -5060,6 +5119,10 @@ export type Database = {
         Args: { p_active: boolean; p_branch_id: string }
         Returns: undefined
       }
+      set_branch_artwork_contact: {
+        Args: { p_address: string; p_branch_id: string; p_city: string; p_phone: string }
+        Returns: Json
+      }
       set_branch_products: {
         Args: {
           p_branch_id: string
@@ -5104,6 +5167,10 @@ export type Database = {
           p_require_verified_digital_payments?: boolean
         }
         Returns: string
+      }
+      set_organization_artwork_logo: {
+        Args: { p_height_px: number; p_storage_path: string; p_width_px: number }
+        Returns: Json
       }
       set_pos_device_status: {
         Args: {
