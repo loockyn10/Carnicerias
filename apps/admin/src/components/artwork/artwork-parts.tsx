@@ -207,10 +207,12 @@ export function fitBadge(item: OfferItem, rect: { w: number; h: number }, maxPri
   return geometry;
 }
 
-export function PriceBadge({ rect, item, maxPriceSize, conditionMaxSize }: { rect: Rect; item: OfferItem; maxPriceSize: number; conditionMaxSize: number }) {
+export function PriceBadge({ rect, item, maxPriceSize, conditionMaxSize, align = "center" }: {
+  rect: Rect; item: OfferItem; maxPriceSize: number; conditionMaxSize: number; align?: "start" | "center" | "end";
+}) {
   const geometry = fitBadge(item, rect, maxPriceSize, conditionMaxSize);
   const condition = item.promotionCondition;
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center" }}>
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: align === "start" ? "flex-start" : align === "end" ? "flex-end" : "center" }}>
     <div style={{
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", width: Math.min(geometry.width, rect.w), height: geometry.height,
       background: PRICE_BADGE.color, borderRadius: Math.round(geometry.height * PRICE_BADGE.radiusRatio)
