@@ -28,11 +28,11 @@ Implementado 2026-10-07 (D-073). **Migración pendiente: `202610070070_product_l
 
 Implementado 2026-10-07 (D-072). **Migración pendiente: `202610070069_digital_signage.sql`** (tablas nuevas vacías; no toca nada existente).
 
-1. `supabase db push --dry-run` (debe listar sólo la 069) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel).
+1. `supabase db push --dry-run` (debe listar la 069 y la **`202610100073_signage_artwork_media.sql`**, que agrega foto y logo al televisor; incluye una política de lectura anónima de Storage limitada a lo que una pantalla habilitada publica, ver D-076) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel).
 2. Productos → Cartelería → crear la pantalla (nombre + sucursal) y **copiar el enlace en ese momento** (no se vuelve a mostrar; si se pierde: «Regenerar enlace»). Cargar 3–4 productos, «Guardar y publicar» y abrir el enlace en el navegador del TV (o «Abrir vista TV» en la PC).
 3. Verificar en el TV: precio igual al del POS de esa sucursal, «llevando 3 unidades» sólo donde corresponde, rotación en bucle y que un cambio de precio/orden aparece solo en < 1 min.
 4. Cortar el Wi-Fi del TV 1–2 min: debe seguir mostrando las ofertas sin error y recuperarse solo.
-5. Pendiente de producto (no urgente): usar la foto y las piezas de D-074 en el carrusel del TV, más plantillas, promociones `PACK_FIXED_TOTAL`/packs en la cartelería y permiso propio.
+5. Comprobar en el TV (D-076): las diapositivas alternan 4 disposiciones con el logo y la foto de cada producto (los productos sin foto muestran el panel de reemplazo). Pendiente de producto (no urgente): collages de D-075 en el carrusel del TV, titular propio por diapositiva, más plantillas, promociones `PACK_FIXED_TOTAL`/packs en la cartelería y permiso propio.
 
 ## P0 — Precio por margen global: aplicar, configurar y probar (acción del usuario)
 

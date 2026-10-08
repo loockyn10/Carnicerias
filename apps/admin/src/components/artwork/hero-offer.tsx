@@ -1,11 +1,12 @@
 import { hasPromotion, type OfferArtworkModel, type OfferItem } from "../../lib/artwork";
 import { contactRect, contentColumn, verticalBounds, type Rect } from "../../lib/artwork-layout";
-import { BAND_WIDTH, CONTENT_GAP, CONTENT_RIGHT_MARGIN, ARTWORK_FORMATS, type ArtworkFormat } from "../../lib/artwork-tokens";
+import type { ArtworkFormat } from "../../lib/artwork-tokens";
 import { BrandBand, Canvas, ContactBlock, Headline, NameBlock, NormalPriceLine, PhotoBlock, PriceBadge } from "./artwork-parts";
+import { TvOfferSlide } from "./tv-offer";
 
 /**
- * Renderers de la plantilla «Producto protagonista» (D-074, identidad D-075): TvHeroOffer (1920 × 1080), FeedHeroOffer
- * (1080 × 1350) y StoryHeroOffer (1080 × 1920). Los tres leen el MISMO `OfferArtworkModel` (un único ítem) y comparten con el
+ * Renderers de la plantilla «Producto protagonista» (D-074, identidad D-075): FeedHeroOffer (1080 × 1350) y StoryHeroOffer
+ * (1080 × 1920); la versión TV (1920 × 1080) es `TvOfferSlide` (`tv-offer.tsx`, cuatro disposiciones). Todos leen el MISMO `OfferArtworkModel` (un único ítem) y comparten con el
  * collage la franja verde con el logo, el titular, la pastilla de precio y el contacto (`artwork-parts.tsx`); sólo cambia la
  * composición. En TV el contacto no se muestra (prioridad: producto, imagen, precio, condición y marca).
  */
@@ -58,32 +59,9 @@ export function StoryHeroOffer({ model }: { model: OfferArtworkModel }) {
   return <ColumnHeroOffer format="story" model={model} sizes={STORY_SIZES} />;
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// TV 1920 × 1080 (16:9)
-// ---------------------------------------------------------------------------------------------------------------------
-
-export function TvHeroOffer({ model }: { model: OfferArtworkModel }) {
-  const item = heroItem(model);
-  const { height, width } = ARTWORK_FORMATS.tv;
-  const promo = hasPromotion(item);
-  const left = BAND_WIDTH.tv + CONTENT_GAP;
-  const photo: Rect = { x: left, y: 50, w: 870, h: height - 100 };
-  const rightX = left + photo.w + 40;
-  const right = { x: rightX, w: width - rightX - CONTENT_RIGHT_MARGIN };
-  const pill: Rect = promo ? { x: right.x, y: 570, w: right.w, h: 350 } : { x: right.x, y: 590, w: right.w, h: 310 };
-  return <Canvas format="tv" testId="artwork-tv">
-    <BrandBand branding={model.branding} format="tv" />
-    <PhotoBlock imageUrl={item.imageUrl} rect={photo} />
-    <Headline color={model.branding.colors.red} maxSize={140} rect={{ x: right.x, y: 60, w: right.w, h: 150 }} text={model.headline} />
-    <NameBlock item={item} maxLines={4} maxSize={96} minSize={44} rect={{ x: right.x, y: 230, w: right.w, h: 310 }} />
-    <PriceBadge conditionMaxSize={48} item={item} maxPriceSize={230} rect={pill} />
-    <NormalPriceLine item={item} rect={{ x: right.x, y: pill.y + pill.h + 14, w: right.w, h: 50 }} size={40} />
-  </Canvas>;
-}
-
 /** El renderer del protagonista que corresponde a un formato (misma pieza, tres composiciones). */
-export function HeroOffer({ format, model }: { format: ArtworkFormat; model: OfferArtworkModel }) {
-  if (format === "tv") return <TvHeroOffer model={model} />;
+export function HeroOffer({ format, model, slideIndex = 0 }: { format: ArtworkFormat; model: OfferArtworkModel; slideIndex?: number }) {
+  if (format === "tv") return <TvOfferSlide model={model} slideIndex={slideIndex} />;
   if (format === "story") return <StoryHeroOffer model={model} />;
   return <FeedHeroOffer model={model} />;
 }

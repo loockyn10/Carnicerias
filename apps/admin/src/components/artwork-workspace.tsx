@@ -13,6 +13,7 @@ import {
   MAX_HEADLINE_LENGTH, defaultHeadline, formatsForTemplate, isExportableFormat, type ArtworkFormat, type ArtworkTemplate, type ExportableArtworkFormat
 } from "../lib/artwork-tokens";
 import { ArtworkIdentityModal } from "./artwork-identity-modal";
+import { TV_LAYOUTS } from "../lib/artwork-tv-layouts";
 import { ArtworkPreview } from "./artwork/artwork-preview";
 import { ProductPicker } from "./product-picker";
 
@@ -58,6 +59,7 @@ export function ArtworkWorkspace({ branches, defaultBranchId }: { branches: Artw
   const [branchId, setBranchId] = useState(defaultBranchId);
   const [headline, setHeadline] = useState(defaultHeadline("HERO"));
   const [format, setFormat] = useState<ArtworkFormat>("feed");
+  const [tvVariant, setTvVariant] = useState(0);
   const [hero, setHero] = useState<HeroLoad>({ status: "idle" });
   const [collage, setCollage] = useState<CollageLoad>({ status: "idle" });
   const [brandingState, setBrandingState] = useState<BrandingState>({ status: "loading" });
@@ -308,7 +310,16 @@ export function ArtworkWorkspace({ branches, defaultBranchId }: { branches: Artw
         {loadError ? <p className="rounded-lg bg-red-50 p-4 text-red-800" role="alert">{loadError}</p> : null}
         {built.problem && !model ? <p className="rounded-lg bg-amber-50 p-4 text-amber-900" data-testid="artwork-unavailable" role="alert">{built.problem}</p> : null}
         {model ? <div style={{ opacity: loading ? 0.5 : 1 }}>
-          <ArtworkPreview format={shownFormat} model={model} />
+          {shownFormat === "tv" ? <div aria-label="Disposición de la diapositiva de TV" className="mb-2 flex flex-wrap items-center gap-2 text-sm text-stone-600" data-testid="tv-variants" role="group">
+            <span>Disposición:</span>
+            {TV_LAYOUTS.map((layout, index) => <button
+              aria-pressed={tvVariant === index}
+              className={`rounded-md border px-3 py-1 font-bold ${tvVariant === index ? "border-rose-800 bg-rose-800 text-white" : "border-stone-300 bg-white text-stone-700 hover:bg-stone-50"}`}
+              data-testid={`tv-variant-${layout.id}`} key={layout.id} onClick={() => { setTvVariant(index); }} type="button"
+            >{String.fromCharCode(65 + index)}</button>)}
+            <span className="text-xs text-stone-500">En el televisor se alternan solas, una por diapositiva.</span>
+          </div> : null}
+          <ArtworkPreview format={shownFormat} model={model} slideIndex={tvVariant} />
           {missingPhotos > 0 ? <p className="mt-3 text-sm text-amber-800" data-testid="artwork-no-photo">
             {template === "HERO"
               ? <>Este producto no tiene foto comercial: la pieza usa un panel de reemplazo. Subila desde <strong>Administrar producto → Foto para cartelería</strong>.</>

@@ -3,7 +3,7 @@ import { formatCurrency } from "@carnicerias/business-logic";
 import { emptyArtworkBranding, type ArtworkBranding } from "./artwork-branding";
 import { sanitizeGlyphs } from "./artwork-text";
 import { COLLAGE_MAX_ITEMS, COLLAGE_MIN_ITEMS, DEFAULT_COLLAGE_HEADLINE, DEFAULT_HEADLINE, MAX_HEADLINE_LENGTH, type ArtworkTemplate } from "./artwork-tokens";
-import { buildOfferSlide, parseSlideFacts, splitPrice, type OfferPrice, type SlideUnavailableReason } from "./signage";
+import { buildOfferSlide, parseSlideFacts, type OfferPrice, type OfferSlideData, type SignageView, type SlideUnavailableReason } from "./signage";
 
 /**
  * Piezas de cartelería (D-074 «Producto protagonista», D-075 «Collage»): de los HECHOS que entrega `get_product_artwork` al modelo
@@ -165,19 +165,40 @@ export function parseArtworkFacts(payload: unknown): ArtworkFacts | null {
   const offer = facts ? buildOfferSlide(facts) : null;
   if (!facts || !offer) return { productId, productName, available: false, unavailableReason: "NO_PRICE", item: null, branch, photo, branchId };
 
-  const regularPrice = offer.promo ? splitPrice(facts.listPriceCents) : offer.price;
+  return { productId, productName, available: true, unavailableReason: null, photo, branchId, branch, item: slideToItemBase(productId, offer) };
+}
+
+/**
+ * Una oferta de cartelería (`buildOfferSlide`, el motor de pricing) → el ítem que dibujan las piezas. ES LA MISMA conversión para
+ * el producto de una pieza y para cada diapositiva del televisor: sin promoción, sólo el precio vigente; con promoción, precio
+ * promocional + condición + precio normal. No calcula nada.
+ */
+export function slideToItemBase(productId: string, offer: OfferSlideData): Omit<OfferItem, "imageUrl"> {
   return {
-    productId, productName, available: true, unavailableReason: null, photo, branchId, branch,
-    item: {
-      productId,
-      productName: sanitizeGlyphs(offer.name.toLocaleUpperCase("es-AR")),
-      unitType: facts.unitType,
-      regularPrice,
-      promotionalPrice: offer.promo ? offer.price : null,
-      promotionCondition: offer.promo ? offer.condition : null,
-      priceSuffix: offer.priceSuffix,
-      unitLabel: facts.unitType === "WEIGHT" ? "X KG" : null
-    }
+    productId,
+    productName: sanitizeGlyphs(offer.name.toLocaleUpperCase("es-AR")),
+    unitType: offer.unitType,
+    regularPrice: offer.promo ? offer.regularPrice : offer.price,
+    promotionalPrice: offer.promo ? offer.price : null,
+    promotionCondition: offer.promo ? offer.condition : null,
+    priceSuffix: offer.priceSuffix,
+    unitLabel: offer.unitType === "WEIGHT" ? "X KG" : null
+  };
+}
+
+export function slideToOfferItem(productId: string, offer: OfferSlideData, imageUrl: string | null): OfferItem {
+  return { ...slideToItemBase(productId, offer), imageUrl };
+}
+
+/** La diapositiva del televisor como pieza «Producto protagonista»: el mismo modelo que Piezas (titular por defecto, sin contacto). */
+export function slideToArtworkModel(view: Pick<SignageView, "branding">, offer: OfferSlideData): OfferArtworkModel {
+  return {
+    type: "HERO",
+    headline: normalizeHeadline(null),
+    branch: null,
+    // El televisor no muestra el contacto de la sucursal (prioridad: marca, producto, foto y precio).
+    branding: { ...view.branding, contact: null },
+    items: [slideToOfferItem(offer.key, offer, offer.imageUrl)]
   };
 }
 

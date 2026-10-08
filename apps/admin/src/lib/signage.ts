@@ -1,8 +1,10 @@
 import { applyWeightDiscount, calculateBranchPromotionLinePricing, formatCurrency } from "@carnicerias/business-logic";
 
+import { buildArtworkBranding, emptyArtworkBranding, parseArtworkBrandingFacts, type ArtworkBranding } from "./artwork-branding";
+
 /**
  * Cartelería digital (D-072): de los HECHOS que entrega la base (`get_signage_display` / `get_signage_display_admin`) a lo que se
- * dibuja en el televisor. Puro: decide QUÉ texto lleva cada oferta; el dibujo vive en `components/offer-slide.tsx`.
+ * dibuja en el televisor. Puro: decide QUÉ texto lleva cada oferta; el dibujo vive en `components/artwork/tv-offer.tsx` (la misma identidad que las piezas).
  *
  * No hay fórmula de descuento propia: el precio «llevando N unidades» sale del mismo motor que usa el POS y la etiqueta de góndola
  * (`calculateBranchPromotionLinePricing`) y el de los tramos de peso de `applyWeightDiscount`. El precio de lista y la regla de la
@@ -34,8 +36,12 @@ export interface OfferSlideData {
   secondary: string | null;
   /** true cuando hay una promoción real: la plantilla la resalta. */
   promo: boolean;
-  /** Factor (0,5–1) que achica el nombre largo para que entre sin recortarse. */
-  nameFit: number;
+  /** Por kilo o por unidad (la pieza imprime «X KG» sólo en los de peso). */
+  unitType: "UNIT" | "WEIGHT";
+  /** Precio de lista vigente (el «precio normal» que se muestra junto a una promoción). */
+  regularPrice: OfferPrice;
+  /** Foto comercial del producto como URL que el televisor puede pedir; null = sin foto (la pieza dibuja su reemplazo). */
+  imageUrl: string | null;
 }
 
 export type SignageStatus = "ACTIVE" | "DISABLED";
@@ -45,6 +51,8 @@ export interface SignageView {
   status: SignageStatus;
   slideDurationSeconds: number;
   organizationName: string;
+  /** Identidad de las piezas (franja verde + logo de la organización). Sin contacto: el televisor no lo muestra. */
+  branding: ArtworkBranding;
   slides: OfferSlideData[];
 }
 
@@ -56,32 +64,6 @@ export const MAX_SIGNAGE_SLIDES = 50;
 export function clampSlideSeconds(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SLIDE_SECONDS;
   return Math.min(MAX_SLIDE_SECONDS, Math.max(MIN_SLIDE_SECONDS, Math.round(value)));
-}
-
-/** ~22 caracteres entran a tamaño completo; más largo ⇒ se achica hasta un piso de 0,5 (después se corta a 3 líneas). */
-const NAME_CHARS_AT_FULL_SIZE = 22;
-const NAME_MIN_FIT = 0.5;
-
-export function nameFitFor(name: string): number {
-  const length = name.trim().length;
-  if (length <= NAME_CHARS_AT_FULL_SIZE) return 1;
-  return Math.max(NAME_MIN_FIT, Math.round((NAME_CHARS_AT_FULL_SIZE / length) * 100) / 100);
-}
-
-/**
- * Factor (0,4–1) que achica TODO el bloque del precio si es muy largo. Estima el ancho en «em» del tamaño base (dígito ≈ 0,6 em,
- * separador de miles ≈ 0,3 em, «$» ≈ 0,3 em, centavos ≈ 0,5 em, sufijo «/ KG» ≈ 1 em) y lo ajusta a un máximo de 4,6 em (~1.650 px a 360 px).
- */
-const PRICE_MAX_TENTHS_EM = 46;
-const PRICE_MIN_FIT = 0.4;
-
-export function priceFitFor(price: OfferPrice, suffix: string | null): number {
-  const digits = price.whole.replace(/\D/g, "").length;
-  const separators = price.whole.length - digits;
-  // En décimas de «em» (enteros: sin errores de coma flotante en el borde).
-  const tenths = digits * 6 + separators * 3 + 3 + (price.cents ? 5 : 0) + (suffix ? 10 : 0);
-  if (tenths <= PRICE_MAX_TENTHS_EM) return 1;
-  return Math.max(PRICE_MIN_FIT, Math.round((PRICE_MAX_TENTHS_EM / tenths) * 100) / 100);
 }
 
 /** "$ 1.729,75" → { whole: "1.729", cents: "75" }; "$ 2.450" → { whole: "2.450", cents: null }. Usa el mismo `formatCurrency` que el resto del sistema. */
@@ -122,9 +104,8 @@ export interface SlideFacts {
   weightTiers: WeightTierFact[];
 }
 
-function finish(facts: SlideFacts, data: Omit<OfferSlideData, "key" | "name" | "nameFit">): OfferSlideData {
-  const name = facts.name.trim();
-  return { ...data, key: facts.key, name, nameFit: nameFitFor(name) };
+function finish(facts: SlideFacts, data: Omit<OfferSlideData, "key" | "name" | "unitType" | "regularPrice" | "imageUrl">): OfferSlideData {
+  return { ...data, key: facts.key, name: facts.name.trim(), unitType: facts.unitType, regularPrice: splitPrice(facts.listPriceCents), imageUrl: null };
 }
 
 /** Una oferta por producto. `null` = el producto no se puede mostrar (sin precio válido): el reproductor lo saltea. */
@@ -226,8 +207,45 @@ export function parseSlideFacts(raw: unknown): SlideFacts | null {
   };
 }
 
+/** Referencia a un archivo de imagen de Storage (la foto de un producto o el logo). */
+export interface MediaRef {
+  storagePath: string;
+  contentType: "image/jpeg" | "image/png";
+}
+
+/**
+ * Cómo se llega a las imágenes desde el navegador de quien mira (el televisor o el Admin): las resuelve cada superficie (ruta
+ * `/api/tv/<token>/media/<id>` en el televisor, la de la sesión en la vista previa). Sin resolvedor no hay imágenes.
+ */
+export interface SignageMedia {
+  photoUrl: (slideKey: string, photo: MediaRef) => string | null;
+  logoUrl: (logo: MediaRef) => string | null;
+}
+
+function parsePhotoRef(raw: unknown): MediaRef | null {
+  if (!isRecord(raw)) return null;
+  const storagePath = asString(raw.storagePath);
+  const contentType = raw.contentType;
+  if (!storagePath || (contentType !== "image/jpeg" && contentType !== "image/png")) return null;
+  return { storagePath, contentType };
+}
+
+/** La referencia de la imagen `id` (id de una diapositiva, o `logo`) dentro del JSON de la base; null si no existe. Sólo sirve rutas de ESA presentación. */
+export function findSignageMedia(payload: unknown, id: string): MediaRef | null {
+  if (!isRecord(payload)) return null;
+  if (id === "logo") {
+    const facts = parseArtworkBrandingFacts({ organizationName: null, logo: payload.logo, branch: null });
+    return facts?.logo ? { storagePath: facts.logo.storagePath, contentType: facts.logo.contentType } : null;
+  }
+  if (!Array.isArray(payload.slides)) return null;
+  for (const raw of payload.slides as unknown[]) {
+    if (isRecord(raw) && raw.slideId === id) return parsePhotoRef(raw.photo);
+  }
+  return null;
+}
+
 /** JSON de `get_signage_display` (o de la vista del Admin) → vista del reproductor. `null` si la base no devolvió una pantalla (token inexistente). */
-export function buildSignageView(payload: unknown): SignageView | null {
+export function buildSignageView(payload: unknown, media?: SignageMedia): SignageView | null {
   if (!isRecord(payload)) return null;
   const status: SignageStatus = payload.status === "ACTIVE" ? "ACTIVE" : "DISABLED";
   const duration = asInteger(payload.slideDurationSeconds);
@@ -238,13 +256,18 @@ export function buildSignageView(payload: unknown): SignageView | null {
       if (isRecord(raw) && raw.available === false) continue;
       const facts = parseSlideFacts(raw);
       const offer = facts ? buildOfferSlide(facts) : null;
-      if (offer) slides.push(offer);
+      if (!offer) continue;
+      const photo = isRecord(raw) ? parsePhotoRef(raw.photo) : null;
+      slides.push({ ...offer, imageUrl: photo && media ? media.photoUrl(offer.key, photo) : null });
     }
   }
+  const brandingFacts = parseArtworkBrandingFacts({ organizationName: payload.organizationName, logo: payload.logo, branch: null });
+  const branding = brandingFacts ? buildArtworkBranding(brandingFacts, brandingFacts.logo && media ? media.logoUrl(brandingFacts.logo) : null) : emptyArtworkBranding();
   return {
     status,
     slideDurationSeconds: duration === null ? DEFAULT_SLIDE_SECONDS : clampSlideSeconds(duration),
     organizationName: asString(payload.organizationName)?.trim() ?? "",
+    branding,
     slides
   };
 }

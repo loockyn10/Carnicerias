@@ -203,11 +203,11 @@ function fontBytes(base64: string): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
-/** Dibuja el modelo en PNG a las dimensiones exactas del formato. Determinista: misma entrada, mismos píxeles. */
-export async function renderArtworkPng(model: OfferArtworkModel, format: ArtworkFormat): Promise<Uint8Array> {
+/** Dibuja el modelo en PNG a las dimensiones exactas del formato. Determinista: misma entrada, mismos píxeles. En TV, `slideIndex` elige la disposición. */
+export async function renderArtworkPng(model: OfferArtworkModel, format: ArtworkFormat, slideIndex = 0): Promise<Uint8Array> {
   if (model.type === "COLLAGE" && format === "tv") throw new Error("El collage no tiene formato TV");
   const spec = ARTWORK_FORMATS[format];
-  const response = new ImageResponse(<OfferArtwork format={format} model={model} />, {
+  const response = new ImageResponse(<OfferArtwork format={format} model={model} slideIndex={slideIndex} />, {
     width: spec.width,
     height: spec.height,
     fonts: [

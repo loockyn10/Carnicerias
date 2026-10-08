@@ -1,9 +1,9 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(105);
+select plan(117);
 
--- Covers 202610070069 (D-072): cartelería digital. Una pantalla = un token (sólo hash) + una lista ordenada de productos. La ÚNICA superficie
+-- Covers 202610070069 (D-072) y 202610100073 (D-076: foto + logo para la TV): cartelería digital. Una pantalla = un token (sólo hash) + una lista ordenada de productos. La ÚNICA superficie
 -- anónima es get_signage_display(token). Los slides no guardan precios: apuntan al producto y el precio se resuelve en cada lectura con el
 -- mismo orden que el POS (precio de la sucursal vigente > global vigente). La matemática de «llevando 3u» NO vive acá (la hace el motor TS).
 
@@ -80,6 +80,13 @@ insert into public.product_weight_discounts (organization_id, product_id, branch
 insert into public.product_weight_discounts (organization_id, product_id, branch_id, minimum_grams, discount_type, discount_value, valid_from, valid_until)
 values ('b2000000-0000-4000-8000-000000000001', 'b5000000-0000-4000-8000-000000000003', null, 9000, 'PERCENTAGE', 5000, now() - interval '3 day', now() - interval '1 day');
 
+-- Identidad de la TV (D-076): foto de Mayonesa, una foto que NO está en ninguna pantalla (producto de otra org) y el logo de SG Org.
+insert into public.product_artwork_photos (product_id, organization_id, storage_path, content_type, size_bytes) values
+  ('b5000000-0000-4000-8000-000000000001', 'b2000000-0000-4000-8000-000000000001', 'b2000000-0000-4000-8000-000000000001/b5000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001.png', 'image/png', 1200),
+  ('b5000000-0000-4000-8000-000000000008', 'b2000000-0000-4000-8000-000000000002', 'b2000000-0000-4000-8000-000000000002/b5000000-0000-4000-8000-000000000008/c1000000-0000-4000-8000-000000000008.jpg', 'image/jpeg', 900);
+insert into public.organization_artwork_logos (organization_id, storage_path, content_type, size_bytes, width_px, height_px)
+values ('b2000000-0000-4000-8000-000000000001', 'b2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001.png', 'image/png', 800, 600, 200);
+
 create table public.t_sg_keep(name text primary key, id uuid, token text);
 grant all on public.t_sg_keep to authenticated, anon;
 create function public.t_sg_tok(p_name text) returns text language sql security definer as $$ select token from public.t_sg_keep where name = p_name $$;
@@ -111,6 +118,10 @@ select ok(not has_function_privilege('anon', 'public.regenerate_signage_token(uu
 select ok(not has_function_privilege('anon', 'public.get_signage_display_admin(uuid)', 'EXECUTE'), 'anonymous cannot read the admin view');
 select ok(not has_function_privilege('anon', 'app_private.signage_payload(uuid,boolean)', 'EXECUTE'), 'the payload helper is not callable by anonymous');
 select ok(not has_function_privilege('authenticated', 'app_private.signage_payload(uuid,boolean)', 'EXECUTE'), 'nor by authenticated sessions');
+select ok(has_function_privilege('anon', 'public.signage_object_is_published(text)', 'EXECUTE'), 'anonymous can ask whether a Storage object is published on a TV (policy helper)');
+select ok(not has_function_privilege('authenticated', 'public.signage_object_is_published(text)', 'EXECUTE'), 'authenticated sessions use their own organization policies, not this one');
+select ok(exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'signage_published_objects_select' and roles = '{anon}' and cmd = 'SELECT'),
+  'the anonymous Storage policy is SELECT-only and anon-only');
 
 -- ---------------------------------------------------------------------------------------------
 -- Permisos de escritura
@@ -183,11 +194,21 @@ select is((public.get_signage_display(public.t_sg_tok('central')) ->> 'slideDura
 select is((select string_agg(s ->> 'name', ' | ' order by ord) from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') with ordinality as t(s, ord)),
   'Aceite Canuelas 900ml | Mayonesa Hellmanns 250gr | Molida vacuna', 'only AVAILABLE slides are delivered (inactive, no price, off category, raw material and expired price are hidden) in order');
 select is(public.get_signage_display(public.t_sg_tok('central')) ->> 'organizationName', 'SG Org', 'the brand name is its own organization');
-select is((select array_agg(k order by k) from jsonb_object_keys(public.get_signage_display(public.t_sg_tok('central'))) k), array['organizationName','slideDurationSeconds','slides','status']::text[], 'the payload has exactly the expected top-level keys (no ids, branch, config or token)');
+select is((select array_agg(k order by k) from jsonb_object_keys(public.get_signage_display(public.t_sg_tok('central'))) k), array['logo','organizationName','slideDurationSeconds','slides','status']::text[], 'the payload has exactly the expected top-level keys (logo reference, no ids, branch, config or token)');
 select is((select array_agg(distinct k order by k) from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s, jsonb_object_keys(s) k),
-  array['bulkDiscountBps','bulkMinimumUnits','listPriceCents','name','slideId','unitType','weightTiers']::text[], 'each slide carries only commercial facts');
+  array['bulkDiscountBps','bulkMinimumUnits','listPriceCents','name','photo','slideId','unitType','weightTiers']::text[], 'each slide carries only commercial facts and its photo reference');
 select ok(public.get_signage_display(public.t_sg_tok('central'))::text !~* 'cost|margin|stock|sale|employee|supplier|123456|765432|sku|SG-0', 'no cost, margin, stock, sales, employee, supplier or SKU leaks into the payload');
 select ok(position('Producto de otra org' in public.get_signage_display(public.t_sg_tok('central'))::text) = 0, 'nothing from another organization appears');
+select is((select s -> 'photo' ->> 'storagePath' from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s where s ->> 'name' like 'Mayonesa%'),
+  'b2000000-0000-4000-8000-000000000001/b5000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001.png', 'a slide carries the path of its product commercial photo');
+select is((select s -> 'photo' ->> 'contentType' from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s where s ->> 'name' like 'Mayonesa%'), 'image/png', 'and its content type');
+select ok((select s -> 'photo' = 'null'::jsonb from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s where s ->> 'name' like 'Aceite%'), 'a product without photo has a null photo (the TV draws its fallback)');
+select is(public.get_signage_display(public.t_sg_tok('central')) -> 'logo' ->> 'storagePath', 'b2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001.png', 'the payload carries the organization logo reference');
+select ok(public.signage_object_is_published('b2000000-0000-4000-8000-000000000001/b5000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001.png'), 'Storage: the photo of a product published on an enabled screen is readable by the TV');
+select ok(public.signage_object_is_published('b2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001.png'), 'Storage: the logo of an organization with an enabled screen is readable by the TV');
+select ok(not public.signage_object_is_published('b2000000-0000-4000-8000-000000000002/b5000000-0000-4000-8000-000000000008/c1000000-0000-4000-8000-000000000008.jpg'), 'Storage: a photo that no screen publishes is NOT readable');
+select ok(not public.signage_object_is_published('b2000000-0000-4000-8000-000000000001/b5000000-0000-4000-8000-000000000002/c1000000-0000-4000-8000-0000000000ff.png'), 'Storage: an unknown path is NOT readable');
+select ok(not public.signage_object_is_published(null), 'Storage: NULL is not readable');
 
 -- Precios y promoción de la sucursal (el motor TS hace la matemática; acá se prueban los HECHOS)
 select is((select s ->> 'listPriceCents' from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s where s ->> 'name' like 'Mayonesa%'), '203500', 'Central: the GLOBAL price applies (no Central override)');

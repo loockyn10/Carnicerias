@@ -153,12 +153,16 @@ export const COLLAGE_IDS = {
   polloEntero: "c5000000-0000-4000-8000-000000000015",
   milaCerdo: "c5000000-0000-4000-8000-000000000016",
   milaVacuna: "c5000000-0000-4000-8000-000000000017",
-  milaPollo: "c5000000-0000-4000-8000-000000000018"
+  milaPollo: "c5000000-0000-4000-8000-000000000018",
+  bondiola: "c5000000-0000-4000-8000-000000000019",
+  choricito: "c5000000-0000-4000-8000-00000000001a",
+  vacio: "c5000000-0000-4000-8000-00000000001b"
 } as const;
 
 const COLLAGE_COLORS: Record<keyof typeof COLLAGE_IDS, readonly [number, number, number]> = {
   pataMuslo: [232, 178, 120], pechuga: [244, 196, 176], filet: [238, 170, 160], alitas: [226, 160, 96], polloEntero: [240, 200, 150],
-  milaCerdo: [214, 170, 110], milaVacuna: [200, 140, 80], milaPollo: [230, 190, 120]
+  milaCerdo: [214, 170, 110], milaVacuna: [200, 140, 80], milaPollo: [230, 190, 120],
+  bondiola: [176, 86, 70], choricito: [190, 96, 60], vacio: [166, 60, 60]
 };
 
 export const COLLAGE_FACTS: Record<keyof typeof COLLAGE_IDS, Facts> = {
@@ -169,7 +173,11 @@ export const COLLAGE_FACTS: Record<keyof typeof COLLAGE_IDS, Facts> = {
   polloEntero: base(COLLAGE_IDS.polloEntero, "2 pollos grandes", "UNIT", 1_999_900, { photo: photo(COLLAGE_IDS.polloEntero) }),
   milaCerdo: base(COLLAGE_IDS.milaCerdo, "Milanesas de cerdo", "UNIT", 3_149_900, { photo: photo(COLLAGE_IDS.milaCerdo) }),
   milaVacuna: base(COLLAGE_IDS.milaVacuna, "Milanesas vacunas", "UNIT", 5_399_900, { photo: photo(COLLAGE_IDS.milaVacuna) }),
-  milaPollo: base(COLLAGE_IDS.milaPollo, "Milanesas de pollo", "UNIT", 3_149_900, { bulkMinimumUnits: 3, bulkDiscountBps: 1_000, photo: photo(COLLAGE_IDS.milaPollo) })
+  milaPollo: base(COLLAGE_IDS.milaPollo, "Milanesas de pollo", "UNIT", 3_149_900, { bulkMinimumUnits: 3, bulkDiscountBps: 1_000, photo: photo(COLLAGE_IDS.milaPollo) }),
+  // Cartelería de TV: cortes de cerdo por kilo (uno con centavos) y, con promoción «llevando 3», las milanesas de pollo.
+  bondiola: base(COLLAGE_IDS.bondiola, "Bondiola de cerdo", "WEIGHT", 1_065_000, { photo: photo(COLLAGE_IDS.bondiola) }),
+  choricito: base(COLLAGE_IDS.choricito, "Choricito de cerdo", "WEIGHT", 1_573_328, { photo: photo(COLLAGE_IDS.choricito) }),
+  vacio: base(COLLAGE_IDS.vacio, "Vacío de cerdo", "WEIGHT", 1_290_000, { photo: photo(COLLAGE_IDS.vacio) })
 };
 
 /** Los productos de los collages de la validación visual (en el orden de la pieza). */

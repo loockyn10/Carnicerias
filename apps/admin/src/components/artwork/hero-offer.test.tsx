@@ -10,7 +10,8 @@ import { ARTWORK_COLORS, ARTWORK_FORMATS, PRICE_BADGE_YELLOW, STORY_SAFE } from 
 import { brandingPayload, type SAMPLE_FACTS } from "../../lib/test-support/artwork-fixtures";
 import { LOGO_URL, brandingFor, brandingWithContact as parseBranch, heroModel } from "../../lib/test-support/artwork-models";
 import { ArtworkPreview } from "./artwork-preview";
-import { FeedHeroOffer, HeroOffer, StoryHeroOffer, TvHeroOffer } from "./hero-offer";
+import { FeedHeroOffer, HeroOffer, StoryHeroOffer } from "./hero-offer";
+import { TvOfferSlide as TvHeroOffer } from "./tv-offer";
 import { OfferArtwork } from "./offer-artwork";
 
 function modelFor(

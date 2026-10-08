@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { requireAdminContext } from "../../../../lib/admin";
 import { buildSignageView, clampSlideSeconds } from "../../../../lib/signage";
+import { signageMediaUrls } from "../../../../lib/signage-media";
 import type { SignageLoadResult } from "../../../../lib/signage-player";
 import { createClient } from "../../../../lib/supabase/server";
 
@@ -86,7 +87,7 @@ export async function loadSignagePreviewAction(displayId: string): Promise<Signa
     const supabase = await createClient();
     const { data, error } = await supabase.rpc("get_signage_display_admin", { p_display_id: displayId });
     if (error) return { kind: "error" };
-    const view = data === null ? null : buildSignageView(data);
+    const view = data === null ? null : buildSignageView(data, signageMediaUrls(`/api/tv-preview/${displayId}`));
     return view ? { kind: "ok", view } : { kind: "not_found" };
   } catch {
     return { kind: "error" };

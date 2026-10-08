@@ -1,23 +1,20 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { OfferSlideData, SignageView } from "../lib/signage";
+import { slideOffer, signageView as view } from "../lib/test-support/signage-fixtures";
 import { DigitalSignagePlayer, DigitalSignageTv, WaitingScreen } from "./digital-signage-player";
 
-const offer = (key: string, name: string, whole: string): OfferSlideData => ({
-  key, variant: "REGULAR", name, price: { whole, cents: null }, priceSuffix: null, condition: "PRECIO UNITARIO", secondary: null, promo: false, nameFit: 1
-});
-const view = (slides: OfferSlideData[], overrides: Partial<SignageView> = {}): SignageView => ({
-  status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Despensa Demo", slides, ...overrides
-});
+const offer = (key: string, name: string, whole: string) => slideOffer(key, name, whole);
+/** El texto visible: sin los bloques <style> (la fuente embebida es base64 y puede contener cualquier secuencia de letras). */
+const visible = (html: string) => html.replace(/<style[\s\S]*?<\/style>/g, "");
 const never = () => new Promise<never>(() => undefined);
 
 describe("DigitalSignagePlayer (render inicial)", () => {
   it("arranca solo mostrando la PRIMERA oferta (sin click ni controles)", () => {
     const html = renderToStaticMarkup(<DigitalSignagePlayer initialView={view([offer("a", "Aceite", "2.450"), offer("b", "Yerba", "3.100")])} loadView={never} />);
-    expect(html).toContain("Aceite");
+    expect(html).toContain("ACEITE");
     expect(html).toContain("2.450");
-    expect(html).not.toContain("Yerba");
+    expect(html).not.toContain("YERBA");
     expect(html).toContain('data-slide-key="a"');
   });
 
@@ -41,14 +38,14 @@ describe("DigitalSignagePlayer (render inicial)", () => {
     expect(html).toContain("signage-waiting");
     expect(html).toContain("Despensa Demo");
     expect(html).toContain("Próximamente nuevas ofertas");
-    expect(html).not.toMatch(/undefined|null|NaN|error|cargando|loading/i);
+    expect(visible(html)).not.toMatch(/undefined|null|NaN|error|cargando|loading/i);
   });
 
   it("sin datos todavía (la base no respondió): espera digna, sin error técnico", () => {
     const html = renderToStaticMarkup(<DigitalSignagePlayer brandFallback="Carnicería" initialView={null} loadView={never} />);
     expect(html).toContain("Carnicería");
     expect(html).toContain("Próximamente nuevas ofertas");
-    expect(html).not.toMatch(/undefined|error|cargando|loading/i);
+    expect(visible(html)).not.toMatch(/undefined|error|cargando|loading/i);
   });
 
   it("pantalla desactivada: el mismo cartel de espera", () => {
@@ -62,6 +59,6 @@ describe("DigitalSignagePlayer (render inicial)", () => {
 
   it("el televisor consulta SU endpoint (/api/tv/<token>) y no el del Admin", () => {
     const html = renderToStaticMarkup(<DigitalSignageTv initialView={view([offer("a", "Aceite", "2.450")])} token={"a".repeat(64)} />);
-    expect(html).toContain("Aceite");
+    expect(html).toContain("ACEITE");
   });
 });

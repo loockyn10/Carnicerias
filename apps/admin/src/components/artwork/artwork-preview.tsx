@@ -10,7 +10,7 @@ import { OfferArtwork } from "./offer-artwork";
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /** La misma fuente embebida que usa el PNG: el preview y la imagen exportada miden y dibujan el texto igual. */
-const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:900;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_900_BASE64}) format("woff")}`
+export const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:900;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_900_BASE64}) format("woff")}`
   + `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:700;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_700_BASE64}) format("woff")}`;
 
 /**
@@ -18,7 +18,7 @@ const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weig
  * 1080 × 1920) y lo escala con `transform` al ancho disponible, sin scroll interno ni recortes. Cambiar de formato no crea otro
  * contenido: es la misma pieza (`model`) con otra composición.
  */
-export function ArtworkPreview({ model, format, maxHeightVh = 72 }: { model: OfferArtworkModel; format: ArtworkFormat; maxHeightVh?: number }) {
+export function ArtworkPreview({ model, format, maxHeightVh = 72, slideIndex = 0 }: { model: OfferArtworkModel; format: ArtworkFormat; maxHeightVh?: number; slideIndex?: number }) {
   const spec = ARTWORK_FORMATS[format];
   const frameRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.3);
@@ -45,7 +45,7 @@ export function ArtworkPreview({ model, format, maxHeightVh = 72 }: { model: Off
   >
     <style dangerouslySetInnerHTML={{ __html: FONT_FACE_CSS }} />
     <div style={{ position: "absolute", left: 0, top: 0, width: spec.width, height: spec.height, transform: `scale(${String(scale)})`, transformOrigin: "top left" }}>
-      <OfferArtwork format={format} model={model} />
+      <OfferArtwork format={format} model={model} slideIndex={slideIndex} />
     </div>
   </div>;
 }

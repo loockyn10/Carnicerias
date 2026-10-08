@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildEditorDisplay, buildOfferSlide, buildSignageView, clampSlideSeconds, formatMinimumWeight, isWellFormedToken, moveItem, nameFitFor,
-  parseSlideFacts, priceFitFor, splitPrice, summarizeOffer, tvPath, type SlideFacts
+  buildEditorDisplay, buildOfferSlide, buildSignageView, clampSlideSeconds, findSignageMedia, formatMinimumWeight, isWellFormedToken, moveItem,
+  parseSlideFacts, splitPrice, summarizeOffer, tvPath, type SlideFacts
 } from "./signage";
 
 const unit = (overrides: Partial<SlideFacts> = {}): SlideFacts => ({
@@ -103,20 +103,6 @@ describe("formato y ajustes tipográficos", () => {
     expect(splitPrice(1_234_500_050n)).toEqual({ whole: "12.345.000", cents: "50" });
   });
 
-  it("los nombres largos se achican con piso; los cortos no", () => {
-    expect(nameFitFor("Aceite Cañuelas 900ml")).toBe(1);
-    expect(nameFitFor("x".repeat(44))).toBe(0.5);
-    expect(nameFitFor("x".repeat(500))).toBe(0.5);
-    expect(nameFitFor("Hamburguesas de carne vacuna x 4")).toBeLessThan(1);
-  });
-
-  it("los precios muy largos se achican; los habituales no", () => {
-    expect(priceFitFor({ whole: "1.729", cents: "75" }, null)).toBe(1);
-    expect(priceFitFor({ whole: "11.000", cents: null }, "/ KG")).toBe(1);
-    expect(priceFitFor({ whole: "123.456.789", cents: "99" }, "/ KG")).toBeLessThan(1);
-    expect(priceFitFor({ whole: "999.999.999.999", cents: "99" }, "/ KG")).toBeGreaterThanOrEqual(0.4);
-  });
-
   it("la duración se limita a 3–60 s y por defecto 8", () => {
     expect(clampSlideSeconds(1)).toBe(3);
     expect(clampSlideSeconds(500)).toBe(60);
@@ -186,6 +172,50 @@ describe("lectura del JSON de la base (defensiva)", () => {
   });
 });
 
+describe("identidad y fotos de la cartelería de TV (D-076)", () => {
+  const photo = { storagePath: "org/prod/file.png", contentType: "image/png" };
+  const logo = { storagePath: "org/branding/logo.png", contentType: "image/png", width: 600, height: 200 };
+  const rawUnit = { slideId: "a", name: "Mayonesa", unitType: "UNIT", listPriceCents: "203500", bulkMinimumUnits: 3, bulkDiscountBps: 1500, weightTiers: [], photo };
+  const media = {
+    photoUrl: (key: string, ref: { storagePath: string }) => `/api/tv/t/media/${key}?v=${ref.storagePath}`,
+    logoUrl: (ref: { storagePath: string }) => `/api/tv/t/media/logo?v=${ref.storagePath}`
+  };
+  const payload = (extra: Record<string, unknown> = {}) => ({ status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Super Demo", logo, slides: [rawUnit], ...extra });
+
+  it("cada oferta lleva su foto resuelta por el resolvedor de la superficie y la identidad lleva el logo", () => {
+    const view = buildSignageView(payload(), media);
+    expect(view?.slides[0]?.imageUrl).toBe("/api/tv/t/media/a?v=org/prod/file.png");
+    expect(view?.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=org/branding/logo.png", width: 600, height: 200 });
+    expect(view?.branding.contact).toBeNull();
+  });
+
+  it("sin foto o sin logo: imageUrl null y la identidad conserva el respaldo del nombre (nunca rompe)", () => {
+    const view = buildSignageView(payload({ logo: null, slides: [{ ...rawUnit, photo: null }] }), media);
+    expect(view?.slides[0]?.imageUrl).toBeNull();
+    expect(view?.branding.logo).toBeNull();
+    expect(view?.branding.businessName).toBe("SUPER DEMO");
+  });
+
+  it("sin resolvedor (o con datos de imagen inválidos) no hay imágenes ni error", () => {
+    expect(buildSignageView(payload())?.slides[0]?.imageUrl).toBeNull();
+    expect(buildSignageView(payload({ slides: [{ ...rawUnit, photo: { storagePath: 5, contentType: "image/gif" } }] }), media)?.slides[0]?.imageUrl).toBeNull();
+  });
+
+  it("el precio y la promoción no cambian por traer foto: «llevando 3» sale del mismo motor", () => {
+    const offer = buildSignageView(payload(), media)?.slides[0];
+    expect(offer).toMatchObject({ variant: "BULK", price: { whole: "1.729", cents: "75" }, regularPrice: { whole: "2.035", cents: null }, unitType: "UNIT", condition: "LLEVANDO 3 UNIDADES" });
+  });
+
+  it("findSignageMedia sólo devuelve rutas de ESA presentación (diapositiva o logo), nunca una que pida el navegador", () => {
+    expect(findSignageMedia(payload(), "a")).toEqual(photo);
+    expect(findSignageMedia(payload(), "logo")).toEqual({ storagePath: logo.storagePath, contentType: "image/png" });
+    expect(findSignageMedia(payload(), "otro")).toBeNull();
+    expect(findSignageMedia(payload({ logo: null }), "logo")).toBeNull();
+    expect(findSignageMedia(payload({ slides: [{ ...rawUnit, photo: null }] }), "a")).toBeNull();
+    expect(findSignageMedia(null, "a")).toBeNull();
+  });
+});
+
 describe("editor del Admin", () => {
   const adminPayload = {
     displayId: "d1", name: "TV Despensa Central", enabled: true, branchId: "b1", slideDurationSeconds: 10, tokenRotatedAt: "2026-10-07T12:00:00Z",
@@ -226,7 +256,7 @@ describe("editor del Admin", () => {
 describe("privacidad: lo que se dibuja no contiene costos, márgenes ni datos administrativos", () => {
   it("una oferta sólo tiene campos comerciales", () => {
     const offer = buildOfferSlide(unit());
-    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "key", "name", "nameFit", "price", "priceSuffix", "promo", "secondary", "variant"]);
+    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "imageUrl", "key", "name", "price", "priceSuffix", "promo", "regularPrice", "secondary", "unitType", "variant"]);
   });
 
   it("aunque la base mandara campos de más, la vista no los arrastra", () => {

@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { OfferSlideData, SignageView } from "./signage";
+import type { SignageView } from "./signage";
+import { slideOffer, signageView } from "./test-support/signage-fixtures";
 import {
   fetchSignageView, initialPlayerState, nextPollDelay, nextSlideIndex, playerReducer, SIGNAGE_POLL_MS, SIGNAGE_RETRY_MS, visibleSlideCount, type FetchLike
 } from "./signage-player";
 
-const offer = (key: string, whole = "1.000"): OfferSlideData => ({
-  key, variant: "REGULAR", name: `Producto ${key}`, price: { whole, cents: null }, priceSuffix: null, condition: "PRECIO UNITARIO", secondary: null, promo: false, nameFit: 1
-});
-const view = (keys: string[], overrides: Partial<SignageView> = {}): SignageView => ({
-  status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Despensa", slides: keys.map((key) => offer(key)), ...overrides
-});
+const offer = (key: string, whole = "1.000") => slideOffer(key, `Producto ${key}`, whole);
+const view = (keys: string[], overrides: Partial<SignageView> = {}): SignageView => signageView(keys.map((key) => offer(key)), { organizationName: "Despensa", ...overrides });
 
 describe("slideshow: bucle infinito", () => {
   it("después de la última oferta vuelve a la primera, indefinidamente", () => {
@@ -137,7 +134,8 @@ describe("actualización automática sin recargar", () => {
 
 describe("fetchSignageView (cliente del televisor)", () => {
   afterEach(() => { vi.useRealTimers(); });
-  const body = (slides: unknown[] = [{ key: "a", name: "A", condition: "PRECIO UNITARIO", price: { whole: "1.000", cents: null } }]) =>
+  const full = (key: string, extra: Record<string, unknown> = {}) => ({ ...offer(key), ...extra });
+  const body = (slides: unknown[] = [full("a", { name: "A" })]) =>
     ({ status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Despensa", slides });
   const respond = (status: number, json: unknown): FetchLike => () => Promise.resolve({ status, ok: status >= 200 && status < 300, json: () => Promise.resolve(json) });
 
@@ -160,12 +158,37 @@ describe("fetchSignageView (cliente del televisor)", () => {
   });
 
   it("descarta los slides con forma inválida y corrige una duración fuera de rango", async () => {
-    const result = await fetchSignageView("/api/tv/x", respond(200, { ...body([null, { key: 3 }, { key: "ok", name: "Ok", condition: "X", price: { whole: "5", cents: null } }]), slideDurationSeconds: 0 }));
+    const result = await fetchSignageView("/api/tv/x", respond(200, { ...body([null, { key: 3 }, { key: "sin-resto", name: "X", condition: "X", price: { whole: "5", cents: null } }, full("ok")]), slideDurationSeconds: 0 }));
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
       expect(result.view.slides.map((slide) => slide.key)).toEqual(["ok"]);
       expect(result.view.slideDurationSeconds).toBe(3);
     }
+  });
+
+  it("la identidad y las imágenes del JSON se revalidan: sólo rutas propias (/api/...), colores siempre los de la marca y nunca contacto", async () => {
+    const result = await fetchSignageView("/api/tv/x", respond(200, {
+      ...body([full("a", { imageUrl: "https://evil.example/x.png" }), full("b", { imageUrl: "/api/tv/t/media/b?v=1" }), full("c", { imageUrl: "//evil.example/x.png" })]),
+      branding: { businessName: "Super", logo: { imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120 }, contact: { phone: "1" }, colors: { green: "#000", yellow: "#000", red: "#000" } }
+    }));
+    if (result.kind !== "ok") throw new Error("sin vista");
+    expect(result.view.slides.map((slide) => slide.imageUrl)).toEqual([null, "/api/tv/t/media/b?v=1", null]);
+    expect(result.view.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120 });
+    expect(result.view.branding.contact).toBeNull();
+    expect(result.view.branding.colors.green).toBe("#0B8A2F");
+  });
+
+  it("una identidad rara o ausente no rompe la pantalla: respaldo de marca sin logo", async () => {
+    const result = await fetchSignageView("/api/tv/x", respond(200, { ...body(), branding: { logo: { imageUrl: "https://x/y.png", width: 1, height: 1 } } }));
+    expect(result.kind === "ok" && result.view.branding.logo).toBeNull();
+    const none = await fetchSignageView("/api/tv/x", respond(200, body()));
+    expect(none.kind === "ok" && none.view.branding.logo).toBeNull();
+  });
+
+  it("una oferta sin los datos que dibuja la diapositiva (tipo, precio normal) se descarta", async () => {
+    const incomplete = { key: "z", name: "Z", condition: "X", price: { whole: "5", cents: null } };
+    const result = await fetchSignageView("/api/tv/x", respond(200, body([incomplete, full("ok")])));
+    expect(result.kind === "ok" && result.view.slides.map((slide) => slide.key)).toEqual(["ok"]);
   });
 
   it("una pantalla desactivada llega sin slides", async () => {

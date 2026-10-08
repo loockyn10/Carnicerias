@@ -41,9 +41,9 @@ export function TextBlock({ fitted, color, lineHeight = 1.02, weight = 900 }: { 
   </div>;
 }
 
-export function Canvas({ format, children, testId }: { format: ArtworkFormat; children: ReactNode; testId: string }) {
+export function Canvas({ format, children, testId, variant }: { format: ArtworkFormat; children: ReactNode; testId: string; variant?: string }) {
   const spec = ARTWORK_FORMATS[format];
-  return <div data-artwork-format={format} data-testid={testId} style={{
+  return <div data-artwork-format={format} data-artwork-variant={variant} data-testid={testId} style={{
     position: "relative", display: "flex", width: spec.width, height: spec.height, background: C.WHITE, color: C.BLACK, fontFamily: FONT_STACK, fontKerning: "none", overflow: "hidden"
   }}>{children}</div>;
 }

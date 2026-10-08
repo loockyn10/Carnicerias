@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { DigitalSignagePlayer } from "../../../components/digital-signage-player";
 import { getAdminContext } from "../../../lib/admin";
 import { buildSignageView } from "../../../lib/signage";
+import { signageMediaUrls } from "../../../lib/signage-media";
 import { createClient } from "../../../lib/supabase/server";
 import { loadSignagePreviewAction } from "../../admin/products/signage/actions";
 
@@ -22,5 +23,5 @@ export default async function TvPreviewPage({ params }: { params: Promise<{ id: 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_signage_display_admin", { p_display_id: id });
   if (error || data === null) notFound();
-  return <DigitalSignagePlayer initialView={buildSignageView(data)} loadView={loadSignagePreviewAction.bind(null, id)} />;
+  return <DigitalSignagePlayer initialView={buildSignageView(data, signageMediaUrls(`/api/tv-preview/${id}`))} loadView={loadSignagePreviewAction.bind(null, id)} />;
 }
