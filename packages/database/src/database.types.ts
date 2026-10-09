@@ -2045,6 +2045,48 @@ export type Database = {
           },
         ]
       }
+      pricing_receipt_requests: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          organization_id: string
+          payload_hash: string
+          request_key: string
+          result: Json | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          organization_id: string
+          payload_hash: string
+          request_key: string
+          result?: Json | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          organization_id?: string
+          payload_hash?: string
+          request_key?: string
+          result?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pricing_receipt_requests_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pricing_receipt_requests_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_barcodes: {
         Row: {
           barcode: string
@@ -4260,6 +4302,10 @@ export type Database = {
         Args: { p_batch_id: string; p_skip_errors?: boolean }
         Returns: Json
       }
+      apply_pricing_receipt: {
+        Args: { p_items: Json; p_request_key: string }
+        Returns: Json
+      }
       bulk_set_product_costs: {
         Args: { p_effective_at?: string; p_items: Json }
         Returns: Json
@@ -4706,6 +4752,15 @@ export type Database = {
       }
       list_production_batches: {
         Args: { p_branch_id?: string; p_limit?: number; p_status?: string }
+        Returns: Json
+      }
+      list_pricing_rows: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_product_ids?: string[]
+          p_query?: string
+        }
         Returns: Json
       }
       list_products_page: {

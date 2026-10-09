@@ -13,10 +13,11 @@ import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
 import { resolveNewProductPricing } from "../../lib/new-product-pricing";
-import { parseBulkItems } from "../../lib/bulk-costs";
+import { isRequestKey, parseBulkItems, toReceiptRpcItems, type ReceiptProductInfo } from "../../lib/bulk-costs";
+import { parsePricingRowsPage, PRICING_PAGE_SIZE, type PricingRow, type PricingRowsPage } from "../../lib/pricing-rows";
 import { parseCurrentCustomMargin, parseCustomMarginForm } from "../../lib/product-margin";
 import { parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
-import type { Database } from "@carnicerias/database";
+import type { Database, Json } from "@carnicerias/database";
 
 function inventoryRole(formData: FormData): "RAW_MATERIAL" | "SELLABLE" | "BOTH" {
   const sellable = formData.get("is_sellable") === "on";
@@ -386,16 +387,23 @@ export async function setPriceAction(formData: FormData) {
 export interface BulkCostState {
   error?: string;
   successToken?: string;
+  /** El servidor reconoció la misma clave de operación: devolvió el resultado ya guardado y NO volvió a escribir nada (ni stock). */
+  replayed?: boolean;
   applied?: number;
+  costsSaved?: number;
   /** Productos cuyo margen propio se puso, cambió o quitó en este guardado. */
   marginsChanged?: number;
+  /** Precios AUTOMÁTICOS formados (costo y/o margen). */
   repriced?: number;
+  /** Precios MANUALES escritos (productos sin margen efectivo, p. ej. Cerdo). */
+  manualPrices?: number;
   scheduledPrice?: number;
-  /** Costos guardados de productos de categorías excluidas del margen (precio manual): su precio NO cambió. */
-  manualPrice?: number;
-  marginConfigured?: boolean;
-  /** Productos guardados que tienen un precio vigente de sucursal que le gana al precio global recién formado. */
+  /** Ingresos de mercadería registrados en la sucursal productiva (un movimiento por producto). */
+  stockMovements?: number;
+  /** Productos guardados que tienen un precio vigente de sucursal que le gana al precio global recién escrito. */
   branchOverrides?: number;
+  /** Filas frescas (costo, precio y regla vigentes) de los productos guardados: la planilla se actualiza sin recargar el catálogo. */
+  rows?: PricingRow[];
 }
 
 export interface CloseOverridesState { error?: string; successToken?: string; closed?: number }
@@ -415,39 +423,69 @@ export async function closeBranchPriceOverridesAction(): Promise<CloseOverridesS
 }
 
 /**
- * Carga masiva de COSTOS de "Productos → Precios": recibe sólo las filas que el cliente marcó como modificadas (ver
- * bulk-cost-editor.tsx) y las aplica en una única llamada atómica a bulk_set_product_costs (202610060065). Cada costo guardado abre
- * su vigencia de costo y, con el margen global configurado, recalcula el precio de lista en la misma transacción. Un precio de venta
- * nunca viaja desde acá; los precios manuales se cargan en la ficha del producto.
+ * Remito de "Productos → Precios" (D-077): recibe sólo las filas que el cliente marcó como modificadas (ver bulk-cost-editor.tsx) y las
+ * aplica en UNA llamada atómica a apply_pricing_receipt (202610110074), que reutiliza los helpers canónicos (margen propio, costo + precio
+ * automático, vigencia de precio manual, ingreso PURCHASE en la sucursal productiva). Estrategia de atomicidad: todo el lote en una sola
+ * transacción de base de datos; un error en cualquier fila o en el stock revierte TODO y Fran puede reintentar. `requestKey` es la clave de
+ * idempotencia del intento: un doble click o un reintento de red devuelve el resultado ya guardado en vez de sumar el ingreso otra vez.
+ * La cantidad se convierte acá con el parser canónico del stock y el tipo de venta del producto en la base (nunca el del cliente).
  */
-export async function bulkSetProductCostsAction(_: BulkCostState, formData: FormData): Promise<BulkCostState> {
+export async function applyPricingReceiptAction(input: { requestKey: string; items: unknown }): Promise<BulkCostState> {
   try {
-    const raw = text(formData, "items");
-    const items = parseBulkItems(raw ? JSON.parse(raw) : []);
+    if (!isRequestKey(input.requestKey)) throw new Error("La operación es inválida: recargá la pantalla");
+    const items = parseBulkItems(input.items);
     if (!items.length) throw new Error("No hay cambios para guardar");
-    // Margen primero (D-070): una fila con costo Y margen guarda el margen SIN repreciar y deja que el costo forme el precio una sola vez
-    // con el margen nuevo (mismo patrón que manageProductAction). Una fila sólo de margen reprecia con el costo vigente (o conserva el
-    // precio manual en una categoría excluida: lo decide el servidor, no esta acción).
-    let marginRepriced = 0;
-    let marginScheduled = 0;
-    for (const item of items) {
-      if (item.marginBps === undefined) continue;
-      const outcome = await rpcOrThrow("set_product_custom_margin", { p_product_id: item.productId, p_margin_bps: item.marginBps, p_reprice: item.costCents === undefined }) as { outcome?: string } | null;
-      if (outcome?.outcome === "REPRICED") marginRepriced += 1;
-      else if (outcome?.outcome === "SCHEDULED") marginScheduled += 1;
+    const context = await requireAdminContext();
+    const supabase = await createClient();
+    const quantityIds = items.filter((item) => item.quantity !== undefined).map((item) => item.productId);
+    const products = new Map<string, ReceiptProductInfo>();
+    if (quantityIds.length) {
+      const { data, error } = await supabase.from("products").select("id, name, unit_type").eq("organization_id", context.organizationId).in("id", quantityIds);
+      if (error) throw new Error(error.message);
+      for (const row of data) products.set(row.id, { name: row.name, unitType: row.unit_type });
     }
-    const costItems = items.filter((item) => item.costCents !== undefined).map((item) => ({ productId: item.productId, costCents: item.costCents }));
-    const result = costItems.length
-      ? await rpcOrThrow("bulk_set_product_costs", { p_items: costItems }) as { applied?: number; repriced?: number; scheduledPrice?: number; manualPrice?: number; marginConfigured?: boolean; branchOverrides?: number } | null
-      : null;
+    const result = await rpcOrThrow("apply_pricing_receipt", { p_request_key: input.requestKey, p_items: toReceiptRpcItems(items, products) as unknown as Json }) as {
+      applied?: number; costsSaved?: number; marginsChanged?: number; repriced?: number; manualPrices?: number; scheduledPrice?: number;
+      stockMovements?: number; branchOverrides?: number; replayed?: boolean;
+    } | null;
     revalidatePath("/admin/products");
+    revalidatePath("/admin/stock");
+    revalidatePath("/admin/replenishment");
+    const rows = await fetchPricingRows(items.map((item) => item.productId));
     return {
-      successToken: crypto.randomUUID(), applied: result?.applied ?? costItems.length, repriced: (result?.repriced ?? 0) + marginRepriced,
-      marginsChanged: items.filter((item) => item.marginBps !== undefined).length,
-      scheduledPrice: (result?.scheduledPrice ?? 0) + marginScheduled, manualPrice: result?.manualPrice ?? 0, marginConfigured: result?.marginConfigured ?? true, branchOverrides: result?.branchOverrides ?? 0
+      successToken: crypto.randomUUID(), replayed: result?.replayed === true, applied: result?.applied ?? items.length, costsSaved: result?.costsSaved ?? 0,
+      marginsChanged: result?.marginsChanged ?? 0, repriced: result?.repriced ?? 0, manualPrices: result?.manualPrices ?? 0,
+      scheduledPrice: result?.scheduledPrice ?? 0, stockMovements: result?.stockMovements ?? 0, branchOverrides: result?.branchOverrides ?? 0, rows
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudieron guardar los cambios" };
+  }
+}
+
+/** Filas vigentes de unos productos (de a 100, el máximo del RPC), después de guardar. */
+async function fetchPricingRows(productIds: string[]): Promise<PricingRow[]> {
+  const rows: PricingRow[] = [];
+  for (let offset = 0; offset < productIds.length; offset += 100) {
+    const page = parsePricingRowsPage(await rpcOrThrow("list_pricing_rows", { p_product_ids: productIds.slice(offset, offset + 100), p_limit: 100 }));
+    rows.push(...page.rows);
+  }
+  return rows;
+}
+
+export type PricingSearchResult = { page: PricingRowsPage; error?: undefined } | { error: string; page?: undefined };
+
+/**
+ * ÚNICO buscador de Productos → Precios: busca en el servidor contra TODO el catálogo de la organización (nombre, categoría, SKU o código de
+ * barras exacto), paginado. El navegador nunca carga los ~3000 productos.
+ */
+export async function searchPricingRowsAction(query: string, offset: number): Promise<PricingSearchResult> {
+  try {
+    const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+    const text = query.trim().slice(0, 80);
+    const data = await rpcOrThrow("list_pricing_rows", { p_limit: PRICING_PAGE_SIZE, p_offset: safeOffset, ...(text ? { p_query: text } : {}) });
+    return { page: parsePricingRowsPage(data) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo buscar" };
   }
 }
 

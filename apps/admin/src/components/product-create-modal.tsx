@@ -2,13 +2,15 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { createProductModalAction, type ProductModalState } from "../app/admin/actions";
+import { defaultNewProductBranchIds } from "../lib/new-product-branches";
+import { ProductBranchChecklist } from "./product-branch-checklist";
 import { ProductCategoryField } from "./product-category-field";
 import { ProductPricingFields } from "./product-pricing-fields";
 import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories, branches, suppliers, marginBps, excludedCategoryIds = [] }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null; /** Categorías excluidas del margen automático (D-069): el precio de sus productos es manual. */ excludedCategoryIds?: string[] }) {
+export function ProductCreateModal({ categories, branches, suppliers, marginBps, excludedCategoryIds = [], productionBranchId = null }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null; /** Categorías excluidas del margen automático (D-069): el precio de sus productos es manual. */ excludedCategoryIds?: string[]; /** Sucursal productiva (organizations.production_branch_id): la única que arranca marcada en «Se vende en». */ productionBranchId?: string | null }) {
   const [open, setOpen] = useState(false);
   const [categoryId, setCategoryId] = useState("");
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
@@ -16,6 +18,8 @@ export function ProductCreateModal({ categories, branches, suppliers, marginBps,
   const [isRawMaterial, setIsRawMaterial] = useState(false);
   const [state, action, pending] = useActionState(createProductModalAction, {} as ProductModalState);
   const requiresPricing = isSellable || !isRawMaterial;
+  // Alta de un producto NUEVO: sólo la sucursal productiva marcada; las demás destildadas (se habilitan a propósito).
+  const defaultSellingBranchIds = defaultNewProductBranchIds(branches, productionBranchId);
   useEffect(() => { if (state.success) setOpen(false); }, [state.success]);
   return <>
     <button className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" onClick={() => setOpen(true)} type="button">+ Nuevo producto</button>
@@ -27,15 +31,7 @@ export function ProductCreateModal({ categories, branches, suppliers, marginBps,
           <label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label>
           <ProductCategoryField categories={categories} onChange={setCategoryId} placeholder="Seleccionar" value={categoryId} />
         </div>
-        <div className="rounded-lg bg-stone-50 p-3">
-          <p className="text-sm font-bold">Se vende en</p>
-          <p className="mt-1 text-xs text-stone-500">Sólo las sucursales marcadas ven este producto en su POS.</p>
-          <div className="mt-2 flex flex-wrap gap-4 text-sm">
-            {branches.map((branch) => (
-              <label className="flex items-center gap-2" key={branch.id}><input defaultChecked name="branch_ids" type="checkbox" value={branch.id} /> {branch.name}</label>
-            ))}
-          </div>
-        </div>
+        <ProductBranchChecklist branches={branches} checkedIds={defaultSellingBranchIds} hint="Sólo las sucursales marcadas ven este producto en su POS. Por defecto, sólo la sucursal productiva." />
         <label className="grid gap-1 text-sm font-medium">Códigos de barras<textarea className={input} name="barcodes" placeholder="Uno por línea (opcional)" rows={2} /></label>
         <SupplierSelect suppliers={suppliers} />
         <label className="grid gap-1 text-sm font-medium">Unidad<select className={input} name="unit_type" onChange={(event) => setUnitType(event.target.value as "WEIGHT" | "UNIT")} value={unitType}><option value="WEIGHT">Peso</option><option value="UNIT">Unidad</option></select></label>

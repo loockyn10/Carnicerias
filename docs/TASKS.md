@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Productos → Precios como remito: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-11 (D-077). **Migración pendiente: `202610110074_pricing_receipt.sql`** (tabla de idempotencia + 2 RPC; no recalcula nada ni toca datos existentes). Orden: `supabase db push --dry-run` (debe listar la 074 y las anteriores que falten) → `supabase db push` **antes** de desplegar el Admin (la pantalla llama a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS.
+
+1. Confirmar que `organizations.production_branch_id` apunta a Central (sin eso la Cantidad queda deshabilitada y el servidor rechaza el ingreso) y que en «Categorías excluidas del margen automático» sólo está **Cerdo** (Vaca y Pollo son costo + margen).
+2. Smoke en Productos → Precios: buscar por nombre, categoría y SKU un producto que NO estaba en las primeras filas; probar un almacén (costo + margen + cantidad → un solo guardado: stock +N, precio recalculado una vez), un producto de peso (12,500 → +12,5 kg) y Cerdo (precio manual, con y sin costo).
+3. Probar el doble click en «Guardar cambios» (el stock debe sumar una sola vez) y cambiar de búsqueda con cambios sin guardar (quedan en «Con cambios sin guardar»).
+4. Alta de producto nuevo: sólo Central tildada; editar uno existente: muestra su surtido guardado.
+5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `pricing_receipt.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+6. Confirmar las decisiones no pedidas (D-077): un campo inválido bloquea el guardado, precio manual permitido en un automático sin costo, el ingreso exige el producto habilitado en la sucursal productiva.
+
 ## P0 — Cartelería «Piezas» (protagonista + collage + identidad): aplicar y probar (acción del usuario)
 
 Implementado 2026-10-08 y 2026-10-09 (D-074, D-075). **Migraciones pendientes: `202610080071_product_artwork_photos.sql`** (bucket privado de Storage + tabla de fotos + 4 RPC + políticas de `storage.objects`) **y `202610090072_artwork_branding.sql`** (tabla del logo + `branches.phone`/`city` + 4 RPC; aditiva, no toca nada existente). **Las muestras del sprint usan fotos y un logo sintéticos:** el logo real y las fotos las sube el usuario.

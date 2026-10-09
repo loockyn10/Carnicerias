@@ -8,6 +8,7 @@ import { bpsToPercentField } from "../lib/product-margin";
 import { ProductMarginField, type MarginMode } from "./product-margin-field";
 import { ProductArtworkPhotoField } from "./product-artwork-photo-field";
 import { ProductPricingFields } from "./product-pricing-fields";
+import { ProductBranchChecklist } from "./product-branch-checklist";
 import { ProductCategoryField } from "./product-category-field";
 import { ProductPackFields } from "./product-pack-fields";
 import { SupplierSelect, type SupplierOption } from "./supplier-select";
@@ -89,15 +90,7 @@ export function ProductManageModal({ product, price, promotion, categories, bran
             <ProductCategoryField categories={categories} onChange={setCategoryId} value={categoryId} />
             <label className="grid gap-1 text-sm font-medium">SKU<input className={input} defaultValue={product.sku ?? ""} name="sku" /></label>
           </div>
-          <div className="rounded-lg bg-stone-50 p-3">
-            <p className="text-sm font-bold">Se vende en</p>
-            <p className="mt-1 text-xs text-stone-500">Sólo las sucursales marcadas ven este producto en su POS. Un producto habilitado sin stock sigue apareciendo, como "Sin stock".</p>
-            <div className="mt-2 flex flex-wrap gap-4 text-sm">
-              {branches.map((branch) => (
-                <label className="flex items-center gap-2" key={branch.id}><input defaultChecked={product.branchIds.includes(branch.id)} name="branch_ids" type="checkbox" value={branch.id} /> {branch.name}</label>
-              ))}
-            </div>
-          </div>
+          <ProductBranchChecklist branches={branches} checkedIds={product.branchIds} hint={'Sólo las sucursales marcadas ven este producto en su POS. Un producto habilitado sin stock sigue apareciendo, como "Sin stock".'} />
           <label className="grid gap-1 text-sm font-medium">Códigos de barras
             <textarea className={input} defaultValue={product.barcodes.join("\n")} name="barcodes" placeholder="Uno por línea. Un producto puede tener varios." rows={2} />
           </label>

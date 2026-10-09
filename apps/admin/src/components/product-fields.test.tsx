@@ -111,11 +111,14 @@ describe("ProductPackFields: sólo las unidades por pack (el descuento es global
 });
 
 describe("Productos → Precios (D-068)", () => {
-  it("la acción de la carga masiva sólo envía costos al servidor (el precio lo recalcula el servidor)", () => {
+  it("la acción del remito manda UNA sola llamada atómica (apply_pricing_receipt); el precio automático lo forma el servidor", () => {
     const actions = source("../app/admin/actions.ts");
-    expect(actions).toContain('rpcOrThrow("bulk_set_product_costs"');
+    const receipt = actions.slice(actions.indexOf("export async function applyPricingReceiptAction"), actions.indexOf("async function commercialRpc"));
+    expect(receipt).toContain('rpcOrThrow("apply_pricing_receipt"');
+    expect(receipt.match(/rpcOrThrow\("[a-z_]+"/g)?.sort()).toEqual(['rpcOrThrow("apply_pricing_receipt"', 'rpcOrThrow("list_pricing_rows"', 'rpcOrThrow("list_pricing_rows"'].sort());
     expect(actions).not.toContain("bulk_set_product_prices");
     expect(actions).not.toContain("bulkSetProductPricesAction");
+    expect(actions).not.toContain("bulkSetProductCostsAction");
   });
 
   it("la configuración de precios se guarda con una sola llamada atómica (no hay requests por producto)", () => {
@@ -141,14 +144,21 @@ describe("Productos → Precios (D-068)", () => {
     expect(manage).toContain("p_reprice: costToSave === null");
     // El margen se valida antes de escribir cualquier cosa (primer rpc: set_product_pack_size / save_product).
     expect(manage.indexOf("parseCustomMarginForm")).toBeLessThan(manage.indexOf("rpcOrThrow("));
-    // La carga masiva edita costo y margen por la MISMA fuente de verdad que el editor del producto: set_product_custom_margin (sin repreciar
-    // si la fila trae costo) + bulk_set_product_costs. Nunca escribe la tabla ni un precio por su cuenta.
-    const bulk = actions.slice(actions.indexOf("export async function bulkSetProductCostsAction"), actions.indexOf("async function commercialRpc"));
-    expect(bulk).toContain('"set_product_custom_margin"');
-    expect(bulk).toContain("p_reprice: item.costCents === undefined");
-    expect(bulk).toContain('"bulk_set_product_costs"');
-    expect(bulk.indexOf('"set_product_custom_margin"')).toBeLessThan(bulk.indexOf('"bulk_set_product_costs"'));
-    expect(bulk).not.toMatch(/product_custom_margins|set_product_price|p_price_cents/);
+    // El remito edita costo, margen, precio manual y stock por las MISMAS fuentes de verdad que el resto del Admin, dentro de UNA función SQL
+    // (apply_pricing_receipt): set_product_custom_margin (sin repreciar si la fila trae costo) → apply_product_cost → set_price_history →
+    // record_stock_operation. La acción de servidor nunca escribe tablas, precios ni stock por su cuenta.
+    const receipt = actions.slice(actions.indexOf("export async function applyPricingReceiptAction"), actions.indexOf("async function commercialRpc"));
+    expect(receipt).not.toMatch(/product_custom_margins|set_product_price|set_product_cost|set_product_custom_margin|record_stock_operation|p_price_cents|\.insert\(|\.update\(/);
+    const sql = source("../../../../supabase/migrations/202610110074_pricing_receipt.sql");
+    expect(sql).toContain("public.set_product_custom_margin(item_product, item_margin, item_cost is null)");
+    expect(sql.indexOf("public.set_product_custom_margin(")).toBeLessThan(sql.indexOf("app_private.apply_product_cost("));
+    expect(sql.indexOf("app_private.apply_product_cost(")).toBeLessThan(sql.indexOf("app_private.set_price_history("));
+    expect(sql).toContain("public.record_stock_operation(");
+    expect(sql).toContain("'PURCHASE'");
+    // Sin un segundo sistema de stock ni escrituras destructivas de precios.
+    expect(sql).not.toMatch(/insert into public\.stock_movements/i);
+    expect(sql).not.toMatch(/update public\.product_prices[^;]*price_cents/i);
+    expect(sql).not.toMatch(/delete from public\.product_(prices|costs)/i);
     expect(source("./bulk-cost-editor.tsx")).not.toContain('name="margin');
     // Un margen propio nunca viaja al POS: el modal sólo lo manda a la acción del Admin.
     expect(source("./product-manage-modal.tsx")).toContain("ProductMarginField");
