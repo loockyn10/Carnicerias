@@ -1,11 +1,13 @@
 "use client";
 
 import { formatWeight } from "@carnicerias/business-logic";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { StatusBadge } from "./admin-ui";
 import { filterBranchStockRows, type BranchStockRow } from "../lib/branch-stock";
 import type { StockPriority } from "../lib/multibranch";
+import { productSalesHref, stockAuditHref } from "../lib/stock-audit";
 
 export interface BranchStockMatrixBranch {
   id: string;
@@ -147,6 +149,12 @@ export function BranchStockMatrix({
                           {formatQuantity(cell.current, row.unitType)}
                         </span>
                       )}
+                      <Link
+                        className="mt-0.5 block text-[11px] font-bold text-rose-800 hover:underline"
+                        href={stockAuditHref({ branchId: branch.id, productId: row.productId })}
+                      >
+                        Ver movimientos
+                      </Link>
                     </td>
                   );
                 })}
@@ -184,11 +192,15 @@ export function BranchStockMatrix({
                 .map(({ branch, cell }) => (
                   <li className="flex items-center justify-between gap-3 rounded-xl bg-stone-50 p-3" key={branch.id}>
                     <span className="font-semibold">{branch.name}</span>
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center justify-end gap-2">
                       <span className={cell.rank === 0 ? "font-bold text-red-700" : "font-bold"}>
                         {cell.rank === 0 ? "SIN STOCK" : formatQuantity(cell.current, detail.unitType)}
                       </span>
                       <StatusBadge tone={badgeTone[cell.label]}>{cell.label}</StatusBadge>
+                      <span className="flex w-full justify-end gap-3 text-xs font-bold text-rose-800">
+                        <Link className="hover:underline" href={stockAuditHref({ branchId: branch.id, productId: detail.productId })}>Ver movimientos</Link>
+                        <Link className="hover:underline" href={productSalesHref({ productId: detail.productId, branchId: branch.id, preset: "month" })}>Ver ventas</Link>
+                      </span>
                     </span>
                   </li>
                 ))}

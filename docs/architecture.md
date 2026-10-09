@@ -161,6 +161,7 @@ Distribución (`stock_transfers`/`stock_transfer_items`, migración `20260922002
 
 - `stock_movements` es la fuente de verdad del stock teórico.
 - Reposición combina stock, mínimo manual, ventas recientes y cobertura mediante `get_replenishment_plan`.
+- **Auditoría por producto + sucursal (D-078, migración `202610120075`):** `get_stock_audit_summary` / `list_stock_audit_movements` (`stock.read`) reconstruyen el stock teórico desde `stock_movements` (inicio + movimientos por tipo = cierre; orden `(occurred_at, created_at, id)`; detalle paginado con saldo corrido) y cruzan ticket por ticket las ventas `COMPLETED` contra los `SALE`/`RETURN` del ledger; `get_product_sales_summary` (`sales.read`) agrega kg/unidades, importe y tickets de un producto. Sólo lectura; la UI es `/admin/branch-stock/movements` y el filtro «Producto» de Ventas. El único camino que escribe es el ajuste de conteo físico, que reutiliza `record_stock_operation`.
 - El estado de stock por sucursal (`/admin`, `/admin/branches`, `/admin/stock`) se lee mediante la RPC `SECURITY DEFINER get_branch_stock_status`, que agrega directamente sobre `stock_movements` autorizando una vez por sucursal en vez de RLS fila por fila (mismo patrón que `get_replenishment_plan`). La vista `branch_stock_status` se mantiene para sus otros consumidores (atención, comparar sucursales, detalle de sucursal).
 - Rendiciones son snapshots históricos inmutables; una venta offline tardía genera advertencia, no recálculo silencioso.
 - Rentabilidad usa revenue final y costo snapshot; presenta ganancia bruta, no neta.

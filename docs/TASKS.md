@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Auditoría por producto + sucursal: aplicar y probar con el caso real (acción del usuario)
+
+Implementado 2026-10-09 (D-078). **Migración pendiente: `202610120075_product_branch_stock_audit.sql`** (3 funciones de sólo lectura; no toca tablas ni datos). Orden: `supabase db push --dry-run` (debe listar la 075 y las anteriores que falten) → `supabase db push` **antes** de desplegar el Admin (las pantallas llaman a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS.
+
+1. Smoke del caso real: Stock → Por sucursal → buscar Pata Muslo → «Ver movimientos» en Avenida. Con «Desde último ingreso» debe verse cuánto entró, cuánto se vendió, merma, ajustes y el stock teórico; comparar el «Vendido» con Ventas (filtro Producto + Avenida + el mismo rango).
+2. Mirar el control «ventas vs. movimientos de stock»: si aparece «Hay diferencias», revisar los tickets listados antes de ajustar nada (la pantalla no corrige).
+3. Probar el conteo físico en un producto de prueba: escribir un valor (no debe cambiar nada), confirmar con motivo, y ver el `Ajuste (−/+)` en el detalle y en Stock → Operaciones.
+4. Ventas: elegir un producto y probar Hoy / rango / «Todas las sucursales»; los kg deben coincidir con la suma de los tickets de la lista. Probar también un producto dado de baja.
+5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `product_branch_stock_audit.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+6. Confirmar las decisiones no pedidas de D-078 (el «Vendido» del resumen corto es neto de anulaciones, el control compara por `completed_at` de la venta, REFUNDED no se controla).
+
 ## P0 — Productos → Precios como remito: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-11 (D-077). **Migración pendiente: `202610110074_pricing_receipt.sql`** (tabla de idempotencia + 2 RPC; no recalcula nada ni toca datos existentes). Orden: `supabase db push --dry-run` (debe listar la 074 y las anteriores que falten) → `supabase db push` **antes** de desplegar el Admin (la pantalla llama a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS.

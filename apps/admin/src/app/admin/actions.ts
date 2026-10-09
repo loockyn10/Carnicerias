@@ -532,19 +532,20 @@ export async function saveAnnouncementAction(formData: FormData) {
   revalidatePath("/admin/announcements");
 }
 
-export interface ProductOption { id: string; name: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; barcodes: string[] }
+export interface ProductOption { id: string; name: string; sku: string | null; unitType: "WEIGHT" | "UNIT"; barcodes: string[]; active?: boolean }
 
 /** Typeahead for the product pickers: a Central with thousands of products is never loaded whole.
  * Matches name/SKU (accent-insensitive) or an exact barcode, optionally only among the products
- * enabled in `branchId`. */
-export async function searchProductsAction(query: string, branchId: string | null): Promise<ProductOption[]> {
+ * enabled in `branchId`. `includeInactive` is for the audit/sales filters: a deactivated product
+ * still has sales and ledger history worth investigating. */
+export async function searchProductsAction(query: string, branchId: string | null, includeInactive = false): Promise<ProductOption[]> {
   await requireAdminContext();
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("search_products", {
-    p_query: query.trim().slice(0, 80), p_limit: 15, ...(branchId ? { p_branch_id: branchId } : {})
+    p_query: query.trim().slice(0, 80), p_limit: 15, ...(branchId ? { p_branch_id: branchId } : {}), ...(includeInactive ? { p_active_only: false } : {})
   });
   if (error) throw new Error(error.message);
-  return data.map((row) => ({ id: row.product_id, name: row.product_name, sku: row.sku, unitType: row.unit_type, barcodes: row.barcodes }));
+  return data.map((row) => ({ id: row.product_id, name: row.product_name, sku: row.sku, unitType: row.unit_type, barcodes: row.barcodes, active: row.active }));
 }
 
 export type CarryPlanResult = { report: CarryPlanReport; error?: undefined } | { error: string; report?: undefined };
@@ -703,6 +704,52 @@ export async function recordAdjustmentFormAction(_: StockAdjustmentState, formDa
     return { successToken: crypto.randomUUID() };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo registrar el ajuste" };
+  }
+}
+
+export interface PhysicalCountAdjustmentInput {
+  branchId: string;
+  productId: string;
+  /** Lo que escribió el operador (kg con coma o unidades): se interpreta con el tipo REAL del producto. */
+  physicalRaw: string;
+  /** El stock del sistema que la pantalla mostraba cuando se calculó la diferencia. */
+  expectedSystemQuantity: number;
+  note: string;
+}
+export type PhysicalCountAdjustmentResult = { ok: true; difference: number } | { ok: false; error: string };
+
+/**
+ * Ajuste confirmado desde la auditoría de un producto: el MISMO flujo de inventario físico de Stock → Operaciones
+ * (`record_stock_operation` ADJUSTMENT, que fija el stock al valor contado con un ADJUSTMENT_POSITIVE/NEGATIVE en el
+ * ledger). Sólo agrega una guarda: si el stock del sistema cambió desde que se abrió la vista (una venta, una
+ * transferencia), no ajusta — la diferencia que el usuario confirmó ya no sería la real.
+ */
+export async function applyPhysicalCountAdjustmentAction(input: PhysicalCountAdjustmentInput): Promise<PhysicalCountAdjustmentResult> {
+  try {
+    const context = await requireAdminContext();
+    const note = input.note.trim();
+    if (note.length < 2 || note.length > 500) throw new Error("Escribí el motivo del ajuste (entre 2 y 500 caracteres)");
+    if (!input.branchId || !input.productId) throw new Error("Elegí una sucursal y un producto");
+    const [physical] = await ledgerQuantities([input.productId], [input.physicalRaw], true);
+    const supabase = await createClient();
+    const { data: level, error: levelError } = await supabase.from("stock_levels").select("quantity_grams")
+      .eq("organization_id", context.organizationId).eq("branch_id", input.branchId).eq("product_id", input.productId).maybeSingle();
+    if (levelError) throw new Error(levelError.message);
+    const current = level?.quantity_grams ?? 0;
+    if (current !== input.expectedSystemQuantity) throw new Error("El stock del sistema cambió mientras tenías la pantalla abierta. Recargá la vista y volvé a calcular la diferencia.");
+    if ((physical ?? 0) === current) throw new Error("El stock físico coincide con el del sistema: no hay nada que ajustar");
+    await rpcOrThrow("record_stock_operation", {
+      p_branch_id: input.branchId, p_operation_type: "ADJUSTMENT",
+      p_items: [{ product_id: input.productId, physical_quantity_grams: physical ?? 0 }],
+      p_note: note
+    });
+    revalidatePath("/admin/stock");
+    revalidatePath("/admin/branch-stock");
+    revalidatePath("/admin/branch-stock/movements");
+    revalidatePath("/admin/replenishment");
+    return { ok: true, difference: (physical ?? 0) - current };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar el ajuste" };
   }
 }
 

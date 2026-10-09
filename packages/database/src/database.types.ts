@@ -4645,6 +4645,22 @@ export type Database = {
         Args: { p_product_id: string }
         Returns: Json
       }
+      get_product_sales_summary: {
+        Args: {
+          p_branch_id?: string
+          p_from: string
+          p_product_id: string
+          p_to: string
+        }
+        Returns: {
+          branch_id: string
+          branch_name: string
+          quantity: number
+          revenue_cents: number
+          tickets: number
+          unit_type: Database["public"]["Enums"]["unit_type"]
+        }[]
+      }
       get_production_batch_detail: {
         Args: { p_batch_id: string }
         Returns: Json
@@ -4718,6 +4734,16 @@ export type Database = {
         Args: { p_display_id: string }
         Returns: Json
       }
+      get_stock_audit_summary: {
+        Args: {
+          p_branch_id: string
+          p_from?: string
+          p_product_id: string
+          p_since_last_inbound?: boolean
+          p_to?: string
+        }
+        Returns: Json
+      }
       get_timekeeping_report: {
         Args: {
           p_branch_id?: string
@@ -4785,6 +4811,19 @@ export type Database = {
           total_count: number
           unit_type: Database["public"]["Enums"]["unit_type"]
         }[]
+      }
+      list_stock_audit_movements: {
+        Args: {
+          p_branch_id: string
+          p_from?: string
+          p_limit?: number
+          p_newest_first?: boolean
+          p_offset?: number
+          p_product_id: string
+          p_since_last_inbound?: boolean
+          p_to?: string
+        }
+        Returns: Json
       }
       list_stock_transfers: {
         Args: { p_branch_id?: string; p_limit?: number }
