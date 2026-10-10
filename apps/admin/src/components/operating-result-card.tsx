@@ -3,7 +3,8 @@
 import { formatBasisPointsPercent } from "@carnicerias/business-logic";
 import { useState } from "react";
 
-import { formatResult, NO_COSTS_NOTE, PARTIAL_NOTE, type OperatingResult } from "../lib/operating-costs";
+import { formatResult, LABOR_RATE_MISSING_NOTE, LABOR_REFRESH_MS, NO_COSTS_NOTE, PARTIAL_NOTE, type OperatingResult } from "../lib/operating-costs";
+import { AutoRefresh } from "./auto-refresh";
 import { OperatingCostsModal } from "./operating-costs-modal";
 
 /**
@@ -20,6 +21,9 @@ export function OperatingResultCard({ result, branchId, branchName, from, to }: 
       <p className="text-xs font-bold uppercase tracking-wider text-stone-500">Resultado operativo</p>
       <p className={`mt-1 text-2xl font-black ${negative ? "text-red-700" : "text-stone-900"}`} data-testid="operating-result-value">{formatResult(result.resultCents)}</p>
       {result.partial ? <p className="mt-1 text-xs font-bold text-amber-800" data-testid="operating-result-partial">⚠ {PARTIAL_NOTE}</p> : null}
+      {result.laborRateMissing ? <p className="mt-1 text-xs font-bold text-amber-800" data-testid="operating-result-labor-rate-missing">⚠ {LABOR_RATE_MISSING_NOTE}</p> : null}
+      {/* Una fichada abierta sigue sumando costo de personal: mientras exista se vuelve a pedir el resultado cada tanto. */}
+      {result.laborOpenShifts > 0 ? <AutoRefresh intervalMs={LABOR_REFRESH_MS} /> : null}
       <p className="mt-1 text-xs text-stone-500">
         {result.operatingCostCents === 0 ? NO_COSTS_NOTE : `Ganancia bruta − ${formatResult(result.operatingCostCents)} de costos operativos`}
         {result.marginBps !== null ? ` · ${formatBasisPointsPercent(result.marginBps)} % de las ventas` : ""}

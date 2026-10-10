@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { formatCurrency, packDiscountLabel } from "@carnicerias/business-logic";
 
+import { PACK_PALETTE } from "./lib/discount-chips";
+
 /** Tope de la cantidad que se puede tipear (evita enteros absurdos que rompan el cálculo). */
 export const MAX_UNIT_QUANTITY = 99_999;
 
@@ -97,8 +99,8 @@ function PackStatus({ lineUnits, pack }: { lineUnits: number; pack: NonNullable<
   const perUnit = pack.unitPriceCents === null ? null : <>{" · "}<strong>{formatCurrency(pack.unitPriceCents)}/u</strong></>;
   if (pack.applied) {
     return (
-      <div className="mt-3 rounded-2xl border border-emerald-500/60 bg-emerald-950/40 px-4 py-3 text-sm font-bold text-emerald-200" data-testid="pack-status">
-        <p className="text-xs font-black uppercase tracking-wide text-emerald-400">✓ Pack aplicado automáticamente</p>
+      <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm font-bold ${PACK_PALETTE.panel}`} data-discount-variant={PACK_PALETTE.variant} data-testid="pack-status">
+        <p className={`text-xs font-black uppercase tracking-wide ${PACK_PALETTE.text}`}>✓ Pack aplicado automáticamente</p>
         <p className="mt-1" data-testid="pack-units">
           {pack.packCount === 1 ? `${String(pack.packSizeUnits)} unidades` : `${String(pack.packCount)} packs × ${String(pack.packSizeUnits)} u = ${String(lineUnits)} unidades`} · {discountLabel}{perUnit}
         </p>
@@ -106,8 +108,8 @@ function PackStatus({ lineUnits, pack }: { lineUnits: number; pack: NonNullable<
     );
   }
   return (
-    <div className="mt-3 rounded-2xl border border-stone-600 bg-stone-950/60 px-4 py-3 text-sm font-bold text-stone-300" data-testid="pack-status">
-      <p className="text-xs font-black uppercase tracking-wide text-stone-400">Pack disponible desde {String(pack.packSizeUnits)} unidades</p>
+    <div className="mt-3 rounded-2xl border border-stone-600 bg-stone-950/60 px-4 py-3 text-sm font-bold text-stone-300" data-discount-variant={PACK_PALETTE.variant} data-testid="pack-status">
+      <p className={`text-xs font-black uppercase tracking-wide ${PACK_PALETTE.text}`}>Pack disponible desde {String(pack.packSizeUnits)} unidades</p>
       <p className="mt-1">{discountLabel}{perUnit}</p>
       {lineUnits > pack.packSizeUnits && lineUnits % pack.packSizeUnits !== 0
         ? <p className="mt-1 text-xs font-bold text-stone-400" data-testid="pack-multiples">Se aplica en múltiplos de {String(pack.packSizeUnits)} unidades.</p>

@@ -8,9 +8,10 @@ import { endRecurringCostAction, loadOperatingCostsAction, recordExpenseAction, 
 import { centsToField } from "../lib/bulk-costs";
 import { formatIsoDate } from "../lib/date-range";
 import {
-  describeVersion, firstDayOfMonth, formatShortDate, monthlyLabel, parseEndForm, parseExpenseForm, parseMonthlyForm, visibleHistory,
+  describeVersion, firstDayOfMonth, formatShortDate, LABOR_DUPLICATE_NOTE, looksLikePersonnelCost, monthlyLabel, parseEndForm, parseExpenseForm, parseMonthlyForm, visibleHistory,
   type BranchExpense, type OperatingCostsReport, type RecurringCost
 } from "../lib/operating-costs";
+import { LaborSection } from "./operating-labor-section";
 import { OverlayDialog } from "./overlay-dialog";
 
 const money = (cents: number) => formatCurrency(BigInt(cents));
@@ -78,11 +79,13 @@ export function OperatingCostsModal({ branchId, branchName, from, to, onClose }:
       {notice ? <p className="rounded-lg bg-emerald-50 p-3 text-sm font-bold text-emerald-800" role="status">✓ {notice}</p> : null}
       {!report.canWrite ? <p className="rounded-lg bg-stone-100 p-3 text-sm text-stone-700" role="status">Podés ver los costos, pero cargarlos o cambiarlos requiere el permiso de costos operativos.</p> : null}
 
+      {report.labor ? <LaborSection labor={report.labor} period={report.period} today={report.today} /> : null}
+
       <section aria-labelledby="costs-monthly">
         <h3 className="text-base font-black" id="costs-monthly">Costos mensuales</h3>
-        <p className="mt-0.5 text-sm text-stone-600">Se cargan una sola vez. Cada mes se reparte por día: un día del período cuenta 1/días del mes.</p>
+        <p className="mt-0.5 text-sm text-stone-600">Se cargan una sola vez. Cada mes se reparte por día: un día del período cuenta 1/días del mes.{report.labor ? " Para alquiler, internet, luz… (el personal ya se calcula arriba)." : ""}</p>
         <ul className="mt-2 divide-y divide-stone-100 rounded-xl bg-white shadow-sm">
-          {report.recurring.map((cost) => <MonthlyRow canWrite={report.canWrite} cost={cost} historyOpen={history.has(cost.id)} key={cost.id} onToggleHistory={() => toggleHistory(cost.id)} onOpen={open} panel={panel} today={report.today}>
+          {report.recurring.map((cost) => <MonthlyRow canWrite={report.canWrite} cost={cost} laborOverlap={report.labor !== null && report.labor.workedSeconds > 0 && cost.status === "ACTIVE" && looksLikePersonnelCost(cost.name)} historyOpen={history.has(cost.id)} key={cost.id} onToggleHistory={() => toggleHistory(cost.id)} onOpen={open} panel={panel} today={report.today}>
             {panel?.kind === "change-cost" && panel.costId === cost.id ? <ChangeCostForm cost={cost} error={formError} onCancel={() => open(null)} onSave={(input) => run(() => saveRecurringCostAction({ branchId, costId: cost.id, name: cost.name, amountCents: input.amountCents, from: input.from, requestKey: null }), `Importe de ${cost.name} actualizado desde el ${formatIsoDate(input.from)}.`)} pending={pending} today={report.today} /> : null}
             {panel?.kind === "end-cost" && panel.costId === cost.id ? <EndCostForm cost={cost} error={formError} onCancel={() => open(null)} onConfirm={(date) => run(() => endRecurringCostAction({ costId: cost.id, to: date }), `${cost.name} deja de aplicarse desde el ${formatIsoDate(date)}.`)} pending={pending} today={report.today} /> : null}
           </MonthlyRow>)}
@@ -109,7 +112,7 @@ export function OperatingCostsModal({ branchId, branchName, from, to, onClose }:
 
       <p className="rounded-xl bg-white p-4 text-sm shadow-sm" data-testid="operating-costs-total">
         Costos imputados al período <strong>{formatIsoDate(report.period.from)}{report.period.from === report.period.to ? "" : ` – ${formatIsoDate(report.period.to)}`}</strong>:{" "}
-        <strong>{money(report.operatingCostCents)}</strong> <span className="text-stone-500">({money(report.recurringCents)} de costos mensuales + {money(report.expenseCents)} de gastos)</span>
+        <strong>{money(report.operatingCostCents)}</strong> <span className="text-stone-500">({money(report.recurringCents)} de costos mensuales + {money(report.expenseCents)} de gastos{report.labor ? ` + ${money(report.labor.costCents)} de personal` : ""})</span>
       </p>
     </div> : null}
   </OverlayDialog>;
@@ -117,8 +120,8 @@ export function OperatingCostsModal({ branchId, branchName, from, to, onClose }:
 
 const STATUS_LABEL = { ACTIVE: null, SCHEDULED: "Programado", ENDED: "Dado de baja" } as const;
 
-function MonthlyRow({ cost, today, canWrite, historyOpen, onToggleHistory, onOpen, panel, children }: {
-  cost: RecurringCost; today: string; canWrite: boolean; historyOpen: boolean; onToggleHistory: () => void; onOpen: (panel: Panel) => void; panel: Panel | null; children: ReactNode;
+function MonthlyRow({ cost, today, canWrite, laborOverlap, historyOpen, onToggleHistory, onOpen, panel, children }: {
+  cost: RecurringCost; today: string; canWrite: boolean; laborOverlap: boolean; historyOpen: boolean; onToggleHistory: () => void; onOpen: (panel: Panel) => void; panel: Panel | null; children: ReactNode;
 }) {
   const label = STATUS_LABEL[cost.status];
   const versions = visibleHistory(cost);
@@ -132,6 +135,7 @@ function MonthlyRow({ cost, today, canWrite, historyOpen, onToggleHistory, onOpe
       {cost.status === "ENDED" && cost.lastDay ? `Rigió hasta el ${formatIsoDate(cost.lastDay)}` : `Rige desde el ${formatIsoDate(cost.amountFrom)}`}
       {cost.lastDay && cost.status !== "ENDED" ? ` · hasta el ${formatIsoDate(cost.lastDay)}` : ""} · En el período: {money(cost.imputedCents)}
     </p>
+    {laborOverlap ? <p className="mt-1 text-xs font-bold text-amber-800" data-testid="labor-duplicate-warning">⚠ {LABOR_DUPLICATE_NOTE} Si este costo es el sueldo de una empleada, darlo de baja evita contarlo dos veces.</p> : null}
     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
       {versions.length > 1 ? <button aria-expanded={historyOpen} className={link} onClick={onToggleHistory} type="button">{historyOpen ? "Ocultar historial" : "Ver historial"}</button> : null}
       {canWrite ? <>

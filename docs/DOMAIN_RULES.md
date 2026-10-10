@@ -252,6 +252,7 @@ Terminología:
 - Costos **mensuales recurrentes** (sueldo, alquiler, internet…) **versionados por vigencia** y **gastos puntuales** (fecha, concepto, importe), ambos por sucursal. Un importe nuevo cierra la versión vigente y abre otra: **nunca** se reescribe un período pasado.
 - **Prorrateo** por días calendario de la organización: importe mensual × días del período en cada mes ÷ días de ese mes (nunca 30 fijo; un rango que cruza meses calcula cada mes). Un gasto puntual se imputa completo si su fecha cae en el período.
 - Si alguna línea vendida no tiene costo histórico, el resultado es **parcial** y se muestra como tal.
+- **Personal automático (D-085):** el costo de las horas fichadas (`employee_shifts`, sucursal de la jornada) × el valor hora vigente en cada tramo (`employee_hourly_rates`) entra solo al costo operativo; duración exacta, recorte por período y medianoche, fichada abierta con la hora de la consulta. No se carga un sueldo mensual de empleada a mano (duplicaría): los costos mensuales son para alquiler, internet, luz…
 
 Por producto/período:
 

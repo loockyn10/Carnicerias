@@ -4873,6 +4873,11 @@ export type Database = {
           expense_cents: number
           gross_profit_cents: number
           is_partial: boolean
+          labor_cost_cents: number
+          labor_open_shifts: number
+          labor_rate_missing: boolean
+          labor_review_shifts: number
+          labor_worked_seconds: number
           missing_cost_items: number
           missing_cost_revenue_cents: number
           missing_cost_sales: number

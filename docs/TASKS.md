@@ -33,6 +33,19 @@ Implementado 2026-10-10 (D-084). **Migración pendiente: `202610190082_signage_p
 4. «Administrar grupos»: renombrar, quitar/ordenar promociones, eliminar (un grupo en uso por una pantalla no se elimina y el mensaje dice cuáles).
 5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `signage_promotion_groups.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
 
+## P0 — Costo de personal automático y chips de descuento del POS: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-10 (D-085). **Migración pendiente: `202610200083_branch_labor_cost.sql`** (sin tablas ni datos nuevos: recrea `get_branch_operating_result` con 5 columnas `labor_*` al final y reemplaza `get_branch_operating_costs`; **requiere la `202610170080`**). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Sin la migración el Admin sigue funcionando (el personal cuenta 0 y el modal no muestra la sección). **Instalador nuevo del POS (`pnpm build:pos:desktop`)** para ver los colores de los descuentos (el pricing no cambió).
+
+1. Productos/Empleados: confirmar que cada empleada tiene valor hora cargado (sin él esas horas cuestan $ 0 y la tarjeta avisa «Hay horas de personal sin valor hora cargado»).
+2. Avenida → Resumen → «Configurar costos»: con una fichada abierta, el total «PERSONAL — automático» de Hoy debe crecer al reabrir (la tarjeta y el Inicio se actualizan solos cada 2 minutos con la pestaña visible); con 10 h × $4.000 = $40.000 y 6 h 30 × $4.000 = $26.000.
+3. Una fichada que cruza la medianoche debe repartir sus horas entre los dos días (Ayer / Hoy) y un cambio de valor hora no debe alterar los días ya trabajados.
+4. **Doble conteo:** si hay un costo mensual «Sueldo…»/«Empleada» cargado a mano, el modal lo marca «Posible duplicado»: darlo de baja desde la fecha en que empieza el cálculo automático (el sistema no lo borra).
+5. Fichadas «a revisar» (olvidó fichar la salida): el modal las cuenta; conviene corregirlas en Horas (la salida inferida ya suma al costo).
+6. POS (instalador nuevo): AZUCAR JL 1KG. debe mostrar tres chips de colores distintos (3 u ámbar, 5 u verde, Pack azul) en la lista Central, y el diálogo de cantidad debe marcar «✓ Aplicado» el escalón vigente.
+7. Confirmar las decisiones no pedidas de D-085 (tope `max_shift_hours` / latido vencido, `REQUIRES_REVIEW` cuenta, refresco de 2 min, Pack azul).
+8. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `branch_labor_cost.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
 ## P1 — Acotar en el servidor la vigencia de un escalón cerrado (decisión pendiente)
 
 `sync_offline_sale_core` valida una regla `FROM_MINIMUM` cerrada **sin límite de tiempo** (sólo las reglas `EVERY_GROUP` y las versiones de pack vencen a las 24 h 10 min). Con escalones que se editan más seguido conviene exigir `completed_at <= valid_until + 24 h 10 min` también ahí (mismo criterio que `product_pack_versions`). No se cambió: toca el sync offline (decisión explícita). Ver D-083.

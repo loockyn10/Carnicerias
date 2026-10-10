@@ -2,12 +2,16 @@ import { useEffect, useRef, useState } from "react";
 
 import { formatCurrency } from "@carnicerias/business-logic";
 
+import { DiscountChip } from "./DiscountChip";
+import { limitRowChips, MORE_PALETTE } from "./lib/discount-chips";
 import { CENTRAL_ROW_HEIGHT, CENTRAL_ROW_OVERSCAN, centralRowCode, centralUnitLabel, computeVisibleWindow, type CentralListProduct } from "./lib/central-list";
 import { isPriceMissing } from "./lib/product-price";
 
 export interface CentralRowBadge {
   kind: "PACK" | "PROMO";
   label: string;
+  /** Posición del escalón por cantidad (0 = el menor) que decide su color; sin posición un PROMO usa la del primero. El Pack siempre es azul. */
+  tier?: number;
 }
 
 interface CentralProductListProps<T extends CentralListProduct> {
@@ -79,6 +83,7 @@ export function CentralProductList<T extends CentralListProduct>({ products, onS
 export function CentralProductRow({ product, accent, badges, onSelect }: { product: CentralListProduct; accent: string | undefined; badges: readonly CentralRowBadge[]; onSelect: () => void }) {
   const code = centralRowCode(product);
   const missing = isPriceMissing(product);
+  const { shown, hidden } = limitRowChips(badges);
   return (
     <button
       type="button"
@@ -88,16 +93,13 @@ export function CentralProductRow({ product, accent, badges, onSelect }: { produ
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-base font-black leading-tight">{product.productName}</span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs leading-tight text-stone-500">
-          {code ? <span className="truncate">{code}</span> : null}
-          {badges.map((badge) => (
-            <span
-              key={`${badge.kind}:${badge.label}`}
-              className={`shrink-0 rounded px-1.5 py-px text-[11px] font-bold ${badge.kind === "PACK" ? "bg-sky-950 text-sky-300" : "bg-amber-950 text-amber-300"}`}
-            >
-              {badge.label}
-            </span>
+        {/* Un chip por condición (cada escalón y el Pack), de color propio; el código es lo primero que se recorta si no entran. */}
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight text-stone-500">
+          {code ? <span className="min-w-0 truncate">{code}</span> : null}
+          {shown.map((badge) => (
+            <DiscountChip key={`${badge.kind}:${String(badge.tier ?? "")}:${badge.label}`} kind={badge.kind} tierIndex={badge.tier}>{badge.label}</DiscountChip>
           ))}
+          {hidden.length > 0 ? <DiscountChip palette={MORE_PALETTE}><span title={hidden.map((badge) => badge.label).join(" · ")}>+{hidden.length}</span></DiscountChip> : null}
         </span>
       </span>
       {missing

@@ -41,6 +41,15 @@ export interface OperatingResult {
   missingCostItems: number;
   missingCostSales: number;
   missingCostRevenueCents: number;
+  /** Costo de personal automático (horas fichadas x valor hora, D-085): ya está INCLUIDO en operatingCostCents y en resultCents. */
+  laborCostCents: number;
+  laborWorkedSeconds: number;
+  /** Fichadas abiertas dentro del período: su costo crece con el tiempo (la pantalla se refresca sola mientras haya alguna). */
+  laborOpenShifts: number;
+  /** Fichadas a revisar (salida inferida o excedida). */
+  laborReviewShifts: number;
+  /** Hay horas sin valor hora cargado: el costo de personal está incompleto. */
+  laborRateMissing: boolean;
 }
 
 export interface OperatingResultRow {
@@ -57,6 +66,12 @@ export interface OperatingResultRow {
   missing_cost_items: number;
   missing_cost_sales: number;
   missing_cost_revenue_cents: number;
+  // Personal (202610200083): opcionales para tolerar un servidor que todavía no tiene la migración (cuentan como 0).
+  labor_cost_cents?: number;
+  labor_worked_seconds?: number;
+  labor_open_shifts?: number;
+  labor_review_shifts?: number;
+  labor_rate_missing?: boolean;
 }
 
 export function toOperatingResult(row: OperatingResultRow): OperatingResult {
@@ -64,7 +79,9 @@ export function toOperatingResult(row: OperatingResultRow): OperatingResult {
     branchId: row.branch_id, branchName: row.branch_name, revenueCents: row.revenue_cents, grossProfitCents: row.gross_profit_cents,
     recurringCostCents: row.recurring_cost_cents, expenseCents: row.expense_cents, operatingCostCents: row.operating_cost_cents,
     resultCents: row.operating_result_cents, marginBps: row.operating_margin_bps, partial: row.is_partial,
-    missingCostItems: row.missing_cost_items, missingCostSales: row.missing_cost_sales, missingCostRevenueCents: row.missing_cost_revenue_cents
+    missingCostItems: row.missing_cost_items, missingCostSales: row.missing_cost_sales, missingCostRevenueCents: row.missing_cost_revenue_cents,
+    laborCostCents: row.labor_cost_cents ?? 0, laborWorkedSeconds: row.labor_worked_seconds ?? 0, laborOpenShifts: row.labor_open_shifts ?? 0,
+    laborReviewShifts: row.labor_review_shifts ?? 0, laborRateMissing: row.labor_rate_missing === true
   };
 }
 
@@ -85,7 +102,16 @@ export function sumOperatingResults(results: readonly OperatingResult[]): Operat
   return { resultCents: results.reduce((sum, result) => sum + result.resultCents, 0), partial: results.some((result) => result.partial), branches: results.length };
 }
 
+/** Alguna sucursal tiene una fichada abierta: su costo de personal sigue corriendo, así que el resultado se vuelve a pedir cada tanto. */
+export function hasOpenLaborShifts(results: readonly OperatingResult[]): boolean {
+  return results.some((result) => result.laborOpenShifts > 0);
+}
+
+/** Cada cuánto se vuelve a pedir el resultado mientras haya fichadas abiertas (no hace falta cada segundo: el costo crece por minuto). */
+export const LABOR_REFRESH_MS = 120_000;
+
 export const PARTIAL_NOTE = "Parcial: existen ventas sin costo";
+export const LABOR_RATE_MISSING_NOTE = "Hay horas de personal sin valor hora cargado";
 export const NO_COSTS_NOTE = "Sin costos operativos cargados: el resultado es igual a la ganancia bruta";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -128,6 +154,32 @@ export interface BranchExpense {
   inPeriod: boolean;
 }
 
+/** Una persona en la sección «Personal — automático» (horas fichadas en ESTA sucursal x su valor hora). */
+export interface LaborEmployee {
+  employeeId: string;
+  name: string;
+  workedSeconds: number;
+  costCents: number;
+  /** Valor hora más bajo y más alto usados en el período (distintos si cambió de valor dentro del período). */
+  minRateCents: number | null;
+  maxRateCents: number | null;
+  /** Parte de sus horas no tiene valor hora cargado. */
+  rateMissing: boolean;
+  openShifts: number;
+  reviewShifts: number;
+}
+
+/** Personal de la sucursal en el período (D-085). `employees` viene vacío sin el permiso de control horario (`canSeeDetail` false). */
+export interface LaborReport {
+  costCents: number;
+  workedSeconds: number;
+  openShifts: number;
+  reviewShifts: number;
+  rateMissing: boolean;
+  canSeeDetail: boolean;
+  employees: LaborEmployee[];
+}
+
 export interface OperatingCostsReport {
   canWrite: boolean;
   /** Hoy en la zona horaria de la organización (YYYY-MM-DD). */
@@ -137,7 +189,35 @@ export interface OperatingCostsReport {
   expenses: BranchExpense[];
   recurringCents: number;
   expenseCents: number;
+  /** Personal automático del período; null si el servidor todavía no tiene la migración de personal. */
+  labor: LaborReport | null;
+  /** Total imputado al período: costos mensuales + gastos + personal. */
   operatingCostCents: number;
+}
+
+function parseLaborEmployee(raw: unknown): LaborEmployee | null {
+  if (!isRecord(raw)) return null;
+  const employeeId = asString(raw.employeeId);
+  const name = asString(raw.name);
+  const workedSeconds = asInteger(raw.workedSeconds);
+  const costCents = asInteger(raw.costCents);
+  if (!employeeId || name === null || workedSeconds === null || costCents === null) return null;
+  return {
+    employeeId, name, workedSeconds, costCents, minRateCents: asInteger(raw.minRateCents), maxRateCents: asInteger(raw.maxRateCents),
+    rateMissing: raw.rateMissing === true, openShifts: asInteger(raw.openShifts) ?? 0, reviewShifts: asInteger(raw.reviewShifts) ?? 0
+  };
+}
+
+function parseLabor(raw: unknown): LaborReport | null {
+  if (!isRecord(raw)) return null;
+  const costCents = asInteger(raw.costCents);
+  const workedSeconds = asInteger(raw.workedSeconds);
+  if (costCents === null || workedSeconds === null) return null;
+  return {
+    costCents, workedSeconds, openShifts: asInteger(raw.openShifts) ?? 0, reviewShifts: asInteger(raw.reviewShifts) ?? 0, rateMissing: raw.rateMissing === true,
+    canSeeDetail: raw.canSeeDetail === true,
+    employees: (Array.isArray(raw.employees) ? raw.employees as unknown[] : []).map(parseLaborEmployee).filter((employee): employee is LaborEmployee => employee !== null)
+  };
 }
 
 function parseVersion(raw: unknown): CostVersion | null {
@@ -201,8 +281,47 @@ export function parseOperatingCosts(raw: unknown): OperatingCostsReport {
   const recurring = (Array.isArray(raw.recurring) ? raw.recurring as unknown[] : []).map((item) => parseRecurring(item, today))
     .filter((cost): cost is RecurringCost => cost !== null);
   const expenses = (Array.isArray(raw.expenses) ? raw.expenses as unknown[] : []).map(parseExpense).filter((expense): expense is BranchExpense => expense !== null);
-  return { canWrite: raw.canWrite === true, today, period: { from: period.from, to: period.to }, recurring, expenses, recurringCents, expenseCents, operatingCostCents };
+  return { canWrite: raw.canWrite === true, today, period: { from: period.from, to: period.to }, recurring, expenses, recurringCents, expenseCents, labor: parseLabor(raw.labor), operatingCostCents };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Personal — automático (D-085): sólo se MUESTRA lo que calcula el servidor
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** "10 h", "7 h 30 min", "45 min": las horas trabajadas con los minutos exactos (sin redondear a horas enteras). */
+export function formatWorked(seconds: number): string {
+  const totalMinutes = Math.max(0, Math.round(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${String(minutes)} min`;
+  return minutes === 0 ? `${String(hours)} h` : `${String(hours)} h ${String(minutes)} min`;
+}
+
+/** "$ 4.000 / hora" o "$ 3.500 – $ 4.000 / hora" si el valor cambió dentro del período; "Sin valor hora" si no hay ninguno. */
+export function formatHourlyRate(employee: Pick<LaborEmployee, "minRateCents" | "maxRateCents">): string {
+  const { minRateCents: min, maxRateCents: max } = employee;
+  if (min === null || max === null) return "Sin valor hora";
+  const money = (cents: number) => formatCurrency(BigInt(cents));
+  return min === max ? `${money(min)} / hora` : `${money(min)} – ${money(max)} / hora`;
+}
+
+/** "hoy" si el período es sólo el día de hoy; si no, "el 09/10" o "del 01/10 al 10/10" (para el total de Personal). */
+export function laborPeriodName(period: { from: string; to: string }, today: string): string {
+  if (period.from === today && period.to === today) return "hoy";
+  if (period.from === period.to) return `el ${formatIsoDate(period.from)}`;
+  return `del ${formatIsoDate(period.from)} al ${formatIsoDate(period.to)}`;
+}
+
+/**
+ * Un costo mensual cargado a mano que probablemente sea el sueldo de una empleada («Sueldo Lucía», «Empleada», «Personal»...). Con el
+ * personal calculado por horas ESTE costo duplicaría el gasto: la pantalla lo señala (no se borra nada solo).
+ */
+export function looksLikePersonnelCost(name: string): boolean {
+  return /\b(sueldos?|salarios?|emplead[oa]s?|personal|jornal(?:es)?|haberes|n[oó]mina|mano de obra)\b/i.test(name);
+}
+
+export const LABOR_AUTOMATIC_NOTE = "Se calcula solo con las horas fichadas y el valor hora de cada persona: no cargues sueldos de empleadas como costo mensual.";
+export const LABOR_DUPLICATE_NOTE = "Posible duplicado: el personal ya se calcula por horas fichadas.";
 
 /** "dd/mm" para las listas del modal (sin año si es el año de `today`). */
 export function formatShortDate(iso: string, today: string): string {

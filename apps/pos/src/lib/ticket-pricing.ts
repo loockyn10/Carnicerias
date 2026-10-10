@@ -329,13 +329,44 @@ export function promotedUnitPriceCents(listPriceCents: bigint, promotion: Branch
  * escalón no se aplicaría.
  */
 export function unitPromotionLabel(listPriceCents: bigint, promotions: readonly BranchUnitPromotion[] | null | undefined, packRule: DiscountRule | null = null): string | null {
-  if (!promotions?.length) return null;
-  const parts = [...promotions].sort((left, right) => left.minimumUnits - right.minimumUnits).flatMap((promotion) => {
+  const chips = unitPromotionChips(listPriceCents, promotions, packRule);
+  return chips.length ? chips.map((chip) => chip.label).join(" · ") : null;
+}
+
+/** Un escalón por cantidad listo para mostrarse como chip propio: su texto y su POSICIÓN entre todos los escalones configurados (la da el color). */
+export interface UnitPromotionChip {
+  /** Posición del escalón (0 = el de menor cantidad) entre TODOS los configurados, aunque alguno no se muestre para este producto. */
+  tierIndex: number;
+  minimumUnits: number;
+  /** "$4.590/u desde 3 u". */
+  label: string;
+}
+
+/** Lo mismo que `unitPromotionLabel`, pero un elemento por escalón (cada condición es un chip independiente, con su propio color). */
+export function unitPromotionChips(listPriceCents: bigint, promotions: readonly BranchUnitPromotion[] | null | undefined, packRule: DiscountRule | null = null): UnitPromotionChip[] {
+  if (!promotions?.length) return [];
+  return [...promotions].sort((left, right) => left.minimumUnits - right.minimumUnits).flatMap((promotion, tierIndex) => {
     if (packRule?.packQuantityUnits != null && packRule.packQuantityUnits <= promotion.minimumUnits) return [];
     const price = promotedUnitPriceCents(listPriceCents, promotion);
-    return price === null ? [] : [`${formatCurrency(price)}/u desde ${String(promotion.minimumUnits)} u`];
+    return price === null ? [] : [{ tierIndex, minimumUnits: promotion.minimumUnits, label: `${formatCurrency(price)}/u desde ${String(promotion.minimumUnits)} u` }];
   });
-  return parts.length ? parts.join(" · ") : null;
+}
+
+/**
+ * Qué escalón por cantidad REALMENTE se aplica a una línea UNIT de `units` unidades (la que usa el motor `computeUnitLine`, con su
+ * precedencia: Pack vendido > promoción de pack por producto > escalón). Devuelve su cantidad mínima, o null si ninguno. Sólo para
+ * resaltar «aplicado» en el diálogo: no calcula ningún importe.
+ */
+export function appliedTierMinimumUnits(
+  listPriceCents: bigint, units: number, packRule: DiscountRule | null, promotions: readonly BranchUnitPromotion[], packSale: UnitPackSale | null = null
+): number | null {
+  if (!promotions.length || units < 1) return null;
+  try {
+    const computed = computeUnitLine(listPriceCents, units, packRule, "CASH", 0n, { branchPromotions: promotions, packSale });
+    return computed.unitDiscount && computed.unitDiscount.kind !== "PACK" ? computed.unitDiscount.promotionMinimumUnits ?? null : null;
+  } catch {
+    return null;
+  }
 }
 
 /** El escalón que recibiría una línea de `quantityUnits` (el mayor alcanzado) o null; para mostrar «llevando N o más» en el diálogo de cantidad. */

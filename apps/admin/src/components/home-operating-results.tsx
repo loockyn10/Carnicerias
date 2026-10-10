@@ -1,7 +1,8 @@
 import Link from "next/link";
 
 import { SALES_RANGE_PRESETS, rangeQuery, type SalesRange } from "../lib/date-range";
-import { formatResult, PARTIAL_NOTE, sumOperatingResults, type OperatingResult } from "../lib/operating-costs";
+import { formatResult, hasOpenLaborShifts, LABOR_REFRESH_MS, PARTIAL_NOTE, sumOperatingResults, type OperatingResult } from "../lib/operating-costs";
+import { AutoRefresh } from "./auto-refresh";
 
 /**
  * «Resultado operativo» en Inicio (D-082): una tarjeta compacta por sucursal activa y el total de las visibles, para el mismo período
@@ -14,6 +15,8 @@ export function HomeOperatingResults({ results, range, periodName, productionBra
   const chip = (active: boolean) => `rounded-full px-3 py-1.5 text-sm font-bold ${active ? "bg-rose-800 text-white" : "border bg-white hover:border-rose-300"}`;
   const card = (negative: boolean) => `rounded-xl px-4 py-3 shadow-sm ${negative ? "border border-red-200 bg-red-50" : "border border-stone-200 bg-white"}`;
   return <section className="mt-8" data-testid="home-operating-results">
+    {/* Con una fichada abierta el costo de personal sigue corriendo: el Inicio se vuelve a pedir cada tanto (misma RPC, ningún cálculo acá). */}
+    {hasOpenLaborShifts(results) ? <AutoRefresh intervalMs={LABOR_REFRESH_MS} /> : null}
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-wider text-rose-800">Rentabilidad</p>

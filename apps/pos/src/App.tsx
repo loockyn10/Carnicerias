@@ -13,7 +13,6 @@ import {
   formatBasisPointsPercent,
   packDiscountLabel,
   type BranchUnitPromotion,
-  quantityTierLabel,
   type ScaleKind,
   type UnitPackSale,
   type WeightStabilityState
@@ -32,8 +31,11 @@ import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./l
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
   applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, findUnitLineToMerge,
-  autoPackSale, effectiveUnitPriceCents, packOfferLabel, packOfferUnitPriceCents, promotedUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalQuantity, unitPromotionLabel, type DiscountRule, type PackOffer
+  appliedTierMinimumUnits, autoPackSale, effectiveUnitPriceCents, packOfferLabel, packOfferUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalQuantity, unitPromotionChips, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
+import { DiscountChip } from "./DiscountChip";
+import { QuantityTierList } from "./QuantityTierList";
+import { PACK_PALETTE, tierPalette, tierPositionByMinimumUnits } from "./lib/discount-chips";
 import { ManualPriceModal } from "./ManualPriceModal";
 import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
@@ -1112,11 +1114,12 @@ export default function App() {
     setError(null);
   }
 
-  // "$4.590/u desde 3 u": el precio unitario que queda llevando el mínimo de la promoción de sucursal (sólo UNIT con precio,
-  // en el POS de escritorio). Mismo helper para la lista de Central y la grilla; el cálculo lo hace el motor de pricing.
-  function unitPromotionBadgeLabel(product: CatalogProduct): string | null {
-    if (product.unitType !== "UNIT" || isPriceMissing(product)) return null;
-    return unitPromotionLabel(product.pricePerKgCents, unitPromotions, findPackRule(discounts, product.productId, branchId));
+  // "$4.590/u desde 3 u": el precio unitario que queda llevando el mínimo de cada escalón de la sucursal (sólo UNIT con precio, en el POS
+  // de escritorio), UN chip por escalón con el color de su posición. Mismo helper para la lista de Central y la grilla; el cálculo lo hace
+  // el motor de pricing.
+  function unitPromotionBadgeChips(product: CatalogProduct) {
+    if (product.unitType !== "UNIT" || isPriceMissing(product)) return [];
+    return unitPromotionChips(product.pricePerKgCents, unitPromotions, findPackRule(discounts, product.productId, branchId));
   }
 
   // Badges de la fila de Central: la misma regla de promoción que mostraba la card (la primera del producto) y el
@@ -1126,8 +1129,7 @@ export default function App() {
     const rule = firstDiscountByProduct.get(product.productId);
     const label = rule ? discountBadgeLabel(rule) : null;
     if (rule && label) badges.push({ kind: rule.promotionMode === "PACK_FIXED_TOTAL" ? "PACK" : "PROMO", label });
-    const unitPromo = unitPromotionBadgeLabel(product);
-    if (unitPromo) badges.push({ kind: "PROMO", label: unitPromo });
+    for (const chip of unitPromotionBadgeChips(product)) badges.push({ kind: "PROMO", label: chip.label, tier: chip.tierIndex });
     const offer = packOfferOf(product);
     if (offer) badges.push({ kind: "PACK", label: packOfferLabel(product.pricePerKgCents, offer) });
     return badges;
@@ -1136,7 +1138,7 @@ export default function App() {
   // Mismo markup de card de siempre (el CSS compacto depende del orden name / category / price);
   // una card sin stock es un <button disabled> — no dispara onClick aunque se fuerce el evento.
   function renderProductCard(product: CatalogProduct, outOfStock: boolean) {
-    const unitPromo = unitPromotionBadgeLabel(product);
+    const unitPromoChips = unitPromotionBadgeChips(product);
     const cardPackOffer = product.unitType === "UNIT" && !isPriceMissing(product) ? packOfferOf(product) : null;
     return (
       <button
@@ -1160,8 +1162,12 @@ export default function App() {
                 const label = discountBadgeLabel(rule);
                 return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
               })}
-              {unitPromo ? <span className="mt-1 block text-xs font-bold text-amber-300">{unitPromo}</span> : null}
-              {cardPackOffer ? <span className="mt-1 block text-xs font-bold text-sky-300">{packOfferLabel(product.pricePerKgCents, cardPackOffer)}</span> : null}
+              {unitPromoChips.length > 0 || cardPackOffer ? (
+                <span className="mt-1 flex flex-wrap gap-1">
+                  {unitPromoChips.map((chip) => <DiscountChip key={chip.minimumUnits} kind="PROMO" tierIndex={chip.tierIndex}>{chip.label}</DiscountChip>)}
+                  {cardPackOffer ? <DiscountChip kind="PACK">{packOfferLabel(product.pricePerKgCents, cardPackOffer)}</DiscountChip> : null}
+                </span>
+              ) : null}
             </>}
       </button>
     );
@@ -2603,14 +2609,12 @@ export default function App() {
                     Pack: {packRuleForSelectedProduct.packQuantityUnits} u por {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))} — se aplica automáticamente en múltiplos exactos.
                   </p>
                 ) : null}
-                {unitPromotions.length > 0 ? (
-                  <ul className="mt-3 space-y-1 text-sm font-bold text-emerald-300" data-testid="quantity-tiers">
-                    {unitPromotions.map((tier) => {
-                      const tierUnitPrice = promotedUnitPriceCents(selectedProduct.pricePerKgCents, tier);
-                      return <li key={tier.id}>{quantityTierLabel(tier)}{tierUnitPrice === null ? "" : ` · ${formatCurrency(tierUnitPrice)}/u`}</li>;
-                    })}
-                  </ul>
-                ) : null}
+                {unitPromotions.length > 0 ? (() => {
+                  // Cada escalón conserva el color de su posición (el mismo de la lista); el que el motor está aplicando a esta línea se resalta.
+                  const request = quantityInput === null ? null : unitLineRequest(selectedProduct);
+                  const appliedMinimum = request ? appliedTierMinimumUnits(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, unitPromotions, request.packSale) : null;
+                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} tiers={unitPromotions} />;
+                })() : null}
               </>
             )}
             {shouldDisplayTicketAmounts(paymentMethod) ? (
@@ -2639,15 +2643,19 @@ export default function App() {
                   const unitPromoLabel = computed.unitDiscount?.kind === "PACK"
                     ? "Pack " + packDiscountLabel(computed.unitDiscount.discountBps)
                     : computed.unitDiscount ? "Llevando " + String(computed.unitDiscount.promotionMinimumUnits ?? 0) + " o más · " + formatBasisPointsPercent(computed.unitDiscount.discountBps) + "% dto" : "Promo";
+                  // El descuento aplicado y el precio por unidad toman el color de su identidad (Pack = azul, escalón = el de su posición).
+                  const unitDiscountText = computed.unitDiscount?.kind === "PACK"
+                    ? PACK_PALETTE.text
+                    : computed.unitDiscount ? tierPalette(tierPositionByMinimumUnits(unitPromotions, computed.unitDiscount.promotionMinimumUnits ?? 0)).text : null;
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}
-                      {preview.promotionDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">{unitPromoLabel}: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
+                      {preview.promotionDiscountCents > 0n ? <p className={`mt-1 font-bold ${unitDiscountText ?? "text-emerald-400"}`}>{unitPromoLabel}: -{formatCurrency(preview.promotionDiscountCents)}</p> : null}
                       {unitRequest?.mergedLine ? <p className="mt-1 text-xs text-stone-500">Se suma a las {String(unitRequest.mergedLine.quantityUnits ?? 0)} u de este producto que ya están en el ticket.</p> : null}
                     </>}
                     {/* El recargo por tarjeta se aplica al total comercial completo, packs incluidos, sin excepción (D-044) — se muestra siempre que corresponda, no sólo fuera de un pack. */}
                     {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}
-                    {unitRequest ? <p className="mt-2 text-sm text-stone-400">Precio por unidad: <strong className="text-xl font-black text-emerald-300" data-testid="unit-price-preview">{formatCurrency(effectiveUnitPriceCents(preview.subtotalCents, unitRequest.units))}/u</strong></p> : null}
+                    {unitRequest ? <p className="mt-2 text-sm text-stone-400">Precio por unidad: <strong className={`text-xl font-black ${unitDiscountText ?? "text-emerald-300"}`} data-testid="unit-price-preview">{formatCurrency(effectiveUnitPriceCents(preview.subtotalCents, unitRequest.units))}/u</strong></p> : null}
                     <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
                 } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
               </div>

@@ -1,6 +1,7 @@
 import { formatCurrency, formatWeight } from "@carnicerias/business-logic";
 import type { TicketLine } from "@carnicerias/types";
 
+import { PACK_PALETTE } from "./lib/discount-chips";
 import { describeUnitLine, finalPricePerKgCents, finalPricePerUnitCents } from "./lib/ticket-pricing";
 
 /** Montos y badges de una card del ticket (se muestra sólo cuando el método de pago permite ver importes). */
@@ -40,7 +41,7 @@ export function TicketLineDetail({ line }: { line: TicketLine }) {
         </p>
       )}
       {/* El ahorro de una promoción ya se lee en base → final: sin "Desde N u: X% OFF" ni "Descuento: -$X". Sólo el Pack conserva su etiqueta. */}
-      {unitBadge ? <p className="mt-1 text-xs font-bold text-emerald-400" data-testid="unit-discount-badge">{unitBadge}</p> : null}
+      {unitBadge ? <p className={`mt-1 text-xs font-bold ${PACK_PALETTE.text}`} data-testid="unit-discount-badge">{unitBadge}</p> : null}
       {line.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 text-xs font-bold text-amber-300">Promo pack</p> : null}
     </>
   );
