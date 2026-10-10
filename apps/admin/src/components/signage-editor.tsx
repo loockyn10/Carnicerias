@@ -6,10 +6,13 @@ import { useState, useTransition } from "react";
 
 import { createSignageDisplayAction, regenerateSignageTokenAction, saveSignageDisplayAction } from "../app/admin/products/signage/actions";
 import {
-  clampSlideSeconds, MAX_SIGNAGE_SLIDES, MAX_SLIDE_SECONDS, MIN_SLIDE_SECONDS, moveItem, UNAVAILABLE_LABELS, type EditorDisplay, type EditorSlide
+  clampSlideSeconds, EDITOR_UNAVAILABLE_LABELS, MAX_SLIDE_SECONDS, MIN_SLIDE_SECONDS, moveItem, type EditorDisplay, type EditorEntry
 } from "../lib/signage";
+import { addEntry, addPromotions, entriesToInput, entryFromGroup, entryFromProduct, entryKey, summarizeEntries } from "../lib/signage-entries";
+import type { PromotionCatalog } from "../lib/signage-promotions";
 import { ProductPicker } from "./product-picker";
 import { SignageLinkPanel } from "./signage-link-panel";
+import { PromotionGroupsModal, PromotionPickerModal } from "./signage-promotions";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
 const primaryButton = "rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-50";
@@ -64,29 +67,62 @@ export function SignageCreateForm({ branches, firstScreen }: { branches: BranchO
   </div>;
 }
 
-/** Estado local de las filas del editor, separado de la vista para poder probar las operaciones sin React. */
-export function addSlide(slides: readonly EditorSlide[], slide: EditorSlide): { slides: EditorSlide[]; error: string | null } {
-  if (slides.some((existing) => existing.productId === slide.productId)) return { slides: [...slides], error: "Ese producto ya está en la presentación" };
-  if (slides.length >= MAX_SIGNAGE_SLIDES) return { slides: [...slides], error: `Una pantalla admite hasta ${String(MAX_SIGNAGE_SLIDES)} ofertas` };
-  return { slides: [...slides, slide], error: null };
+const KIND_LABELS: Record<EditorEntry["kind"], string> = { PRODUCT: "Producto", PROMOTION: "Promoción", GROUP: "Grupo" };
+
+function EntryRow({ entry, index, total, onMove, onRemove, onEditGroup }: {
+  entry: EditorEntry; index: number; total: number; onMove: (delta: -1 | 1) => void; onRemove: () => void; onEditGroup: () => void;
+}) {
+  const reason = entry.unavailable;
+  return <li className="flex flex-wrap items-start gap-3 px-3 py-2" data-kind={entry.kind}>
+    <span className="w-6 pt-0.5 text-right text-sm font-black text-stone-400">{index + 1}</span>
+    <div className="min-w-0 flex-1">
+      <p className="truncate text-sm font-bold">
+        <span className="mr-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs font-bold text-stone-600">{KIND_LABELS[entry.kind]}</span>{entry.name}
+        {entry.sku ? <span className="ml-2 text-xs font-normal text-stone-500">{entry.sku}</span> : null}
+        {entry.unitType ? <span className="ml-2 text-xs font-normal text-stone-500">{stockUnitLabel(entry.unitType)}</span> : null}
+        {entry.kind === "PROMOTION" && !entry.hasPhoto && !reason ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">⚠ Sin foto</span> : null}
+      </p>
+      {entry.kind === "GROUP" ? <>
+        <p className="text-xs text-stone-500">{entry.children.length} {entry.children.length === 1 ? "promoción" : "promociones"} del grupo: rotan en este orden. El precio y la vigencia se toman de cada promoción.</p>
+        <ul className="mt-1 space-y-0.5 border-l-2 border-stone-200 pl-3" data-testid="group-children">
+          {entry.children.map((child) => <li className="text-xs" key={child.promotionId}>
+            <span className="font-bold">{child.name}</span>{" "}
+            {child.unavailable ? <span className="font-bold text-amber-700">· {EDITOR_UNAVAILABLE_LABELS[child.unavailable]}</span>
+              : <span className="text-stone-500">· {child.summary ?? "El precio se toma del sistema al publicar"}</span>}
+            {!child.hasPhoto && !child.unavailable ? <span className="ml-1 font-bold text-amber-800">⚠ Sin foto</span> : null}
+          </li>)}
+          {!entry.children.length ? <li className="text-xs text-stone-500">El grupo no tiene promociones que esta pantalla pueda mostrar.</li> : null}
+        </ul>
+        <button className="mt-1 text-xs font-bold text-rose-800 hover:underline" onClick={onEditGroup} type="button">Editar grupo</button>
+      </> : reason ? <p className="text-xs font-bold text-amber-700">{EDITOR_UNAVAILABLE_LABELS[reason]}</p>
+        : <p className="text-xs text-stone-500">{entry.summary ?? "El precio se toma del sistema al publicar"}</p>}
+    </div>
+    <div className="flex gap-1">
+      <button aria-label={`Subir ${entry.name}`} className={smallButton} disabled={index === 0} onClick={() => onMove(-1)} type="button">↑</button>
+      <button aria-label={`Bajar ${entry.name}`} className={smallButton} disabled={index === total - 1} onClick={() => onMove(1)} type="button">↓</button>
+      <button aria-label={`Quitar ${entry.name}`} className={`${smallButton} text-red-700`} onClick={onRemove} type="button">Quitar</button>
+    </div>
+  </li>;
 }
 
-export function SignageEditor({ display, branches }: { display: EditorDisplay; branches: BranchOption[] }) {
+export function SignageEditor({ display, branches, catalog = { promotions: [], groups: [] } }: { display: EditorDisplay; branches: BranchOption[]; catalog?: PromotionCatalog }) {
   const router = useRouter();
   const [name, setName] = useState(display.name);
   const [branchId, setBranchId] = useState(display.branchId ?? "");
   const [seconds, setSeconds] = useState(String(display.slideDurationSeconds));
   const [enabled, setEnabled] = useState(display.enabled);
-  const [slides, setSlides] = useState<EditorSlide[]>(display.slides);
-  // Tras publicar, el servidor devuelve los productos con sus precios y motivos actualizados: se re-sincronizan sin remontar el editor
+  const [entries, setEntries] = useState<EditorEntry[]>(display.entries);
+  // Tras publicar, el servidor devuelve las entradas con sus precios y motivos actualizados: se re-sincronizan sin remontar el editor
   // (así el aviso «Publicado» no se pierde).
-  const serverSlides = JSON.stringify(display.slides);
-  const [syncedSlides, setSyncedSlides] = useState(serverSlides);
-  if (syncedSlides !== serverSlides) {
-    setSyncedSlides(serverSlides);
-    setSlides(display.slides);
+  const serverEntries = JSON.stringify(display.entries);
+  const [syncedEntries, setSyncedEntries] = useState(serverEntries);
+  if (syncedEntries !== serverEntries) {
+    setSyncedEntries(serverEntries);
+    setEntries(display.entries);
   }
   const [pickerKey, setPickerKey] = useState(0);
+  const [promotionPicker, setPromotionPicker] = useState(false);
+  const [groupsModal, setGroupsModal] = useState<{ groupId: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [freshToken, setFreshToken] = useState<string | null>(null);
@@ -94,15 +130,17 @@ export function SignageEditor({ display, branches }: { display: EditorDisplay; b
 
   const secondsNumber = Number(seconds);
   const secondsValid = Number.isInteger(secondsNumber) && secondsNumber >= MIN_SLIDE_SECONDS && secondsNumber <= MAX_SLIDE_SECONDS;
-  const blocked = slides.filter((slide) => slide.unavailable !== null).length;
+  const { blocked, withoutPhoto } = summarizeEntries(entries);
+  const present = new Set(entries.map(entryKey));
+  const addedPromotionIds = new Set(entries.filter((entry) => entry.kind === "PROMOTION").map((entry) => entry.id));
+  const groupsAvailable = catalog.groups.filter((group) => !present.has(entryKey({ kind: "GROUP", id: group.id })));
 
   function save() {
     setError(null);
     setNotice(null);
     startTransition(async () => {
       const result = await saveSignageDisplayAction({
-        displayId: display.id, name, branchId: branchId || null, slideDurationSeconds: clampSlideSeconds(secondsNumber), enabled,
-        productIds: slides.map((slide) => slide.productId)
+        displayId: display.id, name, branchId: branchId || null, slideDurationSeconds: clampSlideSeconds(secondsNumber), enabled, entries: entriesToInput(entries)
       });
       if (result.error) { setError(result.error); return; }
       setNotice("Publicado. El televisor toma los cambios solo, en menos de 30 segundos.");
@@ -121,11 +159,13 @@ export function SignageEditor({ display, branches }: { display: EditorDisplay; b
     });
   }
 
+  const remove = (index: number) => { setEntries(entries.filter((_, position) => position !== index)); setNotice(null); };
+
   return <section className="rounded-xl bg-white p-5 shadow-sm" data-testid="signage-editor">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 className="text-lg font-black">Pantalla: {display.name}</h2>
-        <p className="mt-1 text-sm text-stone-600">Los precios y promociones se toman solos del sistema: acá sólo se eligen los productos.</p>
+        <p className="mt-1 text-sm text-stone-600">Los precios y promociones se toman solos del sistema: acá sólo se eligen productos, promociones y grupos.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <a className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-bold" data-testid="signage-open-preview" href={`/tv-preview/${display.id}`} rel="noopener" target="_blank">Abrir vista TV</a>
@@ -155,42 +195,52 @@ export function SignageEditor({ display, branches }: { display: EditorDisplay; b
       Pantalla activa <span className="font-normal text-stone-500">(desactivada, el televisor muestra el cartel de espera)</span>
     </label>
 
-    <h3 className="mt-6 text-base font-black">Ofertas publicadas ({slides.length})</h3>
-    <div className="mt-2 max-w-xl">
+    <h3 className="mt-6 text-base font-black">Ofertas publicadas ({entries.length})</h3>
+    <div className="mt-2 grid max-w-3xl gap-2">
       <ProductPicker
         branchId={branchId || null}
         key={pickerKey}
         name="signage_add_product"
         onChange={(product) => {
           if (!product) return;
-          const outcome = addSlide(slides, { productId: product.id, name: product.name, sku: product.sku, unitType: product.unitType, summary: null, unavailable: null });
-          setSlides(outcome.slides);
+          const outcome = addEntry(entries, entryFromProduct(product));
+          setEntries(outcome.entries);
           setError(outcome.error);
           setNotice(null);
           setPickerKey((key) => key + 1);
         }}
         placeholder="Agregar producto: nombre, SKU o código de barras…"
       />
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-bold text-rose-800" data-testid="signage-add-promotions" onClick={() => setPromotionPicker(true)} type="button">+ Agregar promociones</button>
+        <label className="flex items-center gap-2 text-sm font-bold">
+          <span className="sr-only">Agregar grupo</span>
+          <select aria-label="Agregar grupo" className={input} data-testid="signage-add-group" onChange={(event) => {
+            const group = catalog.groups.find((candidate) => candidate.id === event.target.value);
+            if (!group) return;
+            const outcome = addEntry(entries, entryFromGroup(group, catalog));
+            setEntries(outcome.entries);
+            setError(outcome.error);
+            setNotice(null);
+          }} value="">
+            <option value="">Agregar grupo…</option>
+            {groupsAvailable.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.promotionIds.length})</option>)}
+          </select>
+        </label>
+        <button className="text-sm font-bold text-rose-800 hover:underline" onClick={() => setGroupsModal({ groupId: null })} type="button">Administrar grupos</button>
+      </div>
     </div>
-    {branchId ? <p className="mt-1 text-xs text-stone-500">Sólo se ofrecen productos que vende esa sucursal.</p> : null}
+    {branchId ? <p className="mt-1 text-xs text-stone-500">Sólo se ofrecen productos y promociones que aplican a esa sucursal.</p> : <p className="mt-1 text-xs text-stone-500">Sin sucursal se ofrecen las promociones de todas las sucursales y se usa el precio global.</p>}
 
     <ol className="mt-3 divide-y divide-stone-100 rounded-lg border border-stone-200" data-testid="signage-slides">
-      {slides.map((slide, index) => <li className="flex flex-wrap items-center gap-3 px-3 py-2" key={slide.productId}>
-        <span className="w-6 text-right text-sm font-black text-stone-400">{index + 1}</span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold">{slide.name}{slide.sku ? <span className="ml-2 text-xs font-normal text-stone-500">{slide.sku}</span> : null}<span className="ml-2 text-xs font-normal text-stone-500">{stockUnitLabel(slide.unitType)}</span></p>
-          {slide.unavailable ? <p className="text-xs font-bold text-amber-700">{UNAVAILABLE_LABELS[slide.unavailable]}</p>
-            : <p className="text-xs text-stone-500">{slide.summary ?? "El precio se toma del sistema al publicar"}</p>}
-        </div>
-        <div className="flex gap-1">
-          <button aria-label={`Subir ${slide.name}`} className={smallButton} disabled={index === 0} onClick={() => { setSlides(moveItem(slides, index, -1)); setNotice(null); }} type="button">↑</button>
-          <button aria-label={`Bajar ${slide.name}`} className={smallButton} disabled={index === slides.length - 1} onClick={() => { setSlides(moveItem(slides, index, 1)); setNotice(null); }} type="button">↓</button>
-          <button aria-label={`Quitar ${slide.name}`} className={`${smallButton} text-red-700`} onClick={() => { setSlides(slides.filter((_, position) => position !== index)); setNotice(null); }} type="button">Quitar</button>
-        </div>
-      </li>)}
-      {!slides.length ? <li className="px-3 py-4 text-sm text-stone-500">Todavía no hay ofertas: el televisor muestra «Próximamente nuevas ofertas».</li> : null}
+      {entries.map((entry, index) => <EntryRow
+        entry={entry} index={index} key={entryKey(entry)} onEditGroup={() => setGroupsModal({ groupId: entry.id })}
+        onMove={(delta) => { setEntries(moveItem(entries, index, delta)); setNotice(null); }} onRemove={() => remove(index)} total={entries.length}
+      />)}
+      {!entries.length ? <li className="px-3 py-4 text-sm text-stone-500">Todavía no hay ofertas: el televisor muestra «Próximamente nuevas ofertas».</li> : null}
     </ol>
     {blocked ? <p className="mt-2 text-sm text-amber-700">{blocked} {blocked === 1 ? "oferta no se muestra" : "ofertas no se muestran"} en el TV por el motivo indicado.</p> : null}
+    {withoutPhoto ? <p className="mt-1 text-sm text-amber-800" data-testid="signage-without-photo">⚠ {withoutPhoto} {withoutPhoto === 1 ? "promoción no tiene" : "promociones no tienen"} foto: se reproduce igual, con un reemplazo de la foto.</p> : null}
 
     <div className="mt-5 flex flex-wrap items-center gap-3">
       <button className={primaryButton} disabled={pending || !secondsValid || !name.trim()} onClick={save} type="button">{pending ? "Guardando…" : "Guardar y publicar"}</button>
@@ -198,5 +248,16 @@ export function SignageEditor({ display, branches }: { display: EditorDisplay; b
     </div>
     {error ? <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p> : null}
     {notice ? <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800" role="status">{notice}</p> : null}
+    {promotionPicker ? <PromotionPickerModal
+      alreadyAdded={addedPromotionIds} branchId={branchId || null} displayName={name}
+      onAdd={(options) => {
+        const outcome = addPromotions(entries, options);
+        setEntries(outcome.entries);
+        setError(outcome.error);
+        setNotice(null);
+      }}
+      onClose={() => setPromotionPicker(false)} onGroupSaved={() => router.refresh()}
+    /> : null}
+    {groupsModal ? <PromotionGroupsModal initialGroupId={groupsModal.groupId} onChanged={() => router.refresh()} onClose={() => setGroupsModal(null)} /> : null}
   </section>;
 }

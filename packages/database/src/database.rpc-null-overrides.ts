@@ -402,6 +402,66 @@ export interface RpcNullOverrides {
       total_count: number
     }[]
   }
+  // Costos operativos (D-082): operating_margin_bps es null sin ventas en el período. p_cost_id null = alta de un costo mensual nuevo.
+  get_branch_operating_result: {
+    Args: { p_branch_id?: string | null; p_from: string; p_to: string }
+    Returns: {
+      branch_id: string
+      branch_name: string
+      expense_cents: number
+      gross_profit_cents: number
+      is_partial: boolean
+      missing_cost_items: number
+      missing_cost_revenue_cents: number
+      missing_cost_sales: number
+      operating_cost_cents: number
+      operating_margin_bps: number | null
+      operating_result_cents: number
+      recurring_cost_cents: number
+      revenue_cents: number
+    }[]
+  }
+  save_branch_recurring_cost: {
+    Args: {
+      p_amount_cents: number
+      p_branch_id: string
+      p_cost_id: string | null
+      p_effective_from: string
+      p_name: string
+      p_request_key?: string | null
+    }
+    Returns: Json
+  }
+  record_branch_expense: {
+    Args: {
+      p_amount_cents: number
+      p_branch_id: string
+      p_concept: string
+      p_expense_date: string
+      p_request_key?: string | null
+    }
+    Returns: Json
+  }
+  // Cartelería con promociones y grupos (D-084): p_group_id null = crear el grupo; p_branch_id null = pantalla sin sucursal (precio global).
+  save_signage_group: {
+    Args: { p_group_id: string | null; p_name: string; p_promotion_ids: string[] }
+    Returns: Json
+  }
+  save_signage_display_entries: {
+    Args: {
+      p_branch_id: string | null
+      p_display_id: string
+      p_enabled: boolean
+      p_entries: Json
+      p_name: string
+      p_slide_duration_seconds: number
+    }
+    Returns: Json
+  }
+  get_signage_promotion_catalog: {
+    Args: { p_applicable_only?: boolean; p_branch_id?: string | null }
+    Returns: Json
+  }
 }
 
 // Every key overridden here must still exist as an RPC in the generated file. If a migration

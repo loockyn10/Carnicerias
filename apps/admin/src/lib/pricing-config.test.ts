@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { changedCostItems, costPlaceholder, parseCostCents } from "./bulk-costs";
-import { describePricingConfigOutcome, describePricingConfigPreview, describePricingConfigPreviewNotes, describePricingConfigSample, parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome } from "./pricing-config";
+import { describePricingConfigOutcome, describePricingConfigPreview, describePricingConfigPreviewNotes, describePricingConfigSample, parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome , parseQuantityTierRows, parseQuantityTiersField } from "./pricing-config";
 
 function form(values: Record<string, string>) {
   const data = new FormData();
@@ -13,17 +13,17 @@ const VALID = { margin: "30", unit_bulk: "15", pack: "20", card: "10" };
 
 describe("parsePricingConfigForm (configuración global de precios)", () => {
   it("30 / 15 / 20 / 10 → basis points enteros", () => {
-    expect(parsePricingConfigForm(form(VALID))).toEqual({ marginBps: 3_000, unitBulkDiscountBps: 1_500, packDiscountBps: 2_000, cardSurchargeBps: 1_000 });
+    expect(parsePricingConfigForm(form(VALID))).toEqual({ marginBps: 3_000, quantityTiers: [{ minimumUnits: 3, discountBps: 1_500 }], unitBulkDiscountBps: 1_500, packDiscountBps: 2_000, cardSurchargeBps: 1_000 });
   });
 
   it("acepta coma y punto decimal, hasta 2 decimales", () => {
     const parsed = parsePricingConfigForm(form({ margin: "32,5", unit_bulk: "12.5", pack: "0,01", card: "99,99" }));
-    expect(parsed).toEqual({ marginBps: 3_250, unitBulkDiscountBps: 1_250, packDiscountBps: 1, cardSurchargeBps: 9_999 });
-    for (const value of Object.values(parsed)) expect(Number.isInteger(value)).toBe(true);
+    expect(parsed).toEqual({ marginBps: 3_250, quantityTiers: [{ minimumUnits: 3, discountBps: 1_250 }], unitBulkDiscountBps: 1_250, packDiscountBps: 1, cardSurchargeBps: 9_999 });
+    for (const value of [parsed.marginBps, parsed.unitBulkDiscountBps, parsed.packDiscountBps, parsed.cardSurchargeBps]) expect(Number.isInteger(value)).toBe(true);
   });
 
   it("el descuento llevando 3u, el descuento por pack y el recargo aceptan 0 (sin promoción / pack sin descuento / sin recargo)", () => {
-    expect(parsePricingConfigForm(form({ ...VALID, unit_bulk: "0", pack: "0", card: "0,00" }))).toMatchObject({ unitBulkDiscountBps: 0, packDiscountBps: 0, cardSurchargeBps: 0 });
+    expect(parsePricingConfigForm(form({ ...VALID, unit_bulk: "0", pack: "0", card: "0,00" }))).toMatchObject({ quantityTiers: [], unitBulkDiscountBps: 0, packDiscountBps: 0, cardSurchargeBps: 0 });
   });
 
   it("el margen no acepta 0", () => {
@@ -136,7 +136,7 @@ describe("resultado del guardado de la configuración", () => {
       "Productos sin costo (conservan su precio): 27",
       "Sin cambios: 54",
       "Packs actualizados: 12",
-      "Sucursales con la promoción actualizada: 3"
+      "Sucursales con los descuentos por cantidad actualizados: 3"
     ]);
   });
 
@@ -208,5 +208,51 @@ describe("costPlaceholder", () => {
     expect(costPlaceholder(350_050)).toBe("3500.5");
     expect(costPlaceholder(350_005)).toBe("3500.05");
     expect(costPlaceholder(null)).toBe("Sin costo");
+  });
+});
+
+const TIERS = JSON.stringify([{ units: "5", percent: "20" }, { units: "3", percent: "15" }]);
+const WITHOUT_LEGACY = { margin: VALID.margin, pack: VALID.pack, card: VALID.card };
+
+describe("descuentos por cantidad: escalones de la configuración (D-083)", () => {
+  it("3 unidades → 15 % y 5 unidades → 20 %: se ordenan por cantidad y viajan en basis points enteros", () => {
+    const parsed = parsePricingConfigForm(form({ ...WITHOUT_LEGACY, quantity_tiers: TIERS }));
+    expect(parsed.quantityTiers).toEqual([{ minimumUnits: 3, discountBps: 1_500 }, { minimumUnits: 5, discountBps: 2_000 }]);
+    expect(parsed.unitBulkDiscountBps).toBe(1_500);
+  });
+
+  it("una lista vacía es válida: sin descuentos por cantidad", () => {
+    expect(parsePricingConfigForm(form({ ...WITHOUT_LEGACY, quantity_tiers: "[]" }))).toMatchObject({ quantityTiers: [], unitBulkDiscountBps: 0 });
+  });
+
+  it("los escalones mandan sobre el viejo campo unit_bulk", () => {
+    expect(parsePricingConfigForm(form({ ...VALID, quantity_tiers: TIERS })).quantityTiers).toHaveLength(2);
+  });
+
+  it("acepta decimales con coma o punto (hasta 2)", () => {
+    expect(parseQuantityTierRows([{ units: "4", percent: "12,5" }, { units: "6", percent: "17.75" }])).toEqual({ ok: true, tiers: [{ minimumUnits: 4, discountBps: 1_250 }, { minimumUnits: 6, discountBps: 1_775 }] });
+  });
+
+  it.each([
+    [[{ units: "1", percent: "10" }], "cantidad"],
+    [[{ units: "", percent: "10" }], "cantidad"],
+    [[{ units: "2,5", percent: "10" }], "cantidad"],
+    [[{ units: "abc", percent: "10" }], "cantidad"],
+    [[{ units: "3", percent: "0" }], "descuento"],
+    [[{ units: "3", percent: "100" }], "porcentaje"],
+    [[{ units: "3", percent: "" }], "porcentaje"],
+    [[{ units: "3", percent: "15,555" }], "porcentaje"],
+    [[{ units: "3", percent: "15" }, { units: "3", percent: "20" }], "misma cantidad"],
+    [[{ units: "3", percent: "20" }, { units: "5", percent: "15" }], "más descuento"]
+  ])("rechaza %j (error sobre %s)", (rows, subject) => {
+    const result = parseQuantityTierRows(rows);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(subject);
+  });
+
+  it("rechaza un campo mal formado en vez de guardar a medias", () => {
+    expect(() => parseQuantityTiersField("no es json")).toThrow(/recargá/);
+    expect(() => parseQuantityTiersField('{"units":"3"}')).toThrow(/recargá/);
+    expect(() => parsePricingConfigForm(form({ ...WITHOUT_LEGACY, quantity_tiers: JSON.stringify([{ units: "3", percent: "0" }]) }))).toThrow(/descuento/);
   });
 });

@@ -43,7 +43,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   // The catalog is filtered and PAGED in SQL (a Central with thousands of products must never be
   // fetched whole: PostgREST silently truncates at max_rows). Everything else (prices, costs,
   // promotions, categories, locks) is then fetched only for the ids of the current page.
-  const [categoriesResult, branchesResult, pageResult, cashResult, pricingSettingsResult, excludedCategoriesResult, branchOverridesResult, organizationResult, suppliersResult, pricingRowsResult] = await Promise.all([
+  const [categoriesResult, branchesResult, pageResult, cashResult, pricingSettingsResult, excludedCategoriesResult, branchOverridesResult, organizationResult, suppliersResult, pricingRowsResult, quantityTiersResult] = await Promise.all([
     perf.measure("categories", supabase.from("categories").select("id, name, slug, color_hex, sort_order, active").eq("organization_id", context.organizationId).order("sort_order")),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     pricingTabOpen ? Promise.resolve(NO_CATALOG_PAGE) : perf.measure("productsPage", supabase.rpc("list_products_page", {
@@ -66,6 +66,10 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     // Primera página del ÚNICO buscador de Precios (todo el catálogo, paginado en el servidor); las búsquedas siguientes las pide el propio editor.
     pricingTabOpen
       ? perf.measure("pricingRows", supabase.rpc("list_pricing_rows", { p_limit: PRICING_PAGE_SIZE }))
+      : Promise.resolve({ data: null, error: null }),
+    // Escalones del descuento por cantidad (D-083): «desde N unidades, X %». Sólo se mira en la pestaña de precios.
+    pricingTabOpen
+      ? perf.measure("quantityTiers", supabase.from("organization_quantity_discount_tiers").select("minimum_units, discount_bps").eq("organization_id", context.organizationId).order("minimum_units"))
       : Promise.resolve({ data: null, error: null })
   ]);
   const pageRows = pageResult.data ?? [];
@@ -145,7 +149,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   return <>{mobileNew ? <MobileNewProduct branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} marginBps={pricingSettings?.margin_bps ?? null} productionBranchId={productionBranchId} /> : null}<div className={mobileNew ? "max-lg:hidden" : undefined}><main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} marginBps={pricingSettings?.margin_bps ?? null} productionBranchId={productionBranchId} suppliers={suppliers} /></div>
     <SectionTabs active={activeTab} tabs={PRODUCTOS_TABS} />
-    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Margen, descuentos por cantidad, packs y recargo por tarjeta.</p><PricingConfigModal branchOverrides={branchOverrideCount} categories={categories.filter((item) => item.active || excludedCategorySet.has(item.id)).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} values={{ marginBps: pricingSettings?.margin_bps ?? null, unitBulkDiscountBps: pricingSettings?.unit_bulk_discount_bps ?? null, packDiscountBps: pricingSettings?.pack_discount_bps ?? null, cardSurchargeBps }} /></section> : null}
+    {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Margen, descuentos por cantidad, packs y recargo por tarjeta.</p><PricingConfigModal branchOverrides={branchOverrideCount} categories={categories.filter((item) => item.active || excludedCategorySet.has(item.id)).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} values={{ marginBps: pricingSettings?.margin_bps ?? null, unitBulkDiscountBps: pricingSettings?.unit_bulk_discount_bps ?? null, quantityTiers: (quantityTiersResult.data ?? []).map((tier) => ({ minimumUnits: tier.minimum_units, discountBps: tier.discount_bps })), packDiscountBps: pricingSettings?.pack_discount_bps ?? null, cardSurchargeBps }} /></section> : null}
     {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Costos de los productos</h2><BulkCostEditor initialPage={pricingPage} marginBps={pricingSettings?.margin_bps ?? null} marginConfigured={marginConfigured} productionBranchName={productionBranchName} /></section> : null}
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
     {pricingTabOpen ? null : <>

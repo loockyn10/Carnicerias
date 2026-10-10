@@ -5,6 +5,7 @@ import { SectionTabs } from "../../../../components/section-tabs";
 import { SignageSubnav } from "../../../../components/signage-subnav";
 import { requireAdminContext } from "../../../../lib/admin";
 import { buildEditorDisplay } from "../../../../lib/signage";
+import { parsePromotionCatalog } from "../../../../lib/signage-promotions";
 import { createClient } from "../../../../lib/supabase/server";
 import { PRODUCTOS_TABS } from "../../products-tabs";
 
@@ -21,8 +22,14 @@ export default async function SignagePage({ searchParams }: { searchParams: Prom
   ]);
   const displays = displaysResult.data ?? [];
   const selected = displays.find((display) => display.id === requestedId) ?? displays[0] ?? null;
-  const detailResult = selected ? await supabase.rpc("get_signage_display_admin", { p_display_id: selected.id }) : null;
+  const [detailResult, catalogResult] = selected ? await Promise.all([
+    supabase.rpc("get_signage_display_admin", { p_display_id: selected.id }),
+    // Promociones ya cargadas (las que le aplican a ESTA pantalla: su sucursal y su vigencia) y los grupos reutilizables.
+    supabase.rpc("get_signage_promotion_catalog", { p_branch_id: selected.branch_id, p_applicable_only: true })
+  ]) : [null, null];
   const editorDisplay = detailResult?.data ? buildEditorDisplay(detailResult.data) : null;
+  // El catálogo es un complemento: si falla, el editor sigue funcionando con productos (sin promociones ni grupos para elegir).
+  const catalog = catalogResult?.data ? parsePromotionCatalog(catalogResult.data) : { promotions: [], groups: [] };
   const error = [displaysResult.error, branchesResult.error, detailResult?.error].find(Boolean);
   const branches: BranchOption[] = (branchesResult.data ?? []).map((branch) => ({ id: branch.id, name: branch.name, active: branch.active }));
   const branchName = (id: string | null) => branches.find((branch) => branch.id === id)?.name ?? "Sin sucursal";
@@ -48,7 +55,7 @@ export default async function SignagePage({ searchParams }: { searchParams: Prom
       </aside>
       <div className="grid content-start gap-6">
         {selected && editorDisplay
-          ? <SignageEditor branches={branches} display={editorDisplay} key={editorDisplay.id} />
+          ? <SignageEditor branches={branches} catalog={catalog} display={editorDisplay} key={editorDisplay.id} />
           : null}
         <SignageCreateForm branches={branches} firstScreen={!displays.length} />
       </div>

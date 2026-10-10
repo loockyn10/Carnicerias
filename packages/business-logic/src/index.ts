@@ -101,6 +101,10 @@ export {
 } from "./unit-discounts";
 export type { BranchUnitPromotion, UnitDiscountKind, UnitDiscountPricing, UnitPackSale } from "./unit-discounts";
 export {
+  calculateQuantityTierLinePricing, MAX_QUANTITY_TIER_UNITS, MAX_QUANTITY_TIERS, MIN_QUANTITY_TIER_UNITS, normalizeQuantityTiers, quantityTierLabel, selectQuantityTier
+} from "./quantity-discount-tiers";
+export type { QuantityTier, QuantityTiersResult } from "./quantity-discount-tiers";
+export {
   describePaymentState,
   isNotAccreditedVerification,
   isRecoverableMercadoPagoPayment,

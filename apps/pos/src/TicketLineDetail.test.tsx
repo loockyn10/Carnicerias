@@ -43,7 +43,7 @@ describe("TicketLineDetail", () => {
     const yerba = { productId: "yerba", productName: 'YERBA "AGUANTADORA" X KG', pricePerKgCents: 540_000n };
     const FROM_3_15: BranchUnitPromotion = { id: "promo", minimumUnits: 3, discountBps: 1_500 };
     const unit = (units: number, promotion: BranchUnitPromotion | null = FROM_3_15, method: Parameters<typeof buildUnitTicketLine>[4] = "CASH") =>
-      buildUnitTicketLine(yerba, units, "u", null, method, 1_000n, { branchPromotion: promotion });
+      buildUnitTicketLine(yerba, units, "u", null, method, 1_000n, { branchPromotions: promotion ? [promotion] : [] });
 
     it("3 u con 15 % desde 3: '3 u × $5.400/u · $4.590/u final' en verde, sin 'Desde 3 u', '15% OFF' ni 'Descuento'", () => {
       const line = unit(3);

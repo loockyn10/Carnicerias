@@ -71,6 +71,8 @@ insert into public.branch_promotions (organization_id, branch_id, minimum_units,
 values ('c2000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-000000000001', 3, 1500);
 insert into public.organization_pricing_settings (organization_id, margin_bps, unit_bulk_discount_bps)
 values ('c2000000-0000-4000-8000-000000000001', 3333, 2000);
+insert into public.organization_quantity_discount_tiers (organization_id, minimum_units, discount_bps)
+values ('c2000000-0000-4000-8000-000000000001', 3, 2000);
 -- Nalga: 10 % desde 2 kg (global) y precio fijo $9.500/kg desde 5 kg sólo en Central; uno vencido que no debe aparecer.
 insert into public.product_weight_discounts (organization_id, product_id, branch_id, minimum_grams, discount_type, discount_value) values
   ('c2000000-0000-4000-8000-000000000001', 'c5000000-0000-4000-8000-000000000003', null, 2000, 'PERCENTAGE', 1000),

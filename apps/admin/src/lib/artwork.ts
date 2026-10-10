@@ -182,7 +182,7 @@ export function slideToItemBase(productId: string, offer: OfferSlideData): Omit<
     promotionalPrice: offer.promo ? offer.price : null,
     promotionCondition: offer.promo ? offer.condition : null,
     priceSuffix: offer.priceSuffix,
-    unitLabel: offer.unitType === "WEIGHT" ? "X KG" : null
+    unitLabel: offer.unitType === "WEIGHT" && offer.variant !== "PACK" ? "X KG" : null
   };
 }
 

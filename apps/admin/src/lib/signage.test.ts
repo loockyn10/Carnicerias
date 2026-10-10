@@ -232,9 +232,9 @@ describe("editor del Admin", () => {
     expect(display?.name).toBe("TV Despensa Central");
     expect(display?.slideDurationSeconds).toBe(10);
     expect(display?.branchId).toBe("b1");
-    expect(display?.slides[0]?.summary).toBe("$ 1.729,75 · llevando 3 unidades");
-    expect(display?.slides[0]?.unavailable).toBeNull();
-    expect(display?.slides[1]).toMatchObject({ summary: null, unavailable: "NO_PRICE" });
+    expect(display?.entries[0]?.summary).toBe("$ 1.729,75 · llevando 3 unidades");
+    expect(display?.entries[0]?.unavailable).toBeNull();
+    expect(display?.entries[1]).toMatchObject({ summary: null, unavailable: "NO_PRICE" });
   });
 
   it("summarizeOffer no repite la condición cuando no hay promoción", () => {

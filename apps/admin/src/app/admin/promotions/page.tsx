@@ -64,7 +64,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
     commercial.from("product_weight_discounts")
       .select("id, product_id, branch_id, promotion_mode, minimum_grams, discount_type, discount_value, pack_quantity_grams, pack_quantity_units, pack_price_cents, active, valid_from, valid_until")
       .eq("organization_id", context.organizationId).order("valid_from", { ascending: false }),
-    // Promoción global vigente de cada sucursal ("desde N unidades del mismo producto, X % sobre toda la línea"): a lo sumo una por sucursal.
+    // Escalones vigentes del descuento por cantidad de cada sucursal ("desde N unidades del mismo producto, X % sobre toda la línea"): a lo sumo uno por sucursal y mínimo.
     supabase.from("branch_promotions").select("branch_id, minimum_units, discount_bps").eq("organization_id", context.organizationId).eq("active", true)
   ]);
   const error = [productsResult.error, branchesResult.error, categoriesResult.error, discountsResult.error, branchPromotionsResult.error].find(Boolean);
@@ -81,11 +81,11 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const productCategoryNames = new Map(products.map((product) => [product.id, categories.find((category) => category.id === product.category_id)?.name ?? ""]));
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
   const editedDiscount = discounts.find((discount) => discount.id === value("edit"));
-  const activeBranchPromotions = new Map((branchPromotionsResult.data ?? []).map((promotion) => [promotion.branch_id, promotion]));
-  const branchPromotionRows: BranchPromotionRow[] = branches.map((branch) => {
-    const promotion = activeBranchPromotions.get(branch.id);
-    return { branchId: branch.id, branchName: branch.name, promotion: promotion ? { minimumUnits: promotion.minimum_units, discountBps: promotion.discount_bps } : null };
-  });
+  const branchPromotionRows: BranchPromotionRow[] = branches.map((branch) => ({
+    branchId: branch.id, branchName: branch.name,
+    tiers: (branchPromotionsResult.data ?? []).filter((promotion) => promotion.branch_id === branch.id)
+      .map((promotion) => ({ minimumUnits: promotion.minimum_units, discountBps: promotion.discount_bps })).sort((left, right) => left.minimumUnits - right.minimumUnits)
+  }));
 
   const rows: PromotionRow[] = discounts.map((discount) => ({
     id: discount.id,

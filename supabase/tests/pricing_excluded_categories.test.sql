@@ -112,7 +112,7 @@ select has_table('public', 'organization_pricing_excluded_categories', 'the excl
 select ok((select relrowsecurity from pg_class where oid = 'public.organization_pricing_excluded_categories'::regclass), 'it has RLS');
 select ok(not has_table_privilege('authenticated', 'public.organization_pricing_excluded_categories', 'INSERT'), 'browser clients cannot insert into it directly');
 select ok(not has_table_privilege('authenticated', 'public.organization_pricing_excluded_categories', 'DELETE'), 'nor delete from it');
-select ok(not has_function_privilege('anon', 'public.save_pricing_config(integer,integer,integer,integer,boolean,boolean,uuid[])', 'EXECUTE'), 'anonymous cannot save the pricing config');
+select ok(not has_function_privilege('anon', 'public.save_pricing_config(integer,integer,integer,integer,boolean,boolean,uuid[],jsonb)', 'EXECUTE'), 'anonymous cannot save the pricing config');
 select ok(not has_function_privilege('authenticated', 'app_private.is_pricing_excluded(uuid,uuid)', 'EXECUTE'), 'the exclusion predicate is not callable directly');
 select is((select count(*) from public.organization_pricing_excluded_categories), 0::bigint, 'the migration excludes nothing by itself (no hardcoded Vaca / Cerdo / Pollo)');
 select is((select count(*) from pg_proc where proname = 'save_pricing_config' and pronamespace = 'public'::regnamespace), 1::bigint, 'there is a single save_pricing_config overload (no ambiguity for PostgREST)');

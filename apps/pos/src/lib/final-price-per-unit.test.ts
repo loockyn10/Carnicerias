@@ -11,7 +11,7 @@ const CARD_BPS = 1_000n;
 const yerba = { productId: "yerba", productName: 'YERBA "AGUANTADORA" X KG', pricePerKgCents: 540_000n };
 const FROM_3_15: BranchUnitPromotion = { id: "promo", minimumUnits: 3, discountBps: 1_500 };
 const unitLine = (units: number, promotion: BranchUnitPromotion | null = FROM_3_15, method: Parameters<typeof buildUnitTicketLine>[4] = "CASH", product = yerba) =>
-  buildUnitTicketLine(product, units, "u", null, method, CARD_BPS, { branchPromotion: promotion });
+  buildUnitTicketLine(product, units, "u", null, method, CARD_BPS, { branchPromotions: promotion ? [promotion] : [] });
 const unitPackRule = (packQuantityUnits: number): DiscountRule => ({
   id: "pack-rule", productId: "yerba", branchId: null, promotionMode: "PACK_FIXED_TOTAL", minimumGrams: null, discountType: null,
   discountValue: null, packQuantityGrams: null, packQuantityUnits, packPriceCents: "1440000"
@@ -52,7 +52,7 @@ describe("finalPricePerUnitCents (sólo informativo, nunca se usa para cobrar)",
     expect(finalPricePerUnitCents(line)).toBe(504_900n);
     expect(finalPricePerUnitCents(unitLine(1, FROM_3_15, "DEBIT"))).toBe(594_000n);
     // Cambiar de medio de pago repreciando la línea no deja un precio final viejo.
-    const back = repriceTicketLine(line, { paymentMethod: "CASH", discounts: [], cashDiscountBps: CARD_BPS, branchId: "b", branchPromotion: FROM_3_15 });
+    const back = repriceTicketLine(line, { paymentMethod: "CASH", discounts: [], cashDiscountBps: CARD_BPS, branchId: "b", branchPromotions: [FROM_3_15] });
     expect(finalPricePerUnitCents(back)).toBe(459_000n);
   });
 
@@ -77,12 +77,12 @@ describe("finalPricePerUnitCents (sólo informativo, nunca se usa para cobrar)",
 describe("promotedUnitPriceCents / unitPromotionLabel (precio promocional ANTES de vender)", () => {
   it("$5.400/u + 15 % desde 3 => '$4.590/u desde 3 u'", () => {
     expect(promotedUnitPriceCents(540_000n, FROM_3_15)).toBe(459_000n);
-    expect(unitPromotionLabel(540_000n, FROM_3_15)).toBe("$ 4.590/u desde 3 u");
+    expect(unitPromotionLabel(540_000n, [FROM_3_15])).toBe("$ 4.590/u desde 3 u");
   });
 
   it("coincide exactamente con lo que cobra el motor al llevar el mínimo", () => {
     for (const price of [540_000n, 100_003n, 99_999n, 12_345n]) {
-      const line = buildUnitTicketLine({ ...yerba, pricePerKgCents: price }, 3, "x", null, "CASH", CARD_BPS, { branchPromotion: FROM_3_15 });
+      const line = buildUnitTicketLine({ ...yerba, pricePerKgCents: price }, 3, "x", null, "CASH", CARD_BPS, { branchPromotions: [FROM_3_15] });
       expect(promotedUnitPriceCents(price, FROM_3_15)).toBe(finalPricePerUnitCents(line) ?? price);
     }
   });
@@ -90,13 +90,14 @@ describe("promotedUnitPriceCents / unitPromotionLabel (precio promocional ANTES 
   it("sin promoción, sin precio o con una promoción que no baja el precio: sin etiqueta", () => {
     expect(unitPromotionLabel(540_000n, null)).toBeNull();
     expect(unitPromotionLabel(540_000n, undefined)).toBeNull();
-    expect(unitPromotionLabel(0n, FROM_3_15)).toBeNull();
-    expect(unitPromotionLabel(100n, { id: "p", minimumUnits: 3, discountBps: 1 })).toBeNull();
+    expect(unitPromotionLabel(0n, [FROM_3_15])).toBeNull();
+    expect(unitPromotionLabel(540_000n, [])).toBeNull();
+    expect(unitPromotionLabel(100n, [{ id: "p", minimumUnits: 3, discountBps: 1 }])).toBeNull();
   });
 
   it("una promoción por producto con pack que cabe en el mínimo gana a la de sucursal: sin etiqueta engañosa", () => {
-    expect(unitPromotionLabel(540_000n, FROM_3_15, unitPackRule(3))).toBeNull();
-    expect(unitPromotionLabel(540_000n, FROM_3_15, unitPackRule(2))).toBeNull();
-    expect(unitPromotionLabel(540_000n, FROM_3_15, unitPackRule(8))).toBe("$ 4.590/u desde 3 u");
+    expect(unitPromotionLabel(540_000n, [FROM_3_15], unitPackRule(3))).toBeNull();
+    expect(unitPromotionLabel(540_000n, [FROM_3_15], unitPackRule(2))).toBeNull();
+    expect(unitPromotionLabel(540_000n, [FROM_3_15], unitPackRule(8))).toBe("$ 4.590/u desde 3 u");
   });
 });

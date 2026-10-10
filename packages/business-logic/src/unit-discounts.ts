@@ -81,6 +81,9 @@ export interface UnitDiscountPricing extends SalePricing {
   discountBps: number;
   /** Importe descontado (= `promotionDiscountCents`). */
   unitDiscountCents: bigint;
+  /** Sólo en `BRANCH_PROMOTION`: la regla (escalón) aplicada. Es lo que la venta guarda como snapshot (`branchPromotionId`, mínimo y porcentaje). */
+  promotionId?: string;
+  promotionMinimumUnits?: number;
 }
 
 export function isValidPackSizeUnits(value: number | null | undefined): value is number {
@@ -130,6 +133,7 @@ function build(input: {
   discountBps: number;
   paymentMethod: PaymentMethod;
   cashDiscountBps: bigint;
+  promotion?: BranchUnitPromotion;
 }): UnitDiscountPricing {
   const { kind, listPriceCents, quantityUnits, discountedUnits, discountBps, paymentMethod } = input;
   validateBasisPoints(input.cashDiscountBps);
@@ -148,6 +152,7 @@ function build(input: {
     discountedUnits,
     discountBps,
     unitDiscountCents: discountCents,
+    ...(input.promotion ? { promotionId: input.promotion.id, promotionMinimumUnits: input.promotion.minimumUnits } : {}),
     listPriceCents,
     // Precios por unidad derivados (promedio de la línea): el importe real es el subtotal, no un precio por unidad.
     cashPriceCents: divideRoundHalfUp(cashSubtotalCents, quantity),
@@ -199,5 +204,5 @@ export function calculateBranchPromotionLinePricing(input: {
   }
   const discountedUnits = promotedUnitsFor(quantityUnits, promotion.minimumUnits);
   if (discountedUnits === 0) return null;
-  return build({ kind: "BRANCH_PROMOTION", listPriceCents, quantityUnits, discountedUnits, discountBps: promotion.discountBps, paymentMethod: input.paymentMethod, cashDiscountBps: input.cashDiscountBps });
+  return build({ kind: "BRANCH_PROMOTION", listPriceCents, quantityUnits, discountedUnits, discountBps: promotion.discountBps, paymentMethod: input.paymentMethod, cashDiscountBps: input.cashDiscountBps, promotion });
 }

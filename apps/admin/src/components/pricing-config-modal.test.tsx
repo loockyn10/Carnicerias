@@ -16,7 +16,7 @@ describe("PricingConfigModal", () => {
   it("cerrado: sólo el botón; nada de la configuración a la vista", () => {
     const html = renderToStaticMarkup(<PricingConfigModal {...props} />);
     expect(html).toContain("Configuración de precios");
-    for (const hidden of ["Margen de ganancia", "Dto llevando 3u", "Dto por pack", "Recargo por tarjeta", "Categorías excluidas", "por sucursal vigente", "Guardar configuración"]) expect(html).not.toContain(hidden);
+    for (const hidden of ["Margen de ganancia", "Descuentos por cantidad", "Dto por pack", "Recargo por tarjeta", "Categorías excluidas", "por sucursal vigente", "Guardar configuración"]) expect(html).not.toContain(hidden);
   });
 
   it("el botón abre un diálogo que reutiliza EL formulario existente (sin segunda implementación) y se cierra con X, Escape o clic afuera", () => {
@@ -33,6 +33,6 @@ describe("PricingConfigModal", () => {
 
   it("el formulario que contiene el modal sigue trayendo todos los campos y el guardado actual", () => {
     const html = renderToStaticMarkup(<PricingConfigForm {...props} />);
-    for (const shown of ["Margen de ganancia", "Dto llevando 3u", "Dto por pack", "Recargo por tarjeta", "Categorías excluidas del margen automático", "2 precio(s) por sucursal vigente(s)", "Guardar configuración"]) expect(html).toContain(shown);
+    for (const shown of ["Margen de ganancia", "Descuentos por cantidad", "Dto por pack", "Recargo por tarjeta", "Categorías excluidas del margen automático", "2 precio(s) por sucursal vigente(s)", "Guardar configuración"]) expect(html).toContain(shown);
   });
 });

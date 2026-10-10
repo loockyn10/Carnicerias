@@ -14,6 +14,7 @@ import { parseStockAuditSummary, periodRpcArgs } from "../../lib/stock-audit";
 import { isUuid } from "../../lib/uuid";
 import { isIsoDate } from "../../lib/date-range";
 import { parseCompleteOutcome, parseMissingCosts, type CompleteMissingCostsOutcome, type MissingCostsReport } from "../../lib/missing-costs";
+import { parseOperatingCosts, type OperatingCostsReport } from "../../lib/operating-costs";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
@@ -350,7 +351,7 @@ export interface PricingConfigState {
 }
 
 /**
- * Guarda la configuración global de precios (margen, dto llevando 3u, dto por pack, recargo por tarjeta) con UNA llamada atómica a
+ * Guarda la configuración global de precios (margen, descuentos por cantidad con escalones, dto por pack, recargo por tarjeta) con UNA llamada atómica a
  * save_pricing_config (202610060065). Cambiar el margen recalcula los precios de lista de todos los productos con costo (en el
  * servidor, nunca en el navegador), así que sin confirmación el servidor sólo devuelve la vista previa y no escribe nada.
  * El recargo por tarjeta conserva su nombre histórico en la base (cash_discount_bps, D-044): CASH/TRANSFER/OTHER no tienen ajuste.
@@ -363,6 +364,8 @@ export async function savePricingConfigAction(_: PricingConfigState, formData: F
     const excluded = parseExcludedCategoryIds(formData);
     const data = await rpcOrThrow("save_pricing_config", {
       p_margin_bps: input.marginBps, p_unit_bulk_discount_bps: input.unitBulkDiscountBps,
+      // Descuentos por cantidad (D-083): la lista completa de escalones; el servidor la valida y la materializa en cada sucursal.
+      p_quantity_tiers: input.quantityTiers.map((tier) => ({ minimumUnits: tier.minimumUnits, discountBps: tier.discountBps })),
       p_pack_discount_bps: input.packDiscountBps, p_card_surcharge_bps: input.cardSurchargeBps,
       ...(excluded !== null ? { p_excluded_category_ids: excluded } : {}),
       p_confirm: formData.get("confirm") === "1",
@@ -616,6 +619,95 @@ export async function completeMissingCostsAction(input: { branchId: string; from
     return { ok: true, outcome };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "No se pudieron completar los costos" };
+  }
+}
+
+export type OperatingCostsLoadResult = { ok: true; report: OperatingCostsReport } | { ok: false; error: string };
+
+/**
+ * Modal «Costos operativos» del Resumen de sucursal (D-082): los costos mensuales (con lo imputado al período) y los gastos puntuales
+ * recientes (`get_branch_operating_costs`, sólo lectura). La organización, los permisos y el acceso a la sucursal los resuelve la RPC.
+ */
+export async function loadOperatingCostsAction(branchId: string, from: string, to: string): Promise<OperatingCostsLoadResult> {
+  try {
+    await requireAdminContext();
+    if (!isUuid(branchId)) throw new Error("Sucursal inválida");
+    if (!isIsoDate(from) || !isIsoDate(to)) throw new Error("Período inválido");
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("get_branch_operating_costs", { p_branch_id: branchId, p_from: from, p_to: to });
+    if (error) throw new Error(error.message);
+    return { ok: true, report: parseOperatingCosts(data) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudieron cargar los costos operativos" };
+  }
+}
+
+export type OperatingCostsMutationResult = { ok: true } | { ok: false; error: string };
+
+const MAX_COST_CENTS = 100_000_000_000;
+
+function refreshOperatingResult() {
+  revalidatePath("/admin/branches", "layout");
+  revalidatePath("/admin");
+}
+
+/**
+ * Alta de un costo mensual (`costId` null) o cambio de su importe desde una fecha (`save_branch_recurring_cost`). El importe viaja en centavos
+ * enteros; el historial es append-only en el servidor (el importe viejo sigue valiendo para los períodos anteriores). `requestKey` hace
+ * idempotente el alta (doble clic / reintento).
+ */
+export async function saveRecurringCostAction(input: { branchId: string; costId: string | null; name: string; amountCents: number; from: string; requestKey: string | null }): Promise<OperatingCostsMutationResult> {
+  try {
+    if (!isUuid(input.branchId) || (input.costId !== null && !isUuid(input.costId)) || (input.requestKey !== null && !isUuid(input.requestKey))) throw new Error("Datos inválidos: recargá la pantalla");
+    if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0 || input.amountCents > MAX_COST_CENTS) throw new Error("El importe mensual tiene que ser mayor a cero");
+    if (!isIsoDate(input.from)) throw new Error("La fecha desde la que rige no es válida");
+    await rpcOrThrow("save_branch_recurring_cost", {
+      p_branch_id: input.branchId, p_cost_id: input.costId, p_name: input.name, p_amount_cents: input.amountCents, p_effective_from: input.from, p_request_key: input.requestKey
+    });
+    refreshOperatingResult();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo guardar el costo" };
+  }
+}
+
+/** Da de baja un costo mensual desde una fecha (deja de aplicarse ese día; el historial queda). */
+export async function endRecurringCostAction(input: { costId: string; to: string }): Promise<OperatingCostsMutationResult> {
+  try {
+    if (!isUuid(input.costId) || !isIsoDate(input.to)) throw new Error("Datos inválidos: recargá la pantalla");
+    await rpcOrThrow("end_branch_recurring_cost", { p_cost_id: input.costId, p_effective_to: input.to });
+    refreshOperatingResult();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo dar de baja el costo" };
+  }
+}
+
+/** Registra un gasto puntual (fecha, concepto, importe). Idempotente por `requestKey`. */
+export async function recordExpenseAction(input: { branchId: string; date: string; concept: string; amountCents: number; requestKey: string | null }): Promise<OperatingCostsMutationResult> {
+  try {
+    if (!isUuid(input.branchId) || (input.requestKey !== null && !isUuid(input.requestKey))) throw new Error("Datos inválidos: recargá la pantalla");
+    if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0 || input.amountCents > MAX_COST_CENTS) throw new Error("El importe del gasto tiene que ser mayor a cero");
+    if (!isIsoDate(input.date)) throw new Error("La fecha del gasto no es válida");
+    await rpcOrThrow("record_branch_expense", {
+      p_branch_id: input.branchId, p_expense_date: input.date, p_concept: input.concept, p_amount_cents: input.amountCents, p_request_key: input.requestKey
+    });
+    refreshOperatingResult();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar el gasto" };
+  }
+}
+
+/** Anula un gasto (queda en la base con quién y por qué; deja de imputarse). */
+export async function voidExpenseAction(input: { expenseId: string; reason: string }): Promise<OperatingCostsMutationResult> {
+  try {
+    if (!isUuid(input.expenseId)) throw new Error("Datos inválidos: recargá la pantalla");
+    await rpcOrThrow("void_branch_expense", { p_expense_id: input.expenseId, p_reason: input.reason });
+    refreshOperatingResult();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo anular el gasto" };
   }
 }
 

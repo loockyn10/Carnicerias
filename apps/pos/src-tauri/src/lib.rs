@@ -4260,6 +4260,74 @@ mod tests {
         assert_eq!((unit_row(&thousand, "subtotal_cents"), unit_row(&thousand, "branch_promotion_discount_cents")), (340_000, 60_000));
     }
 
+    /// Escalones del descuento por cantidad (D-083): "desde 3 → 15 %" y "desde 5 → 20 %" conviven como dos reglas vigentes de la sucursal.
+    fn tiers_fixture() -> (Connection, String) {
+        let (connection, device_id) = pack_fixture();
+        connection.execute("insert into catalog_branch_promotions(id, branch_id, scope, minimum_units, discount_bps) values('promo-5', 'branch', 'ALL_UNIT_PRODUCTS', 5, 2000)", []).unwrap();
+        (connection, device_id)
+    }
+
+    #[test]
+    fn quantity_tiers_are_resolved_offline_against_the_rule_each_line_declares() {
+        // lista $8,00: 2 u sin descuento; 3 y 4 u con el 15 % (escalón de 3); 5, 6 y 10 u con el 20 % (escalón de 5): nunca se acumulan.
+        for (units, minimum, bps, rule, total) in [(3_i64, 3_i64, 1_500_i64, "promo-1", 2_040_i64), (4, 3, 1_500, "promo-1", 2_720), (5, 5, 2_000, "promo-5", 3_200), (6, 5, 2_000, "promo-5", 3_840), (10, 5, 2_000, "promo-5", 6_400)] {
+            let (mut connection, device_id) = tiers_fixture();
+            try_insert(&mut connection, &flex_payload(device_id, "CASH", vec![promo_line("hamburguesa", 800, units, minimum, bps, 0, rule)], None)).unwrap();
+            assert_eq!(unit_row(&connection, "subtotal_cents"), total, "{units} units");
+            assert_eq!(unit_row(&connection, "branch_promotion_discount_bps"), bps, "{units} units take the {bps} bps tier");
+            assert_eq!(unit_row(&connection, "branch_promotion_every_units"), minimum, "the minimum of the tier that was applied");
+        }
+        // 2 unidades: ninguna regla alcanzada, venta normal.
+        let (mut plain, plain_device) = tiers_fixture();
+        try_insert(&mut plain, &flex_payload(plain_device, "CASH", vec![discounted_unit("hamburguesa", 800, 2, 0, 0, 0).0], None)).unwrap();
+        assert_eq!(unit_row(&plain, "subtotal_cents"), 1_600);
+        assert_eq!(unit_row(&plain, "branch_promotion_discount_cents"), 0);
+    }
+
+    #[test]
+    fn a_line_cannot_claim_a_tier_it_does_not_reach_or_mix_the_values_of_two_tiers() {
+        // 4 unidades reclamando el escalón de 5.
+        let (mut below, below_device) = tiers_fixture();
+        assert!(try_insert(&mut below, &flex_payload(below_device, "CASH", vec![promo_line("hamburguesa", 800, 4, 5, 2_000, 0, "promo-5")], None)).is_err());
+        assert_eq!(count(&below, "local_sales"), 0);
+        // El id del escalón de 5 con el mínimo y el porcentaje del de 3.
+        let (mut mixed, mixed_device) = tiers_fixture();
+        assert!(try_insert(&mut mixed, &flex_payload(mixed_device, "CASH", vec![promo_line("hamburguesa", 800, 6, 3, 1_500, 0, "promo-5")], None)).unwrap_err().contains("does not match a rule of this branch"));
+        // Un porcentaje inventado (25 %) para el escalón de 5.
+        let (mut invented, invented_device) = tiers_fixture();
+        assert!(try_insert(&mut invented, &flex_payload(invented_device, "CASH", vec![promo_line("hamburguesa", 800, 6, 5, 2_500, 0, "promo-5")], None)).is_err());
+        // Una regla de OTRA sucursal no sirve aunque exista el mismo escalón.
+        let (mut foreign, foreign_device) = tiers_fixture();
+        foreign.execute("insert into catalog_branch_promotions(id, branch_id, scope, minimum_units, discount_bps) values('promo-otra', 'otra-sucursal', 'ALL_UNIT_PRODUCTS', 5, 2000)", []).unwrap();
+        assert!(try_insert(&mut foreign, &flex_payload(foreign_device, "CASH", vec![promo_line("hamburguesa", 800, 6, 5, 2_000, 0, "promo-otra")], None)).is_err());
+    }
+
+    #[test]
+    fn the_local_config_keeps_every_tier_of_this_branch_and_a_pull_replaces_the_whole_set() {
+        let (connection, _) = tiers_fixture();
+        let mut statement = connection.prepare("select minimum_units || '/' || discount_bps from catalog_branch_promotions where branch_id = (select branch_id from local_device where singleton = 1) order by minimum_units").unwrap();
+        let tiers: Vec<String> = statement.query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(tiers, vec!["3/1500", "5/2000"]);
+        // La foto completa del servidor trae TODOS los escalones vigentes y reemplaza lo guardado (agregar uno, editar otro y quitar el resto).
+        let mut replaced = catalog_fixture();
+        let mut full = pull(vec![], &[]);
+        full.branch_promotions_from_minimum = Some(vec![
+            CatalogBranchPromotion { id: "t2".into(), minimum_units: 2, discount_bps: 1_000 },
+            CatalogBranchPromotion { id: "t3".into(), minimum_units: 3, discount_bps: 1_500 },
+            CatalogBranchPromotion { id: "t5".into(), minimum_units: 5, discount_bps: 2_000 },
+        ]);
+        apply_catalog_pull_inner(&mut replaced, &full, "profile", "a@b.c").unwrap();
+        assert_eq!(count(&replaced, "catalog_branch_promotions"), 3, "the pull stores one local row per tier");
+        let mut edited = pull(vec![], &[]);
+        edited.branch_promotions_from_minimum = Some(vec![
+            CatalogBranchPromotion { id: "t3".into(), minimum_units: 3, discount_bps: 1_500 },
+            CatalogBranchPromotion { id: "t5b".into(), minimum_units: 5, discount_bps: 2_500 },
+        ]);
+        apply_catalog_pull_inner(&mut replaced, &edited, "profile", "a@b.c").unwrap();
+        assert_eq!(count(&replaced, "catalog_branch_promotions"), 2, "the removed tier is gone and the edited one replaced");
+        assert_eq!(replaced.query_row("select group_concat(id || ':' || minimum_units || '/' || discount_bps, ',') from (select * from catalog_branch_promotions order by minimum_units)", [], |r| r.get::<_, String>(0)).unwrap(), "t3:3/1500,t5b:5/2500");
+    }
+
     #[test]
     fn the_old_every_n_arithmetic_is_rejected_by_the_current_pos() {
         // 8 unidades con sólo 6 descontadas ("cada 3"): todo consistente salvo que "desde 3" descuenta las 8.

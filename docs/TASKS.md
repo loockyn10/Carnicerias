@@ -2,6 +2,41 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Costos operativos y Resultado operativo: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-10 (D-082). **Migración pendiente: `202610170080_branch_operating_costs.sql`** (3 tablas nuevas, permiso `operating_costs.write` para el rol de administración y 6 RPC; no toca datos; **requiere la `202610130076`**). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel). Sin la migración el Resumen y el Inicio siguen funcionando sin la tarjeta (la RPC falla y se omite).
+
+1. Avenida → Resumen → «Configurar costos»: cargar Empleada `$600.000/mes`, Alquiler `$300.000/mes` y un gasto de `$50.000`; comparar la tarjeta «Resultado operativo» con `ganancia bruta − costos` para Hoy, 7 días, 30 días y un rango propio (el prorrateo usa los días reales de cada mes: `$310.000` un día de un mes de 31 días = `$10.000`).
+2. Cambiar el alquiler «desde hoy»: el mes anterior debe conservar el importe viejo (Ver historial). Probar «Dar de baja» y anular un gasto.
+3. Inicio: tarjetas por sucursal + total, con Hoy / Ayer / 7 días / 30 días; confirmar que la Central se ve como se espera (se trata como cualquier sucursal con ventas propias).
+4. Una sucursal con ventas sin costo: la tarjeta debe decir «⚠ Parcial: existen ventas sin costo» (se arregla con «Completar costos»).
+5. Confirmar las decisiones no pedidas de D-082 (permiso aparte `operating_costs.write`, fechas por defecto, el celular no incluye la tarjeta).
+6. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `branch_operating_costs.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+## P0 — Descuentos por cantidad con escalones: aplicar, instalar el POS y probar (acción del usuario)
+
+Implementado 2026-10-10 (D-083). **Migración pendiente: `202610180081_quantity_discount_tiers.sql`** (tabla de escalones, índice único nuevo en `branch_promotions`, `save_pricing_config` con un parámetro más y 3 funciones de lectura de cartelería/etiquetas/piezas recreadas; convierte el «Dto llevando 3u» configurado en el escalón «desde 3»; **requiere 060–065 y 069–073**). **Instalador nuevo del POS (`pnpm build:pos:desktop`) ANTES de configurar un segundo escalón:** un POS anterior sólo lee la primera regla de la sucursal (con dos escalones podría aplicar uno solo). El servidor sigue validando cada venta contra su regla, así que no se cobra de más ni se rechaza nada, pero el POS viejo no resolvería el escalón correcto.
+
+1. Productos → Precios → Configuración de precios → «Descuentos por cantidad»: cargar `3 unidades 15 %` y `5 unidades 20 %` y guardar; Promociones → «Descuentos por cantidad» debe listar los dos escalones en cada sucursal.
+2. POS (con y sin internet, después de reiniciar y de reconectar): un producto por unidad de `$1.000` con 2, 3, 4, 5 y 6 unidades → `$2.000`, `$2.550`, `$3.400`, `$4.000`, `$4.800`; con tarjeta +10 % sobre ese total; un producto por peso no recibe nada. Vender offline y sincronizar: la venta debe quedar con el escalón aplicado (Ventas → detalle: «Promo de sucursal: desde N u»).
+3. Cambiar un escalón (p. ej. 5 → 25 %) y confirmar que las ventas ya hechas conservan su porcentaje y que una venta offline hecha antes del cambio sigue sincronizando.
+4. Confirmar las decisiones de D-083 (el descuento debe crecer con la cantidad; etiquetas/piezas/TV anuncian el escalón más bajo).
+5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `quantity_discount_tiers.test.sql` y los tests modificados (`digital_signage`, `product_label_groups`, `product_artwork`, `global_pricing_config`, `pricing_excluded_categories`) contra Supabase real.
+
+## P0 — Cartelería TV con promociones y grupos: aplicar y probar en un televisor (acción del usuario)
+
+Implementado 2026-10-10 (D-084). **Migración pendiente: `202610190082_signage_promotion_groups.sql`** (2 tablas de grupos, columnas nuevas en `digital_signage_slides`, `signage_payload`/`signage_object_is_published` recreadas y 5 RPC; **requiere la `202610180081`** y las de cartelería 069/073). Orden: `db push --dry-run` → `db push` → `git push`. Sin la migración el editor sigue mostrando productos (el catálogo de promociones falla y se omite) pero «Guardar y publicar» usa la RPC nueva: aplicarla antes de desplegar el Admin.
+
+1. Productos → Cartelería → Pantallas: «+ Agregar promociones» (por defecto sólo Activas; Próximas y Vencidas en sus pestañas), elegir varias, «Guardar como grupo» («Ofertas fin de semana») y agregarlo con «Agregar grupo…» a una pantalla de Avenida y a otra de Janssen.
+2. En el televisor (`/tv/<token>`): las promociones rotan en el orden del grupo con foto, precio promocional y «precio normal»; cambiar el precio de una promoción en Promociones y comprobar que la TV lo toma en menos de 1 min sin tocar el grupo; vencer una promoción: la TV la saltea.
+3. Una promoción de Avenida no debe aparecer en la pantalla de Janssen; una sin foto se reproduce con el reemplazo y el editor la marca «⚠ Sin foto».
+4. «Administrar grupos»: renombrar, quitar/ordenar promociones, eliminar (un grupo en uso por una pantalla no se elimina y el mensaje dice cuáles).
+5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `signage_promotion_groups.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+## P1 — Acotar en el servidor la vigencia de un escalón cerrado (decisión pendiente)
+
+`sync_offline_sale_core` valida una regla `FROM_MINIMUM` cerrada **sin límite de tiempo** (sólo las reglas `EVERY_GROUP` y las versiones de pack vencen a las 24 h 10 min). Con escalones que se editan más seguido conviene exigir `completed_at <= valid_until + 24 h 10 min` también ahí (mismo criterio que `product_pack_versions`). No se cambió: toca el sync offline (decisión explícita). Ver D-083.
+
 ## P0 — Admin en el celular: aplicar la migración y probar en un teléfono (acción del usuario)
 
 Implementado 2026-10-10 (D-081). **Migración pendiente: `202610160079_quick_stock_changes.sql`** (tabla `quick_stock_requests` + RPC `apply_quick_stock_changes`; no toca datos al aplicarse). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel). Sin la migración, «Stock rápido» no guarda (el resto de las pantallas del celular funciona).

@@ -21,11 +21,11 @@ const lechePackRule: DiscountRule = {
 };
 
 function context(paymentMethod: PricingContext["paymentMethod"], branchPromotion: BranchUnitPromotion | null = FROM_3_15, discounts: DiscountRule[] = []): PricingContext {
-  return { paymentMethod, discounts, cashDiscountBps: CARD_BPS, branchId: BRANCH, branchPromotion };
+  return { paymentMethod, discounts, cashDiscountBps: CARD_BPS, branchId: BRANCH, branchPromotions: branchPromotion ? [branchPromotion] : [] };
 }
 
 function normal(quantity: number, method: PricingContext["paymentMethod"] = "CASH", promotion: BranchUnitPromotion | null = FROM_3_15, product = leche, pack: DiscountRule | null = null): TicketLine {
-  return buildUnitTicketLine(product, quantity, `n-${product.productId}-${String(quantity)}`, pack, method, CARD_BPS, { branchPromotion: promotion });
+  return buildUnitTicketLine(product, quantity, `n-${product.productId}-${String(quantity)}`, pack, method, CARD_BPS, { branchPromotions: promotion ? [promotion] : [] });
 }
 
 /** La versión del pack que el catálogo le da al POS para ese tamaño y ese porcentaje (en la vida real la crea el servidor). */
@@ -33,7 +33,7 @@ const packConfigFor = (packSizeUnits: number, packDiscountBps = 2_000) => packDi
 
 function packLine(packCount: number, method: PricingContext["paymentMethod"] = "CASH", packSizeUnits = 8, promotion: BranchUnitPromotion | null = FROM_3_15, packDiscountBps = 2_000, product = leche): TicketLine {
   return buildUnitTicketLine(product, packCount * packSizeUnits, `p-${product.productId}-${String(packCount)}`, null, method, CARD_BPS, {
-    branchPromotion: promotion, packSale: { packCount, packSizeUnits, packDiscountBps, packConfigId: packConfigFor(packSizeUnits, packDiscountBps) }
+    branchPromotions: promotion ? [promotion] : [], packSale: { packCount, packSizeUnits, packDiscountBps, packConfigId: packConfigFor(packSizeUnits, packDiscountBps) }
   });
 }
 
@@ -147,7 +147,7 @@ describe("Pack (descuento propio de cada producto, unidades reales)", () => {
   });
 
   it("el pack gana también a la promoción específica del producto (no se acumulan)", () => {
-    const withRule = buildUnitTicketLine(leche, 8, "p", lechePackRule, "CASH", CARD_BPS, { branchPromotion: FROM_3_15, packSale: PACK_8 });
+    const withRule = buildUnitTicketLine(leche, 8, "p", lechePackRule, "CASH", CARD_BPS, { branchPromotions: [FROM_3_15], packSale: PACK_8 });
     expect(withRule.subtotalCents).toBe(640_000n);
     expect(withRule.promotionMode).toBeNull();
     expect(withRule.discountRuleId).toBeNull();
@@ -243,7 +243,7 @@ describe("agregar y fusionar líneas UNIT", () => {
 
   it("editar la línea escaneada y pasarla a Pack la convierte en unidades reales con el % del producto", () => {
     const scanned = normal(1);
-    const edited = buildUnitTicketLine(leche, 1 * 8, scanned.id, null, "CASH", CARD_BPS, { branchPromotion: FROM_3_15, packSale: PACK_8 });
+    const edited = buildUnitTicketLine(leche, 1 * 8, scanned.id, null, "CASH", CARD_BPS, { branchPromotions: [FROM_3_15], packSale: PACK_8 });
     expect(edited.id).toBe(scanned.id);
     expect(edited.quantityUnits).toBe(8);
     expect(edited.subtotalCents).toBe(640_000n);

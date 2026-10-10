@@ -1,18 +1,65 @@
-import { formatBasisPointsPercent, formatCurrency } from "@carnicerias/business-logic";
+import { formatBasisPointsPercent, formatCurrency, normalizeQuantityTiers, type QuantityTier } from "@carnicerias/business-logic";
 
 import { percentageToBasisPointsAllowZero, text } from "./form-parsing";
 
 /**
- * Configuración global de precios (D-068): margen de ganancia sobre el PRECIO DE VENTA, "% dto llevando 3u", "% dto por pack" y
- * recargo por tarjeta, más (D-069) las categorías excluidas del margen automático. Puro y con tests; el servidor
+ * Configuración global de precios (D-068): margen de ganancia sobre el PRECIO DE VENTA, descuentos por cantidad con escalones
+ * (D-083: «3 unidades → 15 %, 5 unidades → 20 %»), "% dto por pack" y recargo por tarjeta, más (D-069) las categorías excluidas del margen automático. Puro y con tests; el servidor
  * (`save_pricing_config`) vuelve a validar todo.
  */
 
 export interface PricingConfigInput {
   marginBps: number;
+  /** Escalones del descuento por cantidad, ordenados por cantidad (vacío = sin descuento por cantidad). */
+  quantityTiers: QuantityTier[];
+  /** Espejo histórico del «Dto llevando 3u»: el porcentaje del escalón más bajo (0 sin escalones). */
   unitBulkDiscountBps: number;
   packDiscountBps: number;
   cardSurchargeBps: number;
+}
+
+/** Una fila del editor de escalones tal como se escribe (texto): la cantidad y el porcentaje. */
+export interface QuantityTierRow {
+  units: string;
+  percent: string;
+}
+
+export type QuantityTierRowsResult = { ok: true; tiers: QuantityTier[] } | { ok: false; error: string };
+
+/**
+ * Filas escritas → escalones en basis points enteros, validados y ORDENADOS por cantidad (cantidad entera >= 2, porcentaje > 0 y < 100,
+ * sin cantidades repetidas, descuento creciente con la cantidad). La usan el editor (mensaje en pantalla) y la acción del servidor.
+ */
+export function parseQuantityTierRows(rows: readonly QuantityTierRow[]): QuantityTierRowsResult {
+  const tiers: QuantityTier[] = [];
+  for (const [index, row] of rows.entries()) {
+    const units = row.units.trim();
+    const percentText = row.percent.trim();
+    if (!/^\d{1,4}$/.test(units)) return { ok: false, error: `Escalón ${String(index + 1)}: la cantidad tiene que ser un número entero (2 o más).` };
+    let discountBps: number;
+    try {
+      discountBps = percentageToBasisPointsAllowZero(percentText, "El porcentaje", MAX_BPS);
+    } catch {
+      return { ok: false, error: `Escalón ${String(index + 1)}: el porcentaje tiene que ser mayor a 0 y menor a 100 (hasta 2 decimales).` };
+    }
+    tiers.push({ minimumUnits: Number(units), discountBps });
+  }
+  return normalizeQuantityTiers(tiers);
+}
+
+/** El campo oculto `quantity_tiers` (JSON `[{units, percent}]`) → filas. Una forma inesperada es un error. */
+export function parseQuantityTiersField(raw: string): QuantityTierRow[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Los descuentos por cantidad no se pudieron leer: recargá la pantalla.");
+  }
+  if (!Array.isArray(parsed)) throw new Error("Los descuentos por cantidad no se pudieron leer: recargá la pantalla.");
+  return (parsed as unknown[]).map((item) => {
+    const record = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    return { units: typeof record.units === "string" ? record.units : "", percent: typeof record.percent === "string" ? record.percent : "" };
+  });
 }
 
 const MAX_BPS = 9_999n;
@@ -29,11 +76,26 @@ function percent(raw: string, label: string, { allowZero }: { allowZero: boolean
   return bps;
 }
 
-/** Los cuatro valores del formulario, en basis points enteros (nunca floats). Margen: > 0 y < 100 %; dto 3u, dto pack y tarjeta: 0 ≤ % < 100 (el pack con 0 % sigue siendo un pack, sin descuento). */
+/**
+ * Los valores del formulario, en basis points enteros (nunca floats). Margen: > 0 y < 100 %; dto pack y tarjeta: 0 ≤ % < 100 (el pack con 0 % sigue
+ * siendo un pack, sin descuento). Descuentos por cantidad: la lista de escalones (`quantity_tiers`); un formulario anterior sólo manda
+ * `unit_bulk` (el «Dto llevando 3u»), que equivale a un único escalón «desde 3».
+ */
 export function parsePricingConfigForm(formData: FormData): PricingConfigInput {
+  let quantityTiers: QuantityTier[];
+  const rawTiers = text(formData, "quantity_tiers");
+  if (rawTiers !== "") {
+    const parsed = parseQuantityTierRows(parseQuantityTiersField(rawTiers));
+    if (!parsed.ok) throw new Error(parsed.error);
+    quantityTiers = parsed.tiers;
+  } else {
+    const legacyBps = percent(text(formData, "unit_bulk"), "El descuento llevando 3u", { allowZero: true });
+    quantityTiers = legacyBps > 0 ? [{ minimumUnits: 3, discountBps: legacyBps }] : [];
+  }
   return {
+    quantityTiers,
+    unitBulkDiscountBps: quantityTiers[0]?.discountBps ?? 0,
     marginBps: percent(text(formData, "margin"), "El margen de ganancia", { allowZero: false }),
-    unitBulkDiscountBps: percent(text(formData, "unit_bulk"), "El descuento llevando 3u", { allowZero: true }),
     packDiscountBps: percent(text(formData, "pack"), "El descuento por pack", { allowZero: true }),
     cardSurchargeBps: percent(text(formData, "card"), "El recargo por tarjeta", { allowZero: true })
   };
@@ -162,7 +224,7 @@ export function describePricingConfigOutcome(outcome: PricingConfigOutcome, marg
     lines.push(`ATENCIÓN: ${plural(outcome.branchOverrides - outcome.branchOverridesClosed, "precio por sucursal sigue vigente y le gana", "precios por sucursal siguen vigentes y le ganan")} al precio global en el POS`);
   }
   if (outcome.packsUpdated > 0) lines.push(`Packs actualizados: ${outcome.packsUpdated.toLocaleString("es-AR")}`);
-  if (outcome.branchPromotionsUpdated > 0) lines.push(`Sucursales con la promoción actualizada: ${outcome.branchPromotionsUpdated.toLocaleString("es-AR")}`);
+  if (outcome.branchPromotionsUpdated > 0) lines.push(`Sucursales con los descuentos por cantidad actualizados: ${outcome.branchPromotionsUpdated.toLocaleString("es-AR")}`);
   return lines;
 }
 

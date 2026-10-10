@@ -1,6 +1,7 @@
 import {
   calculateBranchPromotionLinePricing,
   calculateManualLinePricing,
+  calculateQuantityTierLinePricing,
   calculateSalePricing,
   calculateTicketDiscount,
   calculateUnitPackLinePricing,
@@ -11,6 +12,7 @@ import {
   formatCurrency,
   isValidPackDiscountBps,
   packRealUnits,
+  selectQuantityTier,
   sumMoney,
   type BranchUnitPromotion,
   type TicketDiscount,
@@ -23,9 +25,9 @@ import type { PaymentMethod, TicketLine } from "@carnicerias/types";
  * Pricing de las líneas del ticket del POS. Las funciones `compute*`/`build*` se movieron desde App.tsx
  * sin cambiar su comportamiento (mismo motor: lista -> promoción/pack -> recargo por tarjeta, D-044);
  * este módulo agrega el precio manual por línea y el resumen con descuento general (D-061, sólo Central),
- * y para las líneas UNIT el Pack (con el % propio de cada producto) y la promoción global de la sucursal ("desde N unidades",
- * sobre TODA la línea). Precedencia de una línea UNIT (nunca se acumulan): precio manual > venta como Pack > promoción
- * específica del producto (PACK_FIXED_TOTAL) > promoción de sucursal. Todo es puro: sin React, SQLite ni red.
+ * y para las líneas UNIT el Pack (con el % propio de cada producto) y el descuento general por cantidad de la sucursal (escalones
+ * "desde N unidades, X %", sobre TODA la línea; se aplica el MAYOR escalón alcanzado, D-083). Precedencia de una línea UNIT (nunca se acumulan):
+ * precio manual > venta como Pack > promoción específica del producto (PACK_FIXED_TOTAL) > descuento por cantidad de la sucursal. Todo es puro: sin React, SQLite ni red.
  */
 
 export interface DiscountRule {
@@ -53,8 +55,8 @@ export interface ComputedLine {
 
 /** Contexto de una línea UNIT más allá del producto: la promoción de la sucursal y si se vende como Pack. */
 export interface UnitLineOptions {
-  /** Promoción global vigente de la sucursal del dispositivo (null/ausente = ninguna). */
-  branchPromotion?: BranchUnitPromotion | null;
+  /** Escalones vigentes del descuento por cantidad de la sucursal del dispositivo (ausente/vacío = ninguno). Se aplica el mayor alcanzado por la línea. */
+  branchPromotions?: readonly BranchUnitPromotion[];
   /** La línea se cargó explícitamente como Pack: `quantityUnits` ya son las unidades reales (packCount × packSizeUnits). */
   packSale?: UnitPackSale | null;
 }
@@ -88,7 +90,8 @@ export function computeWeightLine(
  *      producto; ni la promoción específica ni la de sucursal se suman;
  *   2. promoción específica del producto (PACK_FIXED_TOTAL): se aplica automáticamente en múltiplos exactos de su
  *      cantidad (sin toggle, a diferencia de WEIGHT: las unidades son exactas), el resto a precio normal;
- *   3. promoción de la sucursal ("desde N unidades, X %"): con N o más unidades del MISMO producto, TODAS las de la línea;
+ *   3. descuento por cantidad de la sucursal (escalones "desde N unidades, X %"): con N o más unidades del MISMO producto, TODAS las de la
+ *      línea llevan el % del MAYOR escalón alcanzado (nunca se suman los escalones);
  *   4. precio normal.
  * (El precio manual está por encima de todo y no pasa por acá: ver `applyManualPrice`.) */
 export function computeUnitLine(
@@ -110,8 +113,8 @@ export function computeUnitLine(
     });
     return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL", unitDiscount: null };
   }
-  if (options.branchPromotion) {
-    const unitDiscount = calculateBranchPromotionLinePricing({ listPriceCents, quantityUnits, promotion: options.branchPromotion, paymentMethod, cashDiscountBps });
+  if (options.branchPromotions?.length) {
+    const unitDiscount = calculateQuantityTierLinePricing({ listPriceCents, quantityUnits, tiers: options.branchPromotions, paymentMethod, cashDiscountBps });
     if (unitDiscount) return { pricing: unitDiscount, discountRuleId: null, discountType: null, discountValue: null, promotionMode: null, unitDiscount };
   }
   const pricing = calculateSalePricing({ listPriceCents, quantity: quantityUnits, quantityDivisor: 1, paymentMethod, cashDiscountBps, promotion: null });
@@ -132,14 +135,15 @@ export function stripUnitDiscount(line: TicketLine): TicketLine {
 }
 
 /** El snapshot del descuento UNIT aplicado por `computed`, listo para mezclar en la línea. */
-function unitDiscountFields(unitDiscount: UnitDiscountPricing | null | undefined, options: UnitLineOptions): Partial<TicketLine> {
+function unitDiscountFields(unitDiscount: UnitDiscountPricing | null | undefined): Partial<TicketLine> {
   if (!unitDiscount) return {};
   if (unitDiscount.kind === "PACK") {
     return { soldAsPack: true, packDiscountBps: unitDiscount.discountBps, packDiscountCents: unitDiscount.unitDiscountCents };
   }
   return {
-    branchPromotionId: options.branchPromotion?.id ?? "",
-    branchPromotionMinimumUnits: options.branchPromotion?.minimumUnits ?? 0,
+    // El escalón realmente aplicado (el motor lo devuelve): es el snapshot que valida el servidor contra SU regla.
+    branchPromotionId: unitDiscount.promotionId ?? "",
+    branchPromotionMinimumUnits: unitDiscount.promotionMinimumUnits ?? 0,
     branchPromotionDiscountBps: unitDiscount.discountBps,
     branchPromotionDiscountedUnits: unitDiscount.discountedUnits,
     branchPromotionDiscountCents: unitDiscount.unitDiscountCents
@@ -184,7 +188,7 @@ function lineFromComputed(
 
 /** A UNIT ticket line for `quantityUnits` REAL units of `product`. Shared by the manual quantity dialog and
  * the barcode scan so both price (packs, promotions, card surcharge) exactly the same way. `options.packSale` marks a line
- * loaded as Pack (then `quantityUnits` = packCount × packSizeUnits); `options.branchPromotion` is the branch's global promotion. */
+ * loaded as Pack (then `quantityUnits` = packCount × packSizeUnits); `options.branchPromotions` are the branch's quantity-discount tiers. */
 export function buildUnitTicketLine(
   product: LineProduct, quantityUnits: number, id: string, pack: DiscountRule | null,
   paymentMethod: PaymentMethod, cashDiscountBps: bigint, options: UnitLineOptions = {}
@@ -199,7 +203,7 @@ export function buildUnitTicketLine(
           ...(options.packSale.packConfigId ? { packConfigId: options.packSale.packConfigId } : {})
         }
       : {}),
-    ...unitDiscountFields(computed.unitDiscount, options)
+    ...unitDiscountFields(computed.unitDiscount)
   };
 }
 
@@ -270,15 +274,24 @@ export function promotedUnitPriceCents(listPriceCents: bigint, promotion: Branch
 }
 
 /**
- * "$4.590/u desde 3 u": etiqueta de la promoción de sucursal de un producto UNIT en el catálogo (lista Central y grilla). Null si no hay
- * promoción, el producto no tiene precio o la promoción no le llega: con una promoción por producto `PACK_FIXED_TOTAL` cuyo pack cabe
- * en el mínimo, la línea usa ese pack (precedencia de `computeUnitLine`) y el precio de la promoción de sucursal no se aplicaría.
+ * "$4.590/u desde 3 u · $4.320/u desde 5 u": etiqueta del descuento por cantidad de un producto UNIT en el catálogo (lista Central y grilla), un
+ * tramo por escalón. Null si no hay escalones, el producto no tiene precio o ningún escalón le llega: con una promoción por producto
+ * `PACK_FIXED_TOTAL` cuyo pack cabe en el mínimo del escalón, la línea usa ese pack (precedencia de `computeUnitLine`) y el precio del
+ * escalón no se aplicaría.
  */
-export function unitPromotionLabel(listPriceCents: bigint, promotion: BranchUnitPromotion | null | undefined, packRule: DiscountRule | null = null): string | null {
-  if (!promotion) return null;
-  if (packRule?.packQuantityUnits != null && packRule.packQuantityUnits <= promotion.minimumUnits) return null;
-  const price = promotedUnitPriceCents(listPriceCents, promotion);
-  return price === null ? null : `${formatCurrency(price)}/u desde ${String(promotion.minimumUnits)} u`;
+export function unitPromotionLabel(listPriceCents: bigint, promotions: readonly BranchUnitPromotion[] | null | undefined, packRule: DiscountRule | null = null): string | null {
+  if (!promotions?.length) return null;
+  const parts = [...promotions].sort((left, right) => left.minimumUnits - right.minimumUnits).flatMap((promotion) => {
+    if (packRule?.packQuantityUnits != null && packRule.packQuantityUnits <= promotion.minimumUnits) return [];
+    const price = promotedUnitPriceCents(listPriceCents, promotion);
+    return price === null ? [] : [`${formatCurrency(price)}/u desde ${String(promotion.minimumUnits)} u`];
+  });
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** El escalón que recibiría una línea de `quantityUnits` (el mayor alcanzado) o null; para mostrar «llevando N o más» en el diálogo de cantidad. */
+export function appliedQuantityTier(promotions: readonly BranchUnitPromotion[], quantityUnits: number): BranchUnitPromotion | null {
+  return Number.isSafeInteger(quantityUnits) && quantityUnits > 0 ? selectQuantityTier(promotions, quantityUnits) : null;
 }
 
 /** A WEIGHT ticket line for `weightGrams` of `product` (pack toggle + threshold promotions included). */
@@ -296,8 +309,8 @@ export interface PricingContext {
   discounts: DiscountRule[];
   cashDiscountBps: bigint;
   branchId: string;
-  /** Promoción global vigente de la sucursal (sólo UNIT); null/ausente = ninguna. */
-  branchPromotion?: BranchUnitPromotion | null;
+  /** Escalones vigentes del descuento por cantidad de la sucursal (sólo UNIT); ausente/vacío = ninguno. */
+  branchPromotions?: readonly BranchUnitPromotion[];
 }
 
 /**
@@ -318,7 +331,7 @@ export function repriceTicketLine(line: TicketLine, context: PricingContext): Ti
     // total comercial completo, packs incluidos, sin excepción). El Pack del producto (con su %) se recalcula
     // desde el snapshot de la propia línea (packCount × tamaño al venderla), nunca desde el producto actual.
     const pack = line.discountRuleId ? discounts.find((rule) => rule.id === line.discountRuleId) ?? null : null;
-    const options: UnitLineOptions = { branchPromotion: context.branchPromotion ?? null, packSale: packSaleOf(line) };
+    const options: UnitLineOptions = { branchPromotions: context.branchPromotions ?? [], packSale: packSaleOf(line) };
     const computed = computeUnitLine(listPriceCents, line.quantityUnits, pack, method, cashDiscountBps, options);
     return {
       ...stripUnitDiscount(line),
@@ -326,7 +339,7 @@ export function repriceTicketLine(line: TicketLine, context: PricingContext): Ti
       cashDiscountCents: computed.pricing.cashDiscountCents, cardSurchargeCents: computed.pricing.cardSurchargeCents,
       promotionDiscountCents: computed.pricing.promotionDiscountCents, discountCents: computed.pricing.discountCents,
       subtotalCents: computed.pricing.subtotalCents,
-      ...unitDiscountFields(computed.unitDiscount, options)
+      ...unitDiscountFields(computed.unitDiscount)
     };
   } else if (line.promotionMode === "PACK_FIXED_TOTAL" && line.discountRuleId) {
     // Línea pack WEIGHT: no escala con el peso — recalcularla como threshold perdería el
@@ -389,7 +402,7 @@ export function restoreNormalPrice(line: TicketLine, context: PricingContext): T
   if (line.quantityUnits != null) {
     return buildUnitTicketLine(
       product, line.quantityUnits, line.id, findPackRule(context.discounts, line.productId, context.branchId), context.paymentMethod, context.cashDiscountBps,
-      { branchPromotion: context.branchPromotion ?? null, packSale: packSaleOf(line) }
+      { branchPromotions: context.branchPromotions ?? [], packSale: packSaleOf(line) }
     );
   }
   // Sólo se quita el override de precio: "Vender como pack" (line.sellAsPack, que el precio manual no toca) queda como estaba.

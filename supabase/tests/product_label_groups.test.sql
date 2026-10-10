@@ -78,6 +78,8 @@ insert into public.branch_promotions (organization_id, branch_id, minimum_units,
 values ('d2000000-0000-4000-8000-000000000001', 'd3000000-0000-4000-8000-000000000002', 2, 1000, 'EVERY_GROUP');
 insert into public.organization_pricing_settings (organization_id, margin_bps, unit_bulk_discount_bps)
 values ('d2000000-0000-4000-8000-000000000001', 3333, 2000);
+insert into public.organization_quantity_discount_tiers (organization_id, minimum_units, discount_bps)
+values ('d2000000-0000-4000-8000-000000000001', 3, 2000);
 
 create table public.t_lg_keep(name text primary key, id uuid);
 grant all on public.t_lg_keep to authenticated, anon;

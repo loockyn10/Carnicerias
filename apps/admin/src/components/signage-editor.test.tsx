@@ -1,22 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EditorDisplay, EditorSlide } from "../lib/signage";
-import { addSlide, SignageCreateForm, SignageEditor } from "./signage-editor";
+import type { EditorDisplay, EditorEntry } from "../lib/signage";
+import { addEntry } from "../lib/signage-entries";
+import { SignageCreateForm, SignageEditor } from "./signage-editor";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("../app/admin/products/signage/actions", () => ({
-  createSignageDisplayAction: () => Promise.resolve({}), saveSignageDisplayAction: () => Promise.resolve({}), regenerateSignageTokenAction: () => Promise.resolve({})
+  createSignageDisplayAction: () => Promise.resolve({}), saveSignageDisplayAction: () => Promise.resolve({}), regenerateSignageTokenAction: () => Promise.resolve({}),
+  loadPromotionCatalogAction: () => Promise.resolve({ ok: true, catalog: { promotions: [], groups: [] } }), saveSignageGroupAction: () => Promise.resolve({}), deleteSignageGroupAction: () => Promise.resolve({})
 }));
 vi.mock("../app/admin/actions", () => ({ searchProductsAction: () => Promise.resolve([]) }));
 
-const slide = (id: string, name: string, extra: Partial<EditorSlide> = {}): EditorSlide => ({
-  productId: id, name, sku: null, unitType: "UNIT", summary: "$ 1.729,75 · llevando 3 unidades", unavailable: null, ...extra
+const slide = (id: string, name: string, extra: Partial<EditorEntry> = {}): EditorEntry => ({
+  kind: "PRODUCT", id, name, sku: null, unitType: "UNIT", summary: "$ 1.729,75 · llevando 3 unidades", unavailable: null, hasPhoto: true, children: [], ...extra
 });
 const display: EditorDisplay = {
   id: "11111111-1111-4111-8111-111111111111", name: "TV Despensa Central", enabled: true, branchId: "b1", slideDurationSeconds: 8,
   tokenRotatedAt: "2026-10-07T12:00:00.000Z",
-  slides: [slide("p1", "Mayonesa Hellmann's 250gr"), slide("p2", "Yerba Aguantadora 1kg", { summary: "$ 3.100" }), slide("p3", "Producto viejo", { summary: null, unavailable: "NO_PRICE" })]
+  entries: [slide("p1", "Mayonesa Hellmann's 250gr"), slide("p2", "Yerba Aguantadora 1kg", { summary: "$ 3.100" }), slide("p3", "Producto viejo", { summary: null, unavailable: "NO_PRICE" })]
 };
 const branches = [{ id: "b1", name: "Central", active: true }, { id: "b2", name: "Avenida", active: false }];
 
@@ -69,7 +71,7 @@ describe("SignageEditor", () => {
   });
 
   it("sin ofertas: explica qué verá el televisor", () => {
-    const empty = renderToStaticMarkup(<SignageEditor branches={branches} display={{ ...display, slides: [] }} />);
+    const empty = renderToStaticMarkup(<SignageEditor branches={branches} display={{ ...display, entries: [] }} />);
     expect(empty).toContain("Próximamente nuevas ofertas");
     expect(empty).toContain("Ofertas publicadas (0)");
   });
@@ -82,20 +84,20 @@ describe("SignageEditor", () => {
 
 describe("agregar productos a la presentación", () => {
   it("agrega al final y evita duplicados", () => {
-    const first = addSlide([], slide("p1", "A"));
+    const first = addEntry([], slide("p1", "A"));
     expect(first.error).toBeNull();
-    expect(first.slides.map((item) => item.productId)).toEqual(["p1"]);
-    const again = addSlide(first.slides, slide("p1", "A"));
+    expect(first.entries.map((item) => item.id)).toEqual(["p1"]);
+    const again = addEntry(first.entries, slide("p1", "A"));
     expect(again.error).toBe("Ese producto ya está en la presentación");
-    expect(again.slides).toHaveLength(1);
-    expect(addSlide(first.slides, slide("p2", "B")).slides.map((item) => item.productId)).toEqual(["p1", "p2"]);
+    expect(again.entries).toHaveLength(1);
+    expect(addEntry(first.entries, slide("p2", "B")).entries.map((item) => item.id)).toEqual(["p1", "p2"]);
   });
 
   it("tope de 50 ofertas", () => {
     const full = Array.from({ length: 50 }, (_, index) => slide(`p${String(index)}`, `P${String(index)}`));
-    const outcome = addSlide(full, slide("extra", "Extra"));
+    const outcome = addEntry(full, slide("extra", "Extra"));
     expect(outcome.error).toContain("hasta 50");
-    expect(outcome.slides).toHaveLength(50);
+    expect(outcome.entries).toHaveLength(50);
   });
 });
 

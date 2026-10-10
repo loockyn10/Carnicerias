@@ -13,6 +13,7 @@ import {
   formatBasisPointsPercent,
   packDiscountLabel,
   type BranchUnitPromotion,
+  quantityTierLabel,
   type ScaleKind,
   type UnitPackSale,
   type WeightStabilityState
@@ -124,11 +125,13 @@ const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
 // so an outer catch around a staged sequence doesn't overwrite it with a less specific message.
 class HandledStageError extends Error {}
 
-/** La promoción global de la sucursal (a lo sumo una vigente) tal como la necesita el motor de precios. */
-function toBranchPromotion(rows: readonly LocalBranchPromotion[] | undefined): BranchUnitPromotion | null {
-  const row = rows?.[0];
-  return row ? { id: row.id, minimumUnits: row.minimumUnits, discountBps: row.discountBps } : null;
+/** Los escalones del descuento por cantidad de la sucursal (uno por regla vigente), ordenados por cantidad, tal como los necesita el motor de precios. */
+function toBranchPromotions(rows: readonly LocalBranchPromotion[] | undefined): BranchUnitPromotion[] {
+  return (rows ?? []).map((row) => ({ id: row.id, minimumUnits: row.minimumUnits, discountBps: row.discountBps })).sort((left, right) => left.minimumUnits - right.minimumUnits);
 }
+
+/** Sin escalones (referencia estable: no dispara efectos de repricing). */
+const NO_BRANCH_PROMOTIONS: readonly BranchUnitPromotion[] = [];
 
 function categoryAccent(color: string | null | undefined): string | undefined {
   return color && /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
@@ -354,7 +357,7 @@ export default function App() {
   // Producto UNIT con pack: la cantidad del modal son PACKS (cada uno = pack_size_units unidades reales, con el % OFF de ese producto).
   const [packMode, setPackMode] = useState(false);
   // Promoción global de la sucursal ("desde N unidades, X %" sobre toda la línea, sólo UNIT); viaja con el catálogo y se lee de SQLite.
-  const [branchPromotion, setBranchPromotion] = useState<BranchUnitPromotion | null>(null);
+  const [branchPromotions, setBranchPromotions] = useState<BranchUnitPromotion[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
   // Pricing flexible de Central (D-061): la línea cuyo precio manual se está editando (sólo existe en el POS de Central).
   // El descuento general manual del ticket ya no se ofrece en el POS: toda venta nueva lleva descuento general 0.
@@ -721,7 +724,7 @@ export default function App() {
     if (centralPos) return;
     setManualPriceLineId(null);
     setTicket((current) => current.some((line) => line.manualPriceApplied)
-      ? current.map((line) => line.manualPriceApplied ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion }) : line)
+      ? current.map((line) => line.manualPriceApplied ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotions }) : line)
       : current);
   }, [centralPos]);
   // Se recalcula con cada sync (lastSuccessfulSyncAt cambia en cada pull; el snapshot de stock ya
@@ -738,9 +741,9 @@ export default function App() {
       if (desktop) {
         const config = await localDatabase.commercialConfig();
         setCashDiscountBps(config.cashDiscountBps); setDiscounts(config.discounts); setAnnouncements(config.announcements);
-        setBranchPromotion(toBranchPromotion(config.branchPromotions));
+        setBranchPromotions(toBranchPromotions(config.branchPromotions));
       } else {
-        setBranchPromotion(null);
+        setBranchPromotions([]);
         const { data, error: configError } = await supabase.rpc("get_pos_commercial_config", { p_branch_id: branchId });
         if (configError) throw configError;
         const config = data as unknown as { cashDiscountBps: number; discounts: DiscountRule[]; announcements: Announcement[] };
@@ -762,7 +765,7 @@ export default function App() {
         setCashDiscountBps(config.cashDiscountBps);
         setDiscounts(config.discounts);
         setAnnouncements(config.announcements);
-        setBranchPromotion(toBranchPromotion(config.branchPromotions));
+        setBranchPromotions(toBranchPromotions(config.branchPromotions));
         setOutboxSummary(await localDatabase.outboxSummary());
         setOperators(await localDatabase.operators());
         if (operator) await loadShift(operator);
@@ -1077,8 +1080,8 @@ export default function App() {
     // no se recalcula nunca (repriceTicketLine): su precio es la decisión final del operador.
     if (!paymentMethod) return;
     const method = paymentMethod;
-    setTicket((current) => current.map((line) => repriceTicketLine(line, { paymentMethod: method, discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion })));
-  }, [cashDiscountBps, paymentMethod, branchPromotion]);
+    setTicket((current) => current.map((line) => repriceTicketLine(line, { paymentMethod: method, discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotions })));
+  }, [cashDiscountBps, paymentMethod, branchPromotions]);
 
   // Producto sin precio: NUNCA se agrega a $0. Con conexión se abre el modal para fijar el precio; sin
   // conexión el mismo modal sólo avisa (no hay precio pendiente local ni venta a $0). Toda vía que agrega
@@ -1116,7 +1119,7 @@ export default function App() {
   // en el POS de escritorio). Mismo helper para la lista de Central y la grilla; el cálculo lo hace el motor de pricing.
   function unitPromotionBadgeLabel(product: CatalogProduct): string | null {
     if (product.unitType !== "UNIT" || isPriceMissing(product)) return null;
-    return unitPromotionLabel(product.pricePerKgCents, unitPromotion, findPackRule(discounts, product.productId, branchId));
+    return unitPromotionLabel(product.pricePerKgCents, unitPromotions, findPackRule(discounts, product.productId, branchId));
   }
 
   // Badges de la fila de Central: la misma regla de promoción que mostraba la card (la primera del producto) y el
@@ -1173,7 +1176,7 @@ export default function App() {
   }, [discounts, selectedProduct, branchId]);
 
   // La promoción global de la sucursal sólo existe en el POS de escritorio (la recibe del catálogo sincronizado).
-  const unitPromotion = desktop ? branchPromotion : null;
+  const unitPromotions = desktop ? branchPromotions : NO_BRANCH_PROMOTIONS;
 
   /**
    * Cómo queda la línea UNIT que se está cargando en el modal: las unidades REALES (en modo Pack: packs × tamaño del pack),
@@ -1232,7 +1235,7 @@ export default function App() {
         mergedLineId = request.mergedLine?.id ?? null;
         line = buildUnitTicketLine(
           selectedProduct, request.units, request.lineId || crypto.randomUUID(), packRuleForSelectedProduct, method, BigInt(cashDiscountBps),
-          { branchPromotion: unitPromotion, packSale: request.packSale }
+          { branchPromotions: unitPromotions, packSale: request.packSale }
         );
       } else {
         const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
@@ -1283,7 +1286,7 @@ export default function App() {
   }
   function restoreLineToNormalPrice(lineId: string) {
     setTicket((current) => current.map((line) => line.id === lineId
-      ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotion })
+      ? restoreNormalPrice(line, { paymentMethod: paymentMethod ?? "CASH", discounts, cashDiscountBps: BigInt(cashDiscountBps), branchId, branchPromotions })
       : line));
     setManualPriceLineId(null);
   }
@@ -1301,7 +1304,7 @@ export default function App() {
     // Un escaneo agrega UNA unidad normal (nunca un Pack): a la línea normal del producto si ya existe, aunque tenga precio manual.
     const existing = findMergeableUnitLine(current, product.productId, false, true);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotion: unitPromotion });
+    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: unitPromotions });
     try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
     ticketRef.current = next;
@@ -2596,6 +2599,11 @@ export default function App() {
                     Pack: {packRuleForSelectedProduct.packQuantityUnits} u por {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))} — se aplica automáticamente en múltiplos exactos.
                   </p>
                 ) : null}
+                {unitPromotions.length > 0 ? (
+                  <ul className="mt-3 space-y-1 text-sm font-bold text-emerald-300" data-testid="quantity-tiers">
+                    {unitPromotions.map((tier) => <li key={tier.id}>{quantityTierLabel(tier)}</li>)}
+                  </ul>
+                ) : null}
               </>
             )}
             {shouldDisplayTicketAmounts(paymentMethod) ? (
@@ -2617,13 +2625,13 @@ export default function App() {
                     ? computeWeightLine(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), sellAsPack, packRuleForSelectedProduct, discounts, selectedProduct.productId, branchId, paymentMethod, BigInt(cashDiscountBps))
                     : (() => {
                         const request = unitLineRequest(selectedProduct);
-                        return computeUnitLine(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps), { branchPromotion: unitPromotion, packSale: request.packSale });
+                        return computeUnitLine(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps), { branchPromotions: unitPromotions, packSale: request.packSale });
                       })();
                   const preview = computed.pricing;
                   const unitRequest = selectedProduct.unitType === "UNIT" ? unitLineRequest(selectedProduct) : null;
                   const unitPromoLabel = computed.unitDiscount?.kind === "PACK"
                     ? "Pack " + packDiscountLabel(computed.unitDiscount.discountBps)
-                    : computed.unitDiscount ? "Promo desde " + String(unitPromotion?.minimumUnits ?? 0) + " u · " + formatBasisPointsPercent(unitPromotion?.discountBps ?? 0) + "% OFF" : "Promo";
+                    : computed.unitDiscount ? "Llevando " + String(computed.unitDiscount.promotionMinimumUnits ?? 0) + " o más · " + formatBasisPointsPercent(computed.unitDiscount.discountBps) + "% dto" : "Promo";
                   return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(preview.listSubtotalCents)}</p>
                     {computed.promotionMode === "PACK_FIXED_TOTAL" ? <p className="mt-1 font-bold text-amber-300">Promo pack</p> : <>
                       {preview.cashDiscountCents > 0n ? <p className="mt-1 font-bold text-emerald-400">Descuento por pago: -{formatCurrency(preview.cashDiscountCents)}</p> : null}

@@ -5,17 +5,17 @@ import { PricingConfigForm } from "./pricing-config-form";
 
 vi.mock("../app/admin/actions", () => ({ savePricingConfigAction: () => Promise.resolve({}) }));
 
-const configured = { marginBps: 3_000, unitBulkDiscountBps: 1_500, packDiscountBps: 2_000, cardSurchargeBps: 1_000 };
+const configured = { marginBps: 3_000, unitBulkDiscountBps: 1_500, quantityTiers: [{ minimumUnits: 3, discountBps: 1_500 }, { minimumUnits: 5, discountBps: 2_000 }], packDiscountBps: 2_000, cardSurchargeBps: 1_000 };
 
-describe("PricingConfigForm: margen, dto llevando 3u, dto por pack y recargo por tarjeta", () => {
+describe("PricingConfigForm: margen, descuentos por cantidad, dto por pack y recargo por tarjeta", () => {
   const html = renderToStaticMarkup(<PricingConfigForm values={configured} />);
 
   it("muestra los cuatro valores de la organización, en porcentaje", () => {
     expect(html).toContain("Margen de ganancia");
-    expect(html).toContain("Dto llevando 3u");
+    expect(html).toContain("Descuentos por cantidad");
     expect(html).toContain("Dto por pack");
     expect(html).toContain("Recargo por tarjeta");
-    for (const [name, value] of [["margin", "30"], ["unit_bulk", "15"], ["pack", "20"], ["card", "10"]] as const) {
+    for (const [name, value] of [["margin", "30"], ["pack", "20"], ["card", "10"]] as const) {
       expect(html, name).toMatch(new RegExp(`name="${name}"[^>]*value="${value}"|value="${value}"[^>]*name="${name}"`));
     }
     expect(html).toContain("Guardar configuración");
@@ -24,17 +24,38 @@ describe("PricingConfigForm: margen, dto llevando 3u, dto por pack y recargo por
   it("explica cada valor (margen sobre el precio de venta, desde 3 unidades, packs, tarjeta) con el ejemplo calculado", () => {
     expect(html).toContain("Porcentaje de ganancia sobre el precio de venta");
     expect(html).toContain("costo $ 10.000 con margen 30% → venta $ 14.300");
-    expect(html).toContain("Se aplica desde 3 unidades");
+    expect(html).toContain("Se aplica el mayor escalón alcanzado");
     expect(html).toContain("Se aplica a los productos que tengan unidades por pack configuradas");
     expect(html).toContain("Efectivo y transferencia no tienen ajuste");
   });
 
   it("valida en el navegador los rangos (margen > 0 y < 100; 3u, pack y tarjeta desde 0)", () => {
     expect(html).toMatch(/max="99.99"[^>]*min="0.01"[^>]*name="margin"/);
-    expect(html).toMatch(/max="99.99"[^>]*min="0"[^>]*name="unit_bulk"/);
+    expect(html).not.toContain('name="unit_bulk"');
     expect(html).toMatch(/max="99.99"[^>]*min="0"[^>]*name="pack"/);
     expect(html).toContain("0 = el pack sigue existiendo, sin descuento");
     expect(html).toMatch(/max="99.99"[^>]*min="0"[^>]*name="card"/);
+  });
+
+  it("lista los escalones vigentes (3 → 15 %, 5 → 20 %) con Editar, Eliminar y + Agregar escalón", () => {
+    expect(html).toContain("3 unidades");
+    expect(html).toContain("15 %");
+    expect(html).toContain("5 unidades");
+    expect(html).toContain("20 %");
+    expect(html).toContain("Editar escalón de 3 unidades");
+    expect(html).toContain("Eliminar escalón de 5 unidades");
+    expect(html).toContain("+ Agregar escalón");
+  });
+
+  it("envía los escalones escritos en el campo oculto quantity_tiers (el servidor los vuelve a validar)", () => {
+    expect(html).toContain("name=\"quantity_tiers\"");
+    expect(html).toContain("[{&quot;units&quot;:&quot;3&quot;,&quot;percent&quot;:&quot;15&quot;},{&quot;units&quot;:&quot;5&quot;,&quot;percent&quot;:&quot;20&quot;}]");
+  });
+
+  it("sin escalones configurados avisa que ninguna venta lleva descuento por cantidad", () => {
+    const none = renderToStaticMarkup(<PricingConfigForm values={{ ...configured, quantityTiers: [] }} />);
+    expect(none).toContain("Sin descuentos por cantidad");
+    expect(none).toContain("+ Agregar escalón");
   });
 
   it("con los valores ya configurados no muestra el aviso de «sin margen»", () => {
