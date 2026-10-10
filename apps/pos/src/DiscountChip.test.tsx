@@ -5,7 +5,7 @@ import { CentralProductList, type CentralRowBadge } from "./CentralProductList";
 import type { CentralListProduct } from "./lib/central-list";
 import { limitRowChips } from "./lib/discount-chips";
 import { unitPromotionChips } from "./lib/ticket-pricing";
-import { UnitQuantityFields } from "./UnitQuantityFields";
+import { QuantityTierList, type QuantityPackRow } from "./QuantityTierList";
 
 const sugar: CentralListProduct = { productId: "az", productName: "AZUCAR JL 1KG.", productSku: null, unitType: "UNIT", pricePerKgCents: 165_000n, barcodes: ["7790000000011"] };
 
@@ -90,22 +90,71 @@ describe("lista Central: un chip por descuento, cada uno con su color", () => {
   });
 });
 
-describe("diálogo de cantidad: el Pack conserva su identidad azul", () => {
-  const pack = { packSizeUnits: 10, packDiscountBps: 2_500, unitPriceCents: 123_750n, applied: false, packCount: 0 };
-  const dialog = (applied: boolean) => renderToStaticMarkup(
-    <UnitQuantityFields quantity={10} onQuantityChange={() => undefined} lineUnits={10} pack={{ ...pack, applied, packCount: applied ? 1 : 0 }} />
-  );
 
-  it("Pack aplicado: azul (ya no verde, que ahora es el del 2.º escalón)", () => {
-    const html = dialog(true);
-    expect(html).toContain("border-sky-500/60");
-    expect(html).toContain('data-discount-variant="pack"');
-    expect(html).not.toContain("emerald");
+const TIERS_SUGAR = [{ id: "t3", minimumUnits: 3, discountBps: 1_500 }, { id: "t5", minimumUnits: 5, discountBps: 2_000 }];
+const PACK_ROW: QuantityPackRow = { packSizeUnits: 8, packDiscountBps: 2_500, unitPriceCents: 123_750n, applied: false, lineUnits: 5 };
+const tierList = (pack: QuantityPackRow | null, applied: number | null = null, tiers = TIERS_SUGAR) =>
+  renderToStaticMarkup(<QuantityTierList appliedMinimumUnits={applied} listPriceCents={165_000n} pack={pack} tiers={tiers} />);
+/** Las filas de la lista como [variante, texto del chip, precio de la derecha]. */
+function rows(html: string): [string, string, string][] {
+  return [...html.matchAll(/<li[^>]*data-discount-variant="([^"]+)"[^>]*><span[^>]*>([^<]*)<\/span>(?:<span[^>]*>([^<]*)<\/span>)?/g)].map((m) => [m[1] ?? "", m[2] ?? "", m[3] ?? ""]);
+}
+
+describe("diálogo «Agregar al ticket»: escalones y Pack con el mismo patrón", () => {
+  it("orden y colores: 3u amarillo, 5u verde, Pack azul DEBAJO, cada uno con su precio por unidad a la derecha", () => {
+    expect(rows(tierList(PACK_ROW))).toEqual([
+      ["tier-1", "Llevando 3 o más: 15% dto.", "$ 1.402,50/u"],
+      ["tier-2", "Llevando 5 o más: 20% dto.", "$ 1.320/u"],
+      ["pack", "Pack desde 8u: 25% OFF", "$ 1.237,50/u"]
+    ]);
   });
 
-  it("Pack disponible: el título lleva el azul del Pack y sigue diciendo «desde 10 unidades»", () => {
-    const html = dialog(false);
-    expect(html).toContain("text-sky-300");
-    expect(html).toContain("Pack disponible desde 10 unidades");
+  it("el Pack ya no es un recuadro grande aparte: no hay bloque «pack-status» con título en mayúsculas ni «Pack disponible»", () => {
+    const html = tierList(PACK_ROW);
+    expect(html).not.toContain("Pack disponible");
+    expect(html).not.toContain("PACK DISPONIBLE");
+    expect(html).not.toContain("Pack aplicado automáticamente");
+    expect(html.match(/<ul/g)).toHaveLength(1);
+  });
+
+  it("el chip azul tiene exactamente el mismo tamaño, padding, tipografía y borde que los de los escalones (sólo cambia el color)", () => {
+    const chipClasses = [...tierList(PACK_ROW).matchAll(/<span class="([^"]*)" data-discount-variant="[^"]+">/g)].map((m) => m[1] ?? "");
+    expect(chipClasses).toHaveLength(3);
+    const structure = (classes: string) => classes.split(" ").filter((name) => !/^(bg|text|ring)-(amber|emerald|violet|orange|lime|sky)/.test(name)).join(" ");
+    expect(new Set(chipClasses.map(structure)).size).toBe(1);
+    expect(chipClasses[2]).toContain("bg-sky-950 text-sky-300 ring-sky-500/60");
+  });
+
+  it("cuando el Pack todavía no aplica dice «Pack desde 8u: 25% OFF»; cuando aplica dice «Pack aplicado · 8u · 25% OFF» y se resalta", () => {
+    expect(rows(tierList({ ...PACK_ROW, lineUnits: 7 }))[2]?.[1]).toBe("Pack desde 8u: 25% OFF");
+    const applied = tierList({ ...PACK_ROW, applied: true, lineUnits: 8 });
+    expect(rows(applied)[2]).toEqual(["pack", "Pack aplicado · 8u · 25% OFF", "$ 1.237,50/u"]);
+    expect(applied).toContain('data-applied="true"');
+    expect(applied).toContain("border-sky-500/60");
+    expect(tierList({ ...PACK_ROW, lineUnits: 7 })).not.toContain('data-applied="true"');
+  });
+
+  it("con el Pack aplicado ningún escalón se marca como aplicado, y a la inversa", () => {
+    expect((tierList({ ...PACK_ROW, applied: true, lineUnits: 8 }).match(/data-applied="true"/g) ?? []).length).toBe(1);
+    const tierApplied = tierList({ ...PACK_ROW, lineUnits: 5 }, 5);
+    expect((tierApplied.match(/data-applied="true"/g) ?? []).length).toBe(1);
+    expect(tierApplied).toMatch(/data-applied="true"[^>]*data-discount-variant="tier-2"/);
+  });
+
+  it("el porcentaje del Pack es el real, con coma decimal; sin precio por unidad calculable muestra sólo el chip", () => {
+    expect(tierList({ ...PACK_ROW, packDiscountBps: 1_250 })).toContain("Pack desde 8u: 12,5% OFF");
+    expect(rows(tierList({ ...PACK_ROW, unitPriceCents: null }))[2]).toEqual(["pack", "Pack desde 8u: 25% OFF", ""]);
+  });
+
+  it("sin escalones, sólo Pack → una fila azul; sin Pack → sólo escalones; sin nada → no dibuja nada", () => {
+    expect(rows(tierList(PACK_ROW, null, [])).map(([variant]) => variant)).toEqual(["pack"]);
+    expect(rows(tierList(null)).map(([variant]) => variant)).toEqual(["tier-1", "tier-2"]);
+    expect(tierList(null, null, [])).toBe("");
+  });
+
+  it("más allá del Pack pero fuera de un múltiplo (9, 15) avisa que se aplica en múltiplos, sin inventar otra regla", () => {
+    expect(tierList({ ...PACK_ROW, lineUnits: 9 })).toContain("múltiplos de 8 unidades");
+    expect(tierList({ ...PACK_ROW, lineUnits: 7 })).not.toContain("múltiplos");
+    expect(tierList({ ...PACK_ROW, lineUnits: 8, applied: true })).not.toContain("múltiplos");
   });
 });

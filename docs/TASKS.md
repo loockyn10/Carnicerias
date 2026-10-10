@@ -42,7 +42,7 @@ Implementado 2026-10-10 (D-085). **Migración pendiente: `202610200083_branch_la
 3. Una fichada que cruza la medianoche debe repartir sus horas entre los dos días (Ayer / Hoy) y un cambio de valor hora no debe alterar los días ya trabajados.
 4. **Doble conteo:** si hay un costo mensual «Sueldo…»/«Empleada» cargado a mano, el modal lo marca «Posible duplicado»: darlo de baja desde la fecha en que empieza el cálculo automático (el sistema no lo borra).
 5. Fichadas «a revisar» (olvidó fichar la salida): el modal las cuenta; conviene corregirlas en Horas (la salida inferida ya suma al costo).
-6. POS (instalador nuevo): AZUCAR JL 1KG. debe mostrar tres chips de colores distintos (3 u ámbar, 5 u verde, Pack azul) en la lista Central, y el diálogo de cantidad debe marcar «✓ Aplicado» el escalón vigente.
+6. POS (instalador nuevo): AZUCAR JL 1KG. debe mostrar tres chips de colores distintos (3 u ámbar, 5 u verde, Pack azul) en la lista Central, y en el diálogo «Agregar al ticket» el Pack debe verse como una fila azul debajo del escalón de 5 u («Pack desde 8u…» / «Pack aplicado · 8u…»), con el descuento aplicado resaltado.
 7. Confirmar las decisiones no pedidas de D-085 (tope `max_shift_hours` / latido vencido, `REQUIRES_REVIEW` cuenta, refresco de 2 min, Pack azul).
 8. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `branch_labor_cost.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
 

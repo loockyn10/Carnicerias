@@ -1,7 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { formatCurrency, packDiscountLabel } from "@carnicerias/business-logic";
-
-import { PACK_PALETTE } from "./lib/discount-chips";
 
 /** Tope de la cantidad que se puede tipear (evita enteros absurdos que rompan el cálculo). */
 export const MAX_UNIT_QUANTITY = 99_999;
@@ -23,22 +20,15 @@ interface UnitQuantityFieldsProps {
   /** Cantidad de unidades; `null` mientras el campo está vacío (se está reemplazando el número). */
   quantity: number | null;
   onQuantityChange: (quantity: number | null) => void;
-  /** Unidades reales de la línea resultante (incluye lo que ya había en el ticket del mismo producto); sólo para explicar el Pack. */
-  lineUnits: number;
-  /**
-   * Pack del producto: unidades por pack, SU porcentaje de descuento y el precio por unidad que deja (calculado por el motor de pricing);
-   * null = sin pack. `applied` lo decide el motor según las unidades: el operador no elige nada.
-   */
-  pack: { packSizeUnits: number; packDiscountBps: number; unitPriceCents: bigint | null; applied: boolean; packCount: number } | null;
 }
 
 /**
  * Cantidad de un producto UNIT, la misma para agregar desde la grilla/buscador y para modificar una línea ya agregada
- * (un único componente). La cantidad son siempre unidades; el Pack se aplica solo cuando las unidades lo alcanzan (ver `autoPackSale`)
- * y acá sólo se informa ("Pack aplicado" / "Pack disponible desde N unidades") con el precio por unidad que resulta.
+ * (un único componente). La cantidad son siempre unidades; el Pack se aplica solo cuando las unidades lo alcanzan (ver `autoPackSale`) y se
+ * informa junto a los escalones por cantidad (`QuantityTierList`), no acá.
  * El campo guarda un borrador de texto: puede quedar vacío mientras se escribe otro número, y al salir vacío vuelve a 1.
  */
-export function UnitQuantityFields({ quantity, onQuantityChange, lineUnits, pack }: UnitQuantityFieldsProps) {
+export function UnitQuantityFields({ quantity, onQuantityChange }: UnitQuantityFieldsProps) {
   const [draft, setDraft] = useState(quantity === null ? "" : String(quantity));
   const justFocused = useRef(false);
   // Un cambio de cantidad que no vino del tipeo (+/−, reabrir el modal) se refleja en el campo; el vacío transitorio no se pisa.
@@ -89,31 +79,6 @@ export function UnitQuantityFields({ quantity, onQuantityChange, lineUnits, pack
           </button>
         </div>
       </label>
-      {pack ? <PackStatus lineUnits={lineUnits} pack={pack} /> : null}
     </>
-  );
-}
-
-function PackStatus({ lineUnits, pack }: { lineUnits: number; pack: NonNullable<UnitQuantityFieldsProps["pack"]> }) {
-  const discountLabel = packDiscountLabel(pack.packDiscountBps);
-  const perUnit = pack.unitPriceCents === null ? null : <>{" · "}<strong>{formatCurrency(pack.unitPriceCents)}/u</strong></>;
-  if (pack.applied) {
-    return (
-      <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm font-bold ${PACK_PALETTE.panel}`} data-discount-variant={PACK_PALETTE.variant} data-testid="pack-status">
-        <p className={`text-xs font-black uppercase tracking-wide ${PACK_PALETTE.text}`}>✓ Pack aplicado automáticamente</p>
-        <p className="mt-1" data-testid="pack-units">
-          {pack.packCount === 1 ? `${String(pack.packSizeUnits)} unidades` : `${String(pack.packCount)} packs × ${String(pack.packSizeUnits)} u = ${String(lineUnits)} unidades`} · {discountLabel}{perUnit}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="mt-3 rounded-2xl border border-stone-600 bg-stone-950/60 px-4 py-3 text-sm font-bold text-stone-300" data-discount-variant={PACK_PALETTE.variant} data-testid="pack-status">
-      <p className={`text-xs font-black uppercase tracking-wide ${PACK_PALETTE.text}`}>Pack disponible desde {String(pack.packSizeUnits)} unidades</p>
-      <p className="mt-1">{discountLabel}{perUnit}</p>
-      {lineUnits > pack.packSizeUnits && lineUnits % pack.packSizeUnits !== 0
-        ? <p className="mt-1 text-xs font-bold text-stone-400" data-testid="pack-multiples">Se aplica en múltiplos de {String(pack.packSizeUnits)} unidades.</p>
-        : null}
-    </div>
   );
 }

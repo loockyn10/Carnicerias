@@ -2593,28 +2593,23 @@ export default function App() {
               </>
             ) : (
               <>
-                <UnitQuantityFields
-                  quantity={quantityInput}
-                  onQuantityChange={setQuantityInput}
-                  lineUnits={unitLineRequest(selectedProduct).units}
-                  pack={(() => {
-                    const offer = packOfferOf(selectedProduct);
-                    if (!offer) return null;
-                    const sale = quantityInput === null ? null : unitLineRequest(selectedProduct).packSale;
-                    return { packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, unitPriceCents: packOfferUnitPriceCents(selectedProduct.pricePerKgCents, offer), applied: sale !== null, packCount: sale?.packCount ?? 0 };
-                  })()}
-                />
+                <UnitQuantityFields quantity={quantityInput} onQuantityChange={setQuantityInput} />
                 {packRuleForSelectedProduct?.packQuantityUnits != null && packRuleForSelectedProduct.packPriceCents != null ? (
                   <p className="mt-3 rounded-2xl border border-amber-500/60 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-200">
                     Pack: {packRuleForSelectedProduct.packQuantityUnits} u por {formatCurrency(BigInt(packRuleForSelectedProduct.packPriceCents))} — se aplica automáticamente en múltiplos exactos.
                   </p>
                 ) : null}
-                {unitPromotions.length > 0 ? (() => {
-                  // Cada escalón conserva el color de su posición (el mismo de la lista); el que el motor está aplicando a esta línea se resalta.
+                {(() => {
+                  // Escalones y Pack con el mismo patrón y el color de su posición (el mismo de la lista); lo que el motor aplica a esta línea se resalta.
+                  const offer = packOfferOf(selectedProduct);
+                  if (unitPromotions.length === 0 && !offer) return null;
                   const request = quantityInput === null ? null : unitLineRequest(selectedProduct);
                   const appliedMinimum = request ? appliedTierMinimumUnits(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, unitPromotions, request.packSale) : null;
-                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} tiers={unitPromotions} />;
-                })() : null}
+                  const pack = offer
+                    ? { packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, unitPriceCents: packOfferUnitPriceCents(selectedProduct.pricePerKgCents, offer), applied: request?.packSale != null, lineUnits: unitLineRequest(selectedProduct).units }
+                    : null;
+                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} pack={pack} tiers={unitPromotions} />;
+                })()}
               </>
             )}
             {shouldDisplayTicketAmounts(paymentMethod) ? (
