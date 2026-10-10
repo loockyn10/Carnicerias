@@ -4348,6 +4348,18 @@ export type Database = {
           total_weight_grams: number
         }[]
       }
+      complete_missing_sale_costs: {
+        Args: {
+          p_also_set_current_cost?: boolean
+          p_branch_id: string
+          p_from: string
+          p_line_ids: string[]
+          p_product_id: string
+          p_to: string
+          p_unit_cost_cents: number
+        }
+        Returns: Json
+      }
       complete_pos_operator_sale: {
         Args: {
           p_branch_id: string
@@ -4630,6 +4642,10 @@ export type Database = {
           sale_total_cents: number
           verification_status: string
         }[]
+      }
+      get_missing_sale_costs: {
+        Args: { p_branch_id: string; p_from: string; p_to: string }
+        Returns: Json
       }
       get_pos_branch_stock: { Args: { p_branch_id: string }; Returns: Json }
       get_pos_catalog: {

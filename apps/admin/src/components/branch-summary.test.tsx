@@ -7,7 +7,7 @@ const metrics = { grossCents: 10_000_000, kilograms: 10, units: 0, salesCount: 4
 const full: BranchProfitability = { grossProfitCents: 4_000_000, grossMarginBps: 4000, missingCostItems: 0, missingCostSales: 0, missingCostRevenueCents: 0 };
 
 function render(profit: BranchProfitability | null, overrides: Partial<typeof metrics> = {}) {
-  return renderToStaticMarkup(<BranchSummary board={null} branchId="b1" branchName="Avenida" change={null} comparisonLabel="ayer" isProduction={false} metrics={{ ...metrics, ...overrides }} periodLabel="hoy" profit={profit} stockCounts={{ out: 0, low: 0, normal: 0 }} timeZone="America/Argentina/Buenos_Aires" />);
+  return renderToStaticMarkup(<BranchSummary board={null} branchId="b1" branchName="Avenida" change={null} comparisonLabel="ayer" isProduction={false} metrics={{ ...metrics, ...overrides }} periodLabel="hoy" profit={profit} range={{ from: "2026-10-09", to: "2026-10-09" }} stockCounts={{ out: 0, low: 0, normal: 0 }} timeZone="America/Argentina/Buenos_Aires" />);
 }
 
 describe("BranchSummary profitability cards", () => {
@@ -34,7 +34,21 @@ describe("BranchSummary profitability cards", () => {
     const html = render({ ...full, missingCostItems: 3, missingCostSales: 2, missingCostRevenueCents: 800_000 });
     expect(html).toContain("3 líneas");
     expect(html).toContain("sin costo conocido");
-    expect(html).toContain("vendidos, fuera de la ganancia");
+    expect(html).toContain("vendidos fuera de la ganancia");
+  });
+
+  it("turns the warning into a button that opens the repair modal (and says how)", () => {
+    const html = render({ ...full, missingCostItems: 11, missingCostSales: 8, missingCostRevenueCents: 21_851_000 });
+    expect(html).toContain("<button");
+    expect(html).toContain("11 líneas sin costo conocido");
+    expect(html).toContain("$ 218.510");
+    expect(html).toContain("Completar costos");
+    expect(html).toContain('aria-haspopup="dialog"');
+  });
+
+  it("shows no warning (and no button) when every line has a cost", () => {
+    const html = render(full);
+    expect(html).not.toContain("Completar costos");
   });
 
   it("omits the profitability cards when the data is not available", () => {

@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Completar costos faltantes de ventas: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-10 (D-080). **Migración pendiente: `202610150078_complete_missing_sale_costs.sql`** (2 funciones; no toca tablas ni datos al aplicarse; **requiere la `202610130076`**, que también estaba sin aplicar). Orden: `supabase db push --dry-run` (debe listar 076, 077 y 078 si faltan) → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel).
+
+1. Admin → Sucursales → Resumen de una sucursal con el aviso «N líneas sin costo conocido» → «Completar costos»: comparar cantidad/líneas/facturación con Ventas y con el aviso.
+2. Cargar el costo de un producto de peso ($/kg) y uno por unidad ($/u) **sin** tildar el costo actual y verificar que Ganancia bruta/Margen bruto/contador cambian y que el precio de venta no se movió; después probar una línea con costo ya existente (no debe cambiar).
+3. Probar «Guardar también como costo actual» en un producto con margen automático: debe avisar que recalcula el precio y, al guardar, cambiar el precio como en Productos → Precios.
+4. Revisar el evento `SALE_COSTS_BACKFILLED` en Auditoría.
+5. Confirmar las decisiones no pedidas de D-080.
+6. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `complete_missing_sale_costs.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
 ## P0 — Resumen operativo de sucursal: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-10 (D-079). **Migración pendiente: `202610140077_branch_operations_summary.sql`** (2 funciones de sólo lectura; no toca tablas ni datos). Orden: `supabase db push --dry-run` → `supabase db push` → `git push` (Vercel). Hay que aplicar la migración antes de desplegar el Admin: el Resumen llama a RPC nuevas (si faltan, el bloque «Qué está pasando» avisa que no pudo calcularse y las métricas siguen).

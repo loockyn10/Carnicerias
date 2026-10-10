@@ -12,6 +12,8 @@ import { buildCarryPlanReport, type CarryPlanReport } from "../../lib/carry-plan
 import { toProductActivity, type ProductModalData } from "../../lib/product-insight";
 import { parseStockAuditSummary, periodRpcArgs } from "../../lib/stock-audit";
 import { isUuid } from "../../lib/uuid";
+import { isIsoDate } from "../../lib/date-range";
+import { parseCompleteOutcome, parseMissingCosts, type CompleteMissingCostsOutcome, type MissingCostsReport } from "../../lib/missing-costs";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
@@ -564,6 +566,56 @@ export async function calculateCarryPlanAction(branchId: string | null): Promise
   const { data, error } = await supabase.rpc("get_branch_carry_plan", branchId ? { p_branch_id: branchId } : {});
   if (error) return { error: error.message };
   return { report: buildCarryPlanReport(data) };
+}
+
+export type MissingCostsLoadResult = { ok: true; report: MissingCostsReport } | { ok: false; error: string };
+
+/**
+ * «Completar costos faltantes» del Resumen de sucursal: las líneas vendidas sin costo histórico del período, agrupadas por producto
+ * (`get_missing_sale_costs`, sólo lectura). La organización, los permisos y el acceso a la sucursal los resuelve la RPC desde la sesión.
+ */
+export async function loadMissingCostsAction(branchId: string, from: string, to: string): Promise<MissingCostsLoadResult> {
+  try {
+    await requireAdminContext();
+    if (!isUuid(branchId)) throw new Error("Sucursal inválida");
+    if (!isIsoDate(from) || !isIsoDate(to)) throw new Error("Período inválido");
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("get_missing_sale_costs", { p_branch_id: branchId, p_from: from, p_to: to });
+    if (error) throw new Error(error.message);
+    return { ok: true, report: parseMissingCosts(data) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudieron cargar los costos faltantes" };
+  }
+}
+
+export type CompleteMissingCostsResult = { ok: true; outcome: CompleteMissingCostsOutcome } | { ok: false; error: string };
+
+const MAX_REPAIR_LINES = 5000;
+
+/**
+ * Completa el costo HISTÓRICO faltante de un producto (`complete_missing_sale_costs`, una transacción en el servidor) y, sólo si
+ * `alsoSetCurrentCost`, guarda además el costo vigente con el flujo canónico de costos (que recalcula el precio de venta si el producto
+ * se rige por margen). El navegador manda el costo POR MEDIDA ($/kg o $/u, en centavos) y los ids de línea que vio; nunca un total por línea,
+ * ni la organización. Una línea que ya tiene costo no se modifica: el servidor sólo completa las que siguen sin costo.
+ */
+export async function completeMissingCostsAction(input: { branchId: string; from: string; to: string; productId: string; unitCostCents: number; lineIds: string[]; alsoSetCurrentCost: boolean }): Promise<CompleteMissingCostsResult> {
+  try {
+    if (!isUuid(input.branchId) || !isUuid(input.productId)) throw new Error("Producto o sucursal inválidos");
+    if (!isIsoDate(input.from) || !isIsoDate(input.to)) throw new Error("Período inválido");
+    if (!Number.isSafeInteger(input.unitCostCents) || input.unitCostCents <= 0) throw new Error("El costo tiene que ser un importe mayor a cero");
+    if (!Array.isArray(input.lineIds) || input.lineIds.length === 0 || input.lineIds.length > MAX_REPAIR_LINES || !input.lineIds.every(isUuid)) throw new Error("Líneas inválidas: recargá la pantalla");
+    const data = await rpcOrThrow("complete_missing_sale_costs", {
+      p_branch_id: input.branchId, p_from: input.from, p_to: input.to, p_product_id: input.productId, p_unit_cost_cents: input.unitCostCents,
+      p_line_ids: input.lineIds, p_also_set_current_cost: input.alsoSetCurrentCost
+    });
+    const outcome = parseCompleteOutcome(data);
+    revalidatePath("/admin/branches", "layout");
+    revalidatePath("/admin/analytics");
+    if (outcome.currentCostSaved) revalidatePath("/admin/products");
+    return { ok: true, outcome };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudieron completar los costos" };
+  }
 }
 
 export type ProductModalResult = { ok: true; data: ProductModalData } | { ok: false; error: string };
