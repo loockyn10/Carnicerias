@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Admin en el celular: aplicar la migración y probar en un teléfono (acción del usuario)
+
+Implementado 2026-10-10 (D-081). **Migración pendiente: `202610160079_quick_stock_changes.sql`** (tabla `quick_stock_requests` + RPC `apply_quick_stock_changes`; no toca datos al aplicarse). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel). Sin la migración, «Stock rápido» no guarda (el resto de las pantallas del celular funciona).
+
+1. En el teléfono (Chrome/Safari, o la PWA instalada): Inicio → las 4 tareas; probar los 5 recorridos de D-081 (cómo vendió Avenida hoy · qué llevar a Janssen · +12 kg de Pata muslo en Avenida · conteo 4,2 en vez de 16,6 · producto nuevo).
+2. Stock rápido: cargar cambios en Avenida y Janssen, cerrar la pantalla y reabrir (los pendientes vuelven), guardar y comparar con Stock → Por sucursal → movimientos; tocar «Confirmar» varias veces seguidas (debe registrar UNA sola vez) y cortar la red a mitad (reintentar no duplica).
+3. Revisar el teclado numérico (kg con coma), el gesto «atrás» entre pasos y el área segura de la barra inferior (iPhone).
+4. Confirmar las decisiones no pedidas de D-081: **Quitar = ajuste negativo (no merma)**; «Qué llevar» no mueve stock, abre Distribución; el celular es todo `< 1024 px`.
+5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `quick_stock_changes.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
 ## P0 — Completar costos faltantes de ventas: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-10 (D-080). **Migración pendiente: `202610150078_complete_missing_sale_costs.sql`** (2 funciones; no toca tablas ni datos al aplicarse; **requiere la `202610130076`**, que también estaba sin aplicar). Orden: `supabase db push --dry-run` (debe listar 076, 077 y 078 si faltan) → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel).

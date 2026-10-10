@@ -172,6 +172,13 @@ Limitación pendiente de evidencia real: productos con sólo 1–2 días de hist
 - Ventanas: Más vendidos = período elegido (sin tendencia en «Hoy»); Qué llevar = siempre 7 días; Baja rotación = 14 días; cobertura = promedio de 7 días; diferencias de ledger = 14 días. La sucursal productiva no muestra Qué llevar ni Baja rotación y no aplica cobertura/inconsistencia.
 - **REQUIERE VERIFICACIÓN:** validado con PGlite + shim de pgTAP (`supabase/tests/branch_operations_summary.test.sql`, 77 aserciones, mutaciones detectadas), vitest y la UI en el navegador integrado contra un backend falso respaldado por las migraciones reales (Avenida, Janssen, Central; escritorio y 375 px); no contra Supabase real (sin Docker).
 
+## Admin en el celular — implementado 2026-10-10 (D-081; migración `202610160079` **sin aplicar**)
+
+- Debajo de `lg` el Admin muestra el Inicio de 4 tareas y pantallas verticales simples sobre las **mismas rutas** (ver D-081); el escritorio no cambió (sidebar, tablas, pantallas completas). Código: `apps/admin/src/components/mobile/*`, `lib/{quick-stock,mobile-nav,mobile-branches,carry-transfer}.ts`; el `AdminMobileNav` de píldoras se eliminó (lo reemplaza la barra del celular).
+- **Stock rápido** guarda con `apply_quick_stock_changes` (`quick_stock_requests` para idempotencia; `record_stock_operation`: Agregar = `PURCHASE`, Quitar/Conteo = `ADJUSTMENT`). `database.types.ts` se editó a mano (función + tabla). Las pantallas **no funcionan contra una base sin la migración** (Stock rápido falla con «function does not exist»; el resto de las pantallas sí).
+- **Qué llevar** abre Distribución con los datos cargados (`/admin/transfers?from=&to=&items=`, validados en el servidor; `TransferForm` ganó `initialDestinationBranchId`). `OverlayDialog` ganó `tall` (pantalla completa en el celular).
+- **REQUIERE VERIFICACIÓN:** validado con PGlite + shim de pgTAP (`supabase/tests/quick_stock_changes.test.sql`, 105 aserciones, mutaciones detectadas), vitest y la UI en el navegador integrado (390×844, 360×800, 430×932 y escritorio 1280) contra un backend falso respaldado por las migraciones reales; **no** contra Supabase real, y la carrera de dos pedidos simultáneos con la misma clave sólo se razonó (índice único), no se probó. El celular se probó en un navegador de escritorio emulando el tamaño: falta un dispositivo real (teclado numérico, safe-area, gesto «atrás»).
+
 ## Rendiciones
 
 - Ruta y modelo implementados con períodos `[inicio, fin)`, snapshots, desglose por pago, empleados y dispositivos.

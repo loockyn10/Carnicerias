@@ -2,6 +2,7 @@ import { formatCurrency } from "@carnicerias/business-logic";
 import Link from "next/link";
 
 import { BulkCostEditor } from "../../../components/bulk-cost-editor";
+import { MobileNewProduct } from "../../../components/mobile/mobile-new-product";
 import { ProductCreateModal } from "../../../components/product-create-modal";
 import { ProductManageModal } from "../../../components/product-manage-modal";
 import { ProductBulkBar, ProductSelectableRow, ProductSelectHeaderCell, ProductSelectionProvider, ProductSelectToggle } from "../../../components/product-selection";
@@ -139,7 +140,9 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     return text ? `/admin/products?${text}` : "/admin/products";
   };
 
-  return <main className="mx-auto max-w-6xl p-5 sm:p-8">
+  // Celular (< lg): `?view=new` es «Nuevo producto» simplificado (el mismo alta, sin la ficha completa). Sin `view`, o en el escritorio, la pantalla de siempre.
+  const mobileNew = value("view") === "new";
+  return <>{mobileNew ? <MobileNewProduct branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} marginBps={pricingSettings?.margin_bps ?? null} productionBranchId={productionBranchId} /> : null}<div className={mobileNew ? "max-lg:hidden" : undefined}><main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div><ProductCreateModal branches={branches} categories={categories.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} marginBps={pricingSettings?.margin_bps ?? null} productionBranchId={productionBranchId} suppliers={suppliers} /></div>
     <SectionTabs active={activeTab} tabs={PRODUCTOS_TABS} />
     {pricingTabOpen ? <section className="mt-6 rounded-xl bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Configuración de precios</h2><p className="mt-1 text-sm text-stone-600">Margen, descuentos por cantidad, packs y recargo por tarjeta.</p><PricingConfigModal branchOverrides={branchOverrideCount} categories={categories.filter((item) => item.active || excludedCategorySet.has(item.id)).map((item) => ({ id: item.id, name: item.name }))} excludedCategoryIds={excludedCategoryIds} values={{ marginBps: pricingSettings?.margin_bps ?? null, unitBulkDiscountBps: pricingSettings?.unit_bulk_discount_bps ?? null, packDiscountBps: pricingSettings?.pack_discount_bps ?? null, cardSurchargeBps }} /></section> : null}
@@ -171,5 +174,5 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     </nav> : null}
     <details className="mt-5 rounded-xl bg-white p-5 shadow-sm"><summary className="cursor-pointer font-bold">Gestionar categorías</summary><form action={saveCategoryAction} className="mt-4 flex flex-wrap items-end gap-3"><label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" placeholder="Nueva categoría" required /></label><label className="grid gap-1 text-sm font-medium">Color<input aria-label="Color de la categoría" className="h-10 w-14 cursor-pointer rounded-lg border border-stone-300 bg-white p-1" defaultValue="#78716C" name="color_hex" type="color" /></label><input name="slug" type="hidden" value="" /><input name="sort_order" type="hidden" value="0" /><input name="active" type="hidden" value="on" /><button className="rounded-lg border px-4 py-2 text-sm font-bold">Agregar</button></form><div className="mt-5 grid gap-3 md:grid-cols-2">{categories.map((item) => <form action={saveCategoryAction} className="grid grid-cols-[1fr_auto_auto] items-end gap-3 rounded-xl border border-stone-200 p-3" key={item.id}><input name="category_id" type="hidden" value={item.id} /><input name="slug" type="hidden" value={item.slug} /><input name="sort_order" type="hidden" value={item.sort_order} /><label className="grid gap-1 text-sm font-medium">Nombre<input className={input} defaultValue={item.name} name="name" required /></label><label className="grid gap-1 text-sm font-medium">Color<input aria-label={`Color de ${item.name}`} className="h-10 w-14 cursor-pointer rounded-lg border border-stone-300 bg-white p-1" defaultValue={item.color_hex ?? "#78716C"} name="color_hex" type="color" /></label><div className="grid gap-1"><label className="flex items-center gap-2 text-xs"><input defaultChecked={item.active} name="active" type="checkbox" /> Activa</label><button className="rounded-lg border px-3 py-2 text-sm font-bold">Guardar</button></div></form>)}</div></details>
     </>}
-  </main>;
+  </main></div></>;
 }

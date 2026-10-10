@@ -19,6 +19,7 @@ import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-sele
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
 import { resolveNewProductPricing } from "../../lib/new-product-pricing";
 import { isRequestKey, parseBulkItems, toReceiptRpcItems, type ReceiptProductInfo } from "../../lib/bulk-costs";
+import { MAX_QUICK_ITEMS, parseQuickOutcome, type QuickApplyItem, type QuickStockOutcome, type QuickStockRow, type QuickStockSearchResult } from "../../lib/quick-stock";
 import { parsePricingRowsPage, PRICING_PAGE_SIZE, type PricingRow, type PricingRowsPage } from "../../lib/pricing-rows";
 import { parseCurrentCustomMargin, parseCustomMarginForm } from "../../lib/product-margin";
 import { parseExcludedCategoryIds, parsePricingConfigForm, parsePricingConfigOutcome, type PricingConfigOutcome } from "../../lib/pricing-config";
@@ -818,6 +819,85 @@ export async function applyPhysicalCountAdjustmentAction(input: PhysicalCountAdj
     return { ok: true, difference: (physical ?? 0) - current };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar el ajuste" };
+  }
+}
+
+// ---- Stock rápido (celular, D-081) -----------------------------------------------------------
+const QUICK_STOCK_PAGE_SIZE = 20;
+
+/**
+ * Productos de una sucursal con su stock actual, para el buscador de «Stock rápido». Buscar y paginar ocurre SIEMPRE en el servidor
+ * (`get_branch_stock_status`: nombre / SKU, sólo el surtido de esa sucursal, de a 20): nunca se carga el catálogo entero. Si el texto no
+ * encuentra nada por nombre, se prueba como código de barras exacto (`search_products`), pensado para pegar o escribir un código.
+ */
+export async function searchQuickStockAction(input: { branchId: string; query: string; offset: number }): Promise<QuickStockSearchResult> {
+  const context = await requireAdminContext();
+  if (!isUuid(input.branchId)) throw new Error("Sucursal inválida");
+  const query = input.query.trim().slice(0, 80);
+  const offset = Number.isSafeInteger(input.offset) && input.offset > 0 ? input.offset : 0;
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_branch_stock_status", {
+    p_branch_id: input.branchId, p_limit: QUICK_STOCK_PAGE_SIZE, p_offset: offset, ...(query ? { p_search: query } : {})
+  });
+  if (error) throw new Error(error.message);
+  const rows = data.filter((row) => row.stock_status !== "DISCONTINUED")
+    .map((row): QuickStockRow => ({ productId: row.product_id, name: row.product_name, sku: row.sku, unitType: row.unit_type, current: row.current_stock_grams }));
+  if (rows.length || !query || offset > 0) return { rows, total: data[0]?.total_count ?? 0 };
+
+  const { data: matches, error: searchError } = await supabase.rpc("search_products", { p_query: query, p_limit: 10, p_branch_id: input.branchId });
+  if (searchError) throw new Error(searchError.message);
+  if (!matches.length) return { rows: [], total: 0 };
+  const { data: levels, error: levelsError } = await supabase.from("stock_levels").select("product_id, quantity_grams")
+    .eq("organization_id", context.organizationId).eq("branch_id", input.branchId).in("product_id", matches.map((match) => match.product_id));
+  if (levelsError) throw new Error(levelsError.message);
+  const stockByProduct = new Map(levels.map((level) => [level.product_id, level.quantity_grams]));
+  const barcodeRows = matches.map((match): QuickStockRow => ({ productId: match.product_id, name: match.product_name, sku: match.sku, unitType: match.unit_type, current: stockByProduct.get(match.product_id) ?? 0 }));
+  return { rows: barcodeRows, total: barcodeRows.length };
+}
+
+export type QuickStockApplyResult = { ok: true; outcome: QuickStockOutcome } | { ok: false; error: string };
+
+/**
+ * Guarda de una vez los cambios de «Stock rápido» (agregar / quitar / conteo, de una o varias sucursales). Las cantidades se interpretan acá con el
+ * tipo REAL de cada producto (kg → gramos o unidades enteras) y todo se manda en UNA llamada a `apply_quick_stock_changes`, que usa el flujo canónico del
+ * ledger y es idempotente por `requestKey` (un doble toque o un reintento de red no duplica nada). El resultado es parcial por producto.
+ */
+export async function applyQuickStockAction(input: { requestKey: string; items: QuickApplyItem[] }): Promise<QuickStockApplyResult> {
+  try {
+    const context = await requireAdminContext();
+    if (!isRequestKey(input.requestKey)) throw new Error("La operación no es válida: recargá la pantalla.");
+    const items = input.items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > MAX_QUICK_ITEMS) throw new Error("No hay cambios para guardar.");
+    for (const item of items) {
+      if (!isUuid(item.branchId) || !isUuid(item.productId) || !["ADD", "REMOVE", "COUNT"].includes(item.mode) || typeof item.raw !== "string") throw new Error("Los cambios no son válidos: recargá la pantalla.");
+      if (item.expectedSystemQuantity !== undefined && !Number.isSafeInteger(item.expectedSystemQuantity)) throw new Error("Los cambios no son válidos: recargá la pantalla.");
+    }
+    const supabase = await createClient();
+    const { data: products, error: productsError } = await supabase.from("products").select("id, name, unit_type")
+      .eq("organization_id", context.organizationId).in("id", [...new Set(items.map((item) => item.productId))]);
+    if (productsError) throw new Error(productsError.message);
+    const byId = new Map(products.map((product) => [product.id, product]));
+    const rpcItems = items.map((item) => {
+      const product = byId.get(item.productId);
+      if (!product) throw new Error("Uno de los productos no existe en esta organización.");
+      let quantity: number;
+      try {
+        quantity = parseStockQuantityInput(item.raw, product.unit_type, { allowZero: item.mode === "COUNT" });
+      } catch (error) {
+        throw new Error(`${product.name}: ${error instanceof Error ? error.message : "cantidad inválida"}`);
+      }
+      return item.mode === "COUNT"
+        ? { branchId: item.branchId, productId: item.productId, mode: item.mode, physicalQuantity: quantity, ...(item.expectedSystemQuantity !== undefined ? { expectedSystemQuantity: item.expectedSystemQuantity } : {}) }
+        : { branchId: item.branchId, productId: item.productId, mode: item.mode, quantity };
+    });
+    const { data, error } = await supabase.rpc("apply_quick_stock_changes", { p_request_key: input.requestKey, p_items: rpcItems });
+    if (error) throw new Error(error.message);
+    const outcome = parseQuickOutcome(data);
+    if (!outcome) throw new Error("No pudimos confirmar si se guardó. Revisá el stock antes de volver a intentar.");
+    for (const path of ["/admin", "/admin/stock", "/admin/branch-stock", "/admin/branch-stock/movements", "/admin/replenishment", "/admin/branches"]) revalidatePath(path);
+    return { ok: true, outcome };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo guardar el stock" };
   }
 }
 

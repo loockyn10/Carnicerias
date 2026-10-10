@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { carryKey, carryTotals, groupCarryPlan, initialCarryInputs, resolveCarryQuantity, type CarryPlanRow } from "./carry-plan";
+import { carryKey, carryTotals, groupCarryPlan, initialCarryInputs, initialCarryInputsFixed, resolveCarryQuantity, type CarryPlanRow } from "./carry-plan";
 
 const row = (overrides: Partial<CarryPlanRow>): CarryPlanRow => ({
   branchId: "av", branchName: "Avenida", productId: "p", productName: "Producto", unitType: "WEIGHT",
@@ -12,6 +12,25 @@ const vacio = row({ productId: "vacio", productName: "Vacío", soldQuantity: 9_0
 const matambre = row({ productId: "matambre", productName: "Matambre", soldQuantity: 3_000, currentQuantity: 4_000, suggestedQuantity: 0 });
 const hamburguesa = row({ productId: "ham", productName: "Hamburguesa", unitType: "UNIT", soldQuantity: 30, currentQuantity: 10, suggestedQuantity: 20 });
 const janssenMolida = row({ branchId: "ja", branchName: "Janssen", productId: "molida", productName: "Molida", soldQuantity: 9_000, currentQuantity: -2_000, suggestedQuantity: 9_000 });
+
+describe("initialCarryInputsFixed (celular)", () => {
+  it("muestra los kg con 3 decimales, como la balanza, y las unidades enteras", () => {
+    const inputs = initialCarryInputsFixed([molida, hamburguesa, row({ productId: "x", suggestedQuantity: 12_500 }), row({ productId: "y", suggestedQuantity: 8_000 })]);
+    expect(inputs[carryKey(molida)]).toBe("14,000");
+    expect(inputs[carryKey(hamburguesa)]).toBe("20");
+    expect(inputs["av:x"]).toBe("12,500");
+    expect(inputs["av:y"]).toBe("8,000");
+  });
+
+  it("es el MISMO valor que el escritorio, sólo escrito distinto (y se lee de vuelta igual)", () => {
+    const rows = [molida, vacio, hamburguesa];
+    const fixed = initialCarryInputsFixed(rows);
+    const plain = initialCarryInputs(rows);
+    for (const item of rows) {
+      expect(resolveCarryQuantity(fixed[carryKey(item)] ?? "", item.unitType).quantity).toBe(resolveCarryQuantity(plain[carryKey(item)] ?? "", item.unitType).quantity);
+    }
+  });
+});
 
 describe("groupCarryPlan", () => {
   it("hides products that need nothing by default and counts them", () => {

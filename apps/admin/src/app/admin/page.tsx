@@ -2,6 +2,7 @@ import { formatCurrency, formatStockQuantity, formatWeight } from "@carnicerias/
 import Link from "next/link";
 
 import { MetricCard } from "../../components/admin-ui";
+import { MobileHome } from "../../components/mobile/mobile-home";
 import { requireAdminContext } from "../../lib/admin";
 import { localDayStart, stockPriority } from "../../lib/multibranch";
 import { createClient } from "../../lib/supabase/server";
@@ -44,8 +45,9 @@ export default async function DashboardPage() {
   const total = branches.reduce((sum, branch) => ({ revenue: sum.revenue + branch.revenue, grams: sum.grams + branch.grams, tickets: sum.tickets + branch.tickets }), { revenue: 0, grams: 0, tickets: 0 });
   perf.mark("transform", transformStartedAt); perf.flush();
 
-  return <main className="mx-auto max-w-7xl p-5 sm:p-10">
+  // Celular (< lg): sólo las 4 tareas. Escritorio: el panel de siempre (en el celular queda oculto, no se reemplaza).
+  return <><MobileHome organizationName={context.organizationName} /><div className="max-lg:hidden"><main className="mx-auto max-w-7xl p-5 sm:p-10">
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><MetricCard label="Ventas hoy" value={formatCurrency(BigInt(total.revenue))} /><MetricCard label="Kg vendidos" value={formatWeight(total.grams)} /><MetricCard label="Tickets" value={String(total.tickets)} /><MetricCard label="Ticket promedio" value={formatCurrency(BigInt(total.tickets ? Math.round(total.revenue / total.tickets) : 0))} /></section>
     <section className="mt-8"><div className="flex items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-rose-800">Prioridad</p><h2 className="mt-1 text-xl font-black">Requiere tu atención</h2></div><Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/attention">Ver todas las alertas →</Link></div><div className="mt-3 divide-y rounded-xl border border-stone-200 bg-white">{alerts.slice(0, 5).map((alert) => <Link className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-stone-50" href={`/admin/branches/${alert.branchId}`} key={`${alert.branchId}-${alert.productName}`}><div><span className="mr-2">{alert.priority.rank === 0 ? "🔴" : "🟠"}</span><strong>{alert.branchName}</strong> · {alert.productName} {alert.priority.rank === 0 ? "agotado" : "debajo del mínimo"}</div><dl className="flex shrink-0 gap-4 text-right text-sm"><div><dt className="text-[11px] font-bold uppercase tracking-wide text-stone-500">Actual</dt><dd className="font-bold text-red-700">{formatStockQuantity(alert.current, alert.unitType)}</dd></div><div><dt className="text-[11px] font-bold uppercase tracking-wide text-teal-700">Reponer</dt><dd className="font-bold text-teal-700">{formatStockQuantity(alert.suggested, alert.unitType)}</dd></div></dl></Link>)}{!alerts.length ? <p className="px-4 py-5 text-emerald-700">No hay alertas de stock.</p> : null}</div></section>
-  </main>;
+  </main></div></>;
 }

@@ -2,10 +2,14 @@ import { formatCurrency, formatWeight } from "@carnicerias/business-logic";
 import Link from "next/link";
 
 import { CarryPlanPanel } from "../../../components/carry-plan-panel";
+import { MobileBranches } from "../../../components/mobile/mobile-branches";
+import { MobileCarry } from "../../../components/mobile/mobile-carry";
 import { StatusBadge } from "../../../components/admin-ui";
 import { SalesRangeFilter } from "../../../components/sales-range-filter";
 import { requireAdminContext } from "../../../lib/admin";
 import { comparisonLabel, periodLabel, rangeQuery, resolveSalesRange } from "../../../lib/date-range";
+import { buildBranchCards } from "../../../lib/mobile-branches";
+import { isUuid } from "../../../lib/uuid";
 import { createPerfLogger } from "../../../lib/perf";
 import { createClient } from "../../../lib/supabase/server";
 
@@ -24,12 +28,18 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   const sort: Sort = ["revenue", "alerts"].includes(value("sort")) ? value("sort") as Sort : "name";
   // Días calendario de la ORGANIZACIÓN (nunca UTC): "hoy" y "ayer" salen de su zona horaria.
   const range = resolveSalesRange({ preset: value("preset"), from: value("from"), to: value("to") }, context.timezone);
+  // Celular (< lg): `?view=carry` = «Qué llevar»; sin `view` = «Ver sucursales». El escritorio ignora ambos.
+  const mobileCarry = value("view") === "carry";
   const supabase = await createClient();
-  const [branchesResult, salesResult, stockResult] = await Promise.all([
+  const [branchesResult, salesResult, stockResult, profitResult, organizationResult] = await Promise.all([
     perf.measure("branches", supabase.from("branches").select("id, name, active").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     // Agregado en el servidor (get_branch_sales_summary): sólo ventas COMPLETED del rango, una fila por sucursal.
     perf.measure("sales", supabase.rpc("get_branch_sales_summary", { p_from: range.from, p_to: range.to })),
-    perf.measure("stock", supabase.rpc("get_branch_stock_summary"))
+    perf.measure("stock", supabase.rpc("get_branch_stock_summary")),
+    // Sólo para las tarjetas del celular (ganancia bruta y margen, las mismas fórmulas de Rentabilidad). Es un complemento: si falla, la tarjeta muestra «—».
+    mobileCarry ? Promise.resolve(null) : perf.measure("profit", supabase.rpc("get_branch_profitability_summary", { p_from: range.from, p_to: range.to })),
+    // Sucursal productiva: el origen de «Qué llevar» y el depósito que va al final de la lista.
+    perf.measure("productionBranch", supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle())
   ]);
   const error = [branchesResult.error, salesResult.error, stockResult.error].find(Boolean);
   if (error) { perf.flush(); return <main className="mx-auto max-w-6xl p-8 text-red-800">No se pudieron cargar las sucursales: {error.message}</main>; }
@@ -55,7 +65,13 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
   perf.flush();
 
   const keep = { q: value("q"), filter: filter === "all" ? "" : filter, sort: sort === "name" ? "" : sort };
-  return <main className="mx-auto max-w-6xl p-5 sm:p-8">
+  const productionBranchId = organizationResult.data?.production_branch_id ?? null;
+  const productionBranch = (branchesResult.data ?? []).find((branch) => branch.id === productionBranchId);
+  const mobileBranchId = value("branch");
+  const mobile = mobileCarry
+    ? <MobileCarry initialBranchId={isUuid(mobileBranchId) ? mobileBranchId : null} productionBranch={productionBranch ? { id: productionBranch.id, name: productionBranch.name } : null} timeZone={context.timezone} />
+    : <MobileBranches cards={buildBranchCards({ branches: branchesResult.data ?? [], productionBranchId, sales: salesResult.data ?? [], profit: profitResult && !profitResult.error ? profitResult.data : null, stock: stockResult.data ?? [] })} range={range} />;
+  return <>{mobile}<div className="max-lg:hidden"><main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-center justify-end gap-4">
       <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches/compare">Comparar sucursales →</Link>
       <Link className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white" href="/admin/branches/new">+ Nueva sucursal</Link>
@@ -88,5 +104,5 @@ export default async function BranchesPage({ searchParams }: { searchParams: Pro
     </section>
     {!visible.length ? <p className="mt-5 rounded-xl bg-white p-8 text-center text-stone-500">No hay sucursales para los filtros elegidos.</p> : null}
     <CarryPlanPanel branchId={null} timeZone={context.timezone} />
-  </main>;
+  </main></div></>;
 }

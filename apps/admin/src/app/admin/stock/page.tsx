@@ -7,6 +7,7 @@ import { createPerfLogger } from "../../../lib/perf";
 import { stockPriority } from "../../../lib/multibranch";
 import { PurchaseForm, StockAdjustmentForm, StockPolicyForm, WasteForm } from "../../../components/stock-operation-forms";
 import { SectionTabs } from "../../../components/section-tabs";
+import { MobileQuickStock } from "../../../components/mobile/mobile-quick-stock";
 
 const STOCK_TABS = [
   { label: "Operaciones", href: "/admin/stock" },
@@ -31,14 +32,16 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const supabase = await createClient();
   // The stock table is filtered and paged in SQL (a Central with thousands of products must never be
   // fetched whole — PostgREST would silently truncate it at max_rows).
-  const [stockResult, branchesResult, operationsResult, profilesResult] = await Promise.all([
+  const [stockResult, branchesResult, operationsResult, profilesResult, productionResult] = await Promise.all([
     perf.measure("stock", supabase.rpc("get_branch_stock_status", {
       p_limit: PAGE_SIZE, p_offset: (page - 1) * PAGE_SIZE,
       ...(branchFilter ? { p_branch_id: branchFilter } : {}), ...(search ? { p_search: search } : {}), ...(status ? { p_status: status } : {})
     })),
     perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name")),
     perf.measure("operations", supabase.from("stock_operations").select("id, branch_id, operation_type, supplier, waste_reason, note, occurred_at, actor_profile_id").eq("organization_id", context.organizationId).order("occurred_at", { ascending: false }).limit(50)),
-    perf.measure("profiles", supabase.from("profiles").select("id, display_name"))
+    perf.measure("profiles", supabase.from("profiles").select("id, display_name")),
+    // Sólo para ordenar «Stock rápido» del celular: el depósito (sucursal productiva) primero.
+    perf.measure("productionBranch", supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle())
   ]);
   const operationIds = (operationsResult.data ?? []).map((operation) => operation.id);
   const itemsResult = operationIds.length ? await perf.measure("operationItems", supabase.from("stock_operation_items").select("operation_id, product_id, quantity_grams, system_quantity_before_grams, physical_quantity_grams").in("operation_id", operationIds).order("created_at")) : { data: [], error: null };
@@ -65,7 +68,8 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
     return text ? `/admin/stock?${text}` : "/admin/stock";
   };
 
-  return <main className="mx-auto max-w-7xl p-5 sm:p-10">
+  // Celular (< lg): «Stock rápido» (agregar / quitar / conteo, de varias sucursales de una vez). Escritorio: Operaciones de stock de siempre.
+  return <><MobileQuickStock branches={branches} productionBranchId={productionResult.data?.production_branch_id ?? null} userId={context.userId} /><div className="max-lg:hidden"><main className="mx-auto max-w-7xl p-5 sm:p-10">
     <p className="text-sm font-bold uppercase tracking-wider text-rose-800">Inventario</p><h1 className="mt-1 text-3xl font-black">Operaciones de stock</h1><p className="mt-2 text-stone-600">El actual se deriva del ledger. Las compras, mermas y ajustes agregan movimientos auditados. Los productos por peso se miden en kg; los productos por unidad, en unidades enteras.</p>
     <SectionTabs tabs={STOCK_TABS} />
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
@@ -96,5 +100,5 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
     </div>
 
     <section className="mt-7 rounded-2xl border bg-white p-5 shadow-sm"><h2 className="text-xl font-black">Historial de operaciones</h2><div className="mt-4 space-y-3">{(operationsResult.data ?? []).map((operation) => { const operationItems = (itemsResult.data ?? []).filter((item) => item.operation_id === operation.id); return <article className="rounded-xl border p-4" key={operation.id}><div className="flex flex-wrap justify-between gap-3"><div><strong>{operationLabels[operation.operation_type]}</strong> · {branchNames.get(operation.branch_id)}<p className="text-sm text-stone-500">{new Date(operation.occurred_at).toLocaleString("es-AR", { timeZone: context.timezone })} · {profileNames.get(operation.actor_profile_id) ?? operation.actor_profile_id.slice(0, 8)}</p></div><span>{operation.supplier ?? (operation.waste_reason ? reasonLabels[operation.waste_reason] : operation.note)}</span></div><ul className="mt-3 grid gap-2 sm:grid-cols-2">{operationItems.map((item) => { const product = productInfo.get(item.product_id); const unit = product?.unit_type ?? "WEIGHT"; return <li className="rounded-lg bg-stone-50 p-2 text-sm" key={`${item.operation_id}-${item.product_id}`}>{product?.name}: <strong>{item.quantity_grams > 0 ? "+" : ""}{formatStockQuantity(item.quantity_grams, unit)}</strong>{item.physical_quantity_grams !== null ? ` · físico ${formatStockQuantity(item.physical_quantity_grams, unit)}` : ""}</li>; })}</ul></article>; })}{!operationsResult.data?.length ? <p className="text-stone-500">Sin operaciones manuales todavía.</p> : null}</div></section>
-  </main>;
+  </main></div></>;
 }

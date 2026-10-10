@@ -3178,6 +3178,48 @@ export type Database = {
         }
         Relationships: []
       }
+      quick_stock_requests: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          organization_id: string
+          payload_hash: string
+          request_key: string
+          result: Json | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          organization_id: string
+          payload_hash: string
+          request_key: string
+          result?: Json | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          organization_id?: string
+          payload_hash?: string
+          request_key?: string
+          result?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quick_stock_requests_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "quick_stock_requests_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       role_permissions: {
         Row: {
           created_at: string
@@ -4303,6 +4345,10 @@ export type Database = {
         Returns: Json
       }
       apply_pricing_receipt: {
+        Args: { p_items: Json; p_request_key: string }
+        Returns: Json
+      }
+      apply_quick_stock_changes: {
         Args: { p_items: Json; p_request_key: string }
         Returns: Json
       }

@@ -83,6 +83,11 @@ export function initialCarryInputs(rows: readonly CarryPlanRow[]): Record<string
   return Object.fromEntries(rows.map((row) => [carryKey(row), stockQuantityToInput(row.suggestedQuantity, row.unitType)]));
 }
 
+/** Como `initialCarryInputs`, pero con los kg siempre con 3 decimales («12,500», como se lee en la balanza): lo usa la pantalla del celular. */
+export function initialCarryInputsFixed(rows: readonly CarryPlanRow[]): Record<string, string> {
+  return Object.fromEntries(rows.map((row) => [carryKey(row), row.unitType === "WEIGHT" ? (row.suggestedQuantity / 1_000).toFixed(3).replace(".", ",") : String(row.suggestedQuantity)]));
+}
+
 export interface CarryQuantity {
   /** Gramos (WEIGHT) o unidades (UNIT); null si lo escrito no es válido. */
   quantity: number | null;

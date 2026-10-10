@@ -12,13 +12,15 @@ const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";
  * (kg for a weighed product, whole units for a counted one). The product picker only offers
  * products enabled in the DESTINATION branch — stock must not land where the product is not sold.
  */
-export function TransferForm({ branches, initialSourceBranchId, initialLines }: {
+export function TransferForm({ branches, initialSourceBranchId, initialDestinationBranchId, initialLines }: {
   branches: { id: string; name: string }[];
   initialSourceBranchId?: string | undefined;
+  /** Destino ya elegido (viene de «Qué llevar»). */
+  initialDestinationBranchId?: string | undefined;
   initialLines?: ProductLine[] | undefined;
 }) {
   const [state, action, pending] = useActionState(createStockTransferFormAction, {} as StockTransferFormState);
-  const [destinationId, setDestinationId] = useState("");
+  const [destinationId, setDestinationId] = useState(initialDestinationBranchId ?? "");
 
   return <form action={action} className="mt-4 grid gap-3 rounded-2xl border bg-white p-5 shadow-sm" key={state.transferId ?? "transfer"}>
     <div className="grid gap-3 sm:grid-cols-2">

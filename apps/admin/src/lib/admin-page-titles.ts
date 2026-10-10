@@ -1,0 +1,31 @@
+/** Título y descripción de cada pantalla del Admin: los usa el encabezado de escritorio y la barra superior del celular. */
+export const adminPageHeaders: Record<string, { title: string; description: string }> = {
+  "/admin": { title: "Situación general", description: "Resumen operativo de hoy." },
+  "/admin/branches": { title: "Sucursales", description: "Estado comercial y alertas de cada local." },
+  "/admin/branches/compare": { title: "Comparar sucursales", description: "Ventas, descuentos, mermas y estado de stock." },
+  "/admin/sales": { title: "Ventas", description: "Historial y seguimiento de ventas." },
+  "/admin/settlements": { title: "Rendiciones", description: "Control de efectivo y cierres históricos por sucursal." },
+  "/admin/stock": { title: "Operaciones de stock", description: "Inventario, compras, mermas y ajustes." },
+  "/admin/branch-stock": { title: "Stock por sucursal", description: "Buscar un producto y comparar stock entre sucursales." },
+  "/admin/replenishment": { title: "Qué hay que reponer", description: "Consolidado para organizar compras y reposición." },
+  "/admin/production": { title: "Desposte", description: "Transformar insumos comprados en productos de catálogo y registrar el rendimiento." },
+  "/admin/transfers": { title: "Distribución", description: "Mover stock ya producido entre sucursales." },
+  "/admin/products": { title: "Productos", description: "Catálogo y precios vigentes." },
+  "/admin/analytics": { title: "Rentabilidad", description: "Ganancia bruta comercial por producto y sucursal." },
+  "/admin/promotions": { title: "Promociones", description: "Descuentos y reglas comerciales." },
+  "/admin/announcements": { title: "Avisos", description: "Comunicación con las sucursales." },
+  "/admin/employees": { title: "Empleados", description: "Accesos y miembros de la organización." },
+  "/admin/timekeeping": { title: "Horas trabajadas", description: "Fichajes, revisiones y pago estimado por horas." },
+  "/admin/devices": { title: "Dispositivos POS", description: "Terminales autorizadas para operar." },
+  "/admin/audit": { title: "Auditoría", description: "Trazabilidad de los últimos eventos." },
+  "/admin/settings": { title: "Configuración", description: "Dispositivos, avisos, proveedores, importaciones y auditoría." },
+  "/admin/suppliers": { title: "Proveedores", description: "Alta y edición de proveedores y su vínculo con los productos." },
+  "/admin/imports": { title: "Importación de productos", description: "Productos, precios, costos y proveedores desde otros sistemas." },
+  "/admin/attention": { title: "Centro de atención", description: "Problemas y movimientos relevantes por prioridad." }
+};
+
+export function adminPageHeader(pathname: string): { title: string; description: string } {
+  return adminPageHeaders[pathname] ?? (pathname.startsWith("/admin/branches/")
+    ? { title: "Sucursal", description: "Panel operativo de la sucursal." }
+    : { title: "Administración", description: "" });
+}
