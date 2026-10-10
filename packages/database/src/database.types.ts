@@ -4492,6 +4492,24 @@ export type Database = {
           window_start: string
         }[]
       }
+      get_branch_operations_summary: {
+        Args: { p_branch_id: string; p_from: string; p_to: string }
+        Returns: {
+          current_quantity: number
+          last_inbound_at: string
+          last_sale_at: string
+          ledger_mismatch_quantity: number
+          ledger_mismatch_tickets: number
+          product_id: string
+          product_name: string
+          revenue_period_cents: number
+          sold_14d: number
+          sold_7d: number
+          sold_period: number
+          sold_previous: number
+          unit_type: Database["public"]["Enums"]["unit_type"]
+        }[]
+      }
       get_branch_profitability_summary: {
         Args: { p_branch_id?: string; p_from: string; p_to: string }
         Returns: {
@@ -4659,6 +4677,18 @@ export type Database = {
       get_product_artwork_photo: {
         Args: { p_product_id: string }
         Returns: Json
+      }
+      get_product_branch_activity: {
+        Args: { p_product_id: string }
+        Returns: {
+          branch_id: string
+          branch_name: string
+          current_quantity: number
+          is_production: boolean
+          last_sale_at: string
+          sold_7d: number
+          unit_type: Database["public"]["Enums"]["unit_type"]
+        }[]
       }
       get_product_sales_summary: {
         Args: {

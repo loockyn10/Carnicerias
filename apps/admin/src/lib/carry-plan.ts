@@ -1,4 +1,5 @@
 import { parseStockQuantityInput, stockQuantityToInput, type StockUnit } from "@carnicerias/business-logic";
+import type { Database } from "@carnicerias/database";
 
 /**
  * "Qué llevar ahora": presentación del informe que calcula `get_branch_carry_plan` (la FÓRMULA vive
@@ -28,6 +29,27 @@ export interface CarryPlanReport {
   windowStart: string;
   windowDays: number;
   rows: CarryPlanRow[];
+}
+
+export type CarryPlanRpcRow = Database["public"]["Functions"]["get_branch_carry_plan"]["Returns"][number];
+
+/** Informe a partir de las filas de `get_branch_carry_plan` (la misma conversión para el Resumen y para «Recalcular»). */
+export function buildCarryPlanReport(data: readonly CarryPlanRpcRow[], now: Date = new Date()): CarryPlanReport {
+  const first = data[0];
+  return {
+    calculatedAt: first?.calculated_at ?? now.toISOString(),
+    windowStart: first?.window_start ?? "",
+    windowDays: first?.window_days ?? 7,
+    rows: data.map((row) => ({
+      branchId: row.branch_id, branchName: row.branch_name, productId: row.product_id, productName: row.product_name,
+      unitType: row.unit_type, soldQuantity: row.sold_quantity, currentQuantity: row.current_quantity, suggestedQuantity: row.suggested_quantity
+    }))
+  };
+}
+
+/** Las primeras filas que necesitan carga, en el orden del servidor (mayor necesidad primero) — para la vista compacta del Resumen. */
+export function topCarryRows(rows: readonly CarryPlanRow[], limit = 4): CarryPlanRow[] {
+  return rows.filter((row) => row.suggestedQuantity > 0).slice(0, limit);
 }
 
 export interface CarryBranchGroup {

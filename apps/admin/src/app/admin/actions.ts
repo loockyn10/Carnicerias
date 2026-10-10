@@ -8,7 +8,10 @@ import { requireAdminContext } from "../../lib/admin";
 import { parsePesosToCents } from "../../lib/settlements";
 import { decimal, ids, kilogramsToGrams, optionalId, parseBarcodes, pesosToCents, text, unitsToInteger } from "../../lib/form-parsing";
 import { parseStockQuantityInput } from "@carnicerias/business-logic";
-import type { CarryPlanReport } from "../../lib/carry-plan";
+import { buildCarryPlanReport, type CarryPlanReport } from "../../lib/carry-plan";
+import { toProductActivity, type ProductModalData } from "../../lib/product-insight";
+import { parseStockAuditSummary, periodRpcArgs } from "../../lib/stock-audit";
+import { isUuid } from "../../lib/uuid";
 import { buildSaveWeightDiscountArgs } from "../../lib/weight-discount-args";
 import { MAX_BULK_DEACTIVATE, normalizeProductIds } from "../../lib/product-selection";
 import { parseCurrentPackSize, parsePackSizeUnits } from "../../lib/unit-promotions";
@@ -560,18 +563,31 @@ export async function calculateCarryPlanAction(branchId: string | null): Promise
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_branch_carry_plan", branchId ? { p_branch_id: branchId } : {});
   if (error) return { error: error.message };
-  const first = data[0];
-  return {
-    report: {
-      calculatedAt: first?.calculated_at ?? new Date().toISOString(),
-      windowStart: first?.window_start ?? "",
-      windowDays: first?.window_days ?? 7,
-      rows: data.map((row) => ({
-        branchId: row.branch_id, branchName: row.branch_name, productId: row.product_id, productName: row.product_name,
-        unitType: row.unit_type, soldQuantity: row.sold_quantity, currentQuantity: row.current_quantity, suggestedQuantity: row.suggested_quantity
-      }))
-    }
-  };
+  return { report: buildCarryPlanReport(data) };
+}
+
+export type ProductModalResult = { ok: true; data: ProductModalData } | { ok: false; error: string };
+
+/**
+ * Datos del modal de producto del Resumen de sucursal: la auditoría del ledger desde el último ingreso
+ * (`get_stock_audit_summary`) y el estado del producto en las sucursales accesibles (`get_product_branch_activity`).
+ * Sólo lectura; la organización, los permisos y el acceso por sucursal los resuelven las RPC desde la sesión.
+ */
+export async function loadProductModalAction(branchId: string, productId: string): Promise<ProductModalResult> {
+  try {
+    await requireAdminContext();
+    if (!isUuid(branchId) || !isUuid(productId)) throw new Error("Producto o sucursal inválidos");
+    const supabase = await createClient();
+    const [auditResult, activityResult] = await Promise.all([
+      supabase.rpc("get_stock_audit_summary", { p_branch_id: branchId, p_product_id: productId, ...periodRpcArgs({ mode: "since-inbound" }) }),
+      supabase.rpc("get_product_branch_activity", { p_product_id: productId })
+    ]);
+    if (auditResult.error) throw new Error(auditResult.error.message);
+    if (activityResult.error) throw new Error(activityResult.error.message);
+    return { ok: true, data: { audit: parseStockAuditSummary(auditResult.data), activity: toProductActivity(activityResult.data) } };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo cargar el producto" };
+  }
 }
 
 /** Converts what the operator typed into the raw ledger quantity using each product REAL unit type

@@ -14,11 +14,13 @@ const field = "rounded-lg border border-stone-300 bg-white px-3 py-2";
  * flujo de inventario físico que ya existe (`record_stock_operation` ADJUSTMENT → ADJUSTMENT_POSITIVE/NEGATIVE
  * en el ledger); acá no hay un segundo mecanismo de stock.
  */
-export function StockPhysicalCount({ branchId, productId, unitType, systemQuantity }: {
+export function StockPhysicalCount({ branchId, productId, unitType, systemQuantity, onApplied }: {
   branchId: string;
   productId: string;
   unitType: StockUnit;
   systemQuantity: number;
+  /** Se llama después de registrar el ajuste (el Resumen de sucursal recarga sus números). */
+  onApplied?: (() => void) | undefined;
 }) {
   const [raw, setRaw] = useState("");
   const [note, setNote] = useState("");
@@ -38,6 +40,7 @@ export function StockPhysicalCount({ branchId, productId, unitType, systemQuanti
         setRaw("");
         setNote("");
         setConfirming(false);
+        onApplied?.();
       } else {
         setError(outcome.error);
       }

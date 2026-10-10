@@ -57,6 +57,38 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
+  // Resumen operativo (D-079): last_sale_at es null si el producto no vendió en los últimos 90 días; last_inbound_at es null
+  // sin stock positivo o sin ningún ingreso registrado.
+  get_branch_operations_summary: {
+    Args: { p_branch_id: string; p_from: string; p_to: string }
+    Returns: {
+      current_quantity: number
+      last_inbound_at: string | null
+      last_sale_at: string | null
+      ledger_mismatch_quantity: number
+      ledger_mismatch_tickets: number
+      product_id: string
+      product_name: string
+      revenue_period_cents: number
+      sold_14d: number
+      sold_7d: number
+      sold_period: number
+      sold_previous: number
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
+  get_product_branch_activity: {
+    Args: { p_product_id: string }
+    Returns: {
+      branch_id: string
+      branch_name: string
+      current_quantity: number
+      is_production: boolean
+      last_sale_at: string | null
+      sold_7d: number
+      unit_type: GeneratedDatabase["public"]["Enums"]["unit_type"]
+    }[]
+  }
   get_branch_profitability_summary: {
     Args: {
       p_branch_id?: string

@@ -10,9 +10,11 @@ import { ForceHardNavigation } from "./force-hard-navigation";
 import { BranchSummary } from "./branch-summary";
 import { BRANCH_STOCK_PAGE_SIZE, BranchStockPanel, type BranchStockFilter } from "./branch-stock-panel";
 import { BranchTabs } from "./branch-tabs";
-import { CarryPlanPanel } from "./carry-plan-panel";
 import { SalesRangeFilter } from "./sales-range-filter";
 import { requireAdminContext } from "../lib/admin";
+import { buildBranchBoard } from "../lib/branch-board";
+import { toInsightRows } from "../lib/branch-insights";
+import { buildCarryPlanReport } from "../lib/carry-plan";
 import { comparisonLabel, periodLabel, rangeQuery, resolveSalesRange } from "../lib/date-range";
 import { localDayStart, stockPriority } from "../lib/multibranch";
 import { createClient } from "../lib/supabase/server";
@@ -30,7 +32,7 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   // Período de las métricas del Resumen: días calendario de la organización (el mismo rango que se eligió en Sucursales).
   const range = resolveSalesRange({ preset: queryValue("preset"), from: queryValue("from"), to: queryValue("to") }, context.timezone);
   const supabase = await createClient();
-  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult, rangeSummaryResult, organizationResult, profitabilityResult] = await Promise.all([
+  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult, rangeSummaryResult, organizationResult, profitabilityResult, operationsResult] = await Promise.all([
     supabase.from("branches").select("id, name, code, address, active").eq("organization_id", context.organizationId).eq("id", id).maybeSingle(),
     supabase.rpc("get_admin_dashboard", { p_branch_id: id }),
     // Alerts only (most urgent first): the whole branch catalog is never fetched for the summary.
@@ -43,7 +45,10 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     supabase.rpc("get_branch_sales_summary", { p_from: range.from, p_to: range.to, p_branch_id: id }),
     supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle(),
     // Ganancia bruta del mismo rango (mismas fórmulas que /admin/analytics). Es un complemento: si falla, el Resumen sigue sin esas tarjetas.
-    supabase.rpc("get_branch_profitability_summary", { p_from: range.from, p_to: range.to, p_branch_id: id })
+    supabase.rpc("get_branch_profitability_summary", { p_from: range.from, p_to: range.to, p_branch_id: id }),
+    // Resumen operativo por producto (más vendidos, baja rotación, alertas por cobertura/inconsistencia): UNA llamada por lote.
+    // Es un complemento: si falla, el Resumen sigue con sus métricas y avisa que no pudo calcular el bloque.
+    tab === "summary" ? supabase.rpc("get_branch_operations_summary", { p_branch_id: id, p_from: range.from, p_to: range.to }) : Promise.resolve(null)
   ]);
   if (!branchResult.data) {
     // Reached with modal=true when Next's route interception (see
@@ -56,6 +61,10 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const error = [branchResult.error, dashboardResult.error, stockResult.error, weekSalesResult.error, recentSalesResult.error, restocksResult.error, wasteResult.error, rangeSummaryResult.error, organizationResult.error].find(Boolean);
   if (error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la sucursal: {error.message}</main>;
   const todayStart = localDayStart(context.timezone);
+  const isProductionBranch = organizationResult.data?.production_branch_id === id;
+  // «Qué llevar» reutiliza get_branch_carry_plan (ventana fija de 7 días); la sucursal productiva es el origen, no un destino.
+  // Promise.resolve arranca el pedido ya: corre en paralelo con las lecturas siguientes.
+  const carryPromise = tab === "summary" && !isProductionBranch ? Promise.resolve(supabase.rpc("get_branch_carry_plan", { p_branch_id: id })) : null;
   const settingsResult = await supabase.from("branch_product_stock_settings").select("product_id").eq("organization_id", context.organizationId).eq("branch_id", id);
   if (settingsResult.error) return <main className="mx-auto max-w-7xl p-8 text-red-800">No se pudo cargar la configuración de stock: {settingsResult.error.message}</main>;
   const summaryResult = await supabase.rpc("get_branch_stock_summary");
@@ -111,13 +120,18 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   const recentSales = recentSalesResult.data ?? [];
   const recentWaste = wasteResult.data ?? [];
   const change = periodMetrics.previousGrossCents ? ((periodMetrics.grossCents - periodMetrics.previousGrossCents) / periodMetrics.previousGrossCents) * 100 : null;
-  const isProductionBranch = organizationResult.data?.production_branch_id === id;
   const rangeParams = rangeQuery(range);
+  const carryResult = carryPromise ? await carryPromise : null;
+  const board = tab === "summary" && operationsResult && !operationsResult.error ? buildBranchBoard({
+    rows: toInsightRows(operationsResult.data),
+    configuredAlerts: urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank })),
+    carry: isProductionBranch || !carryResult ? null : carryResult.error ? carryResult.error.message : buildCarryPlanReport(carryResult.data),
+    isProductionBranch, range, now: new Date()
+  }) : null;
 
   return <BranchDetailFrame modal={modal} status={branchResult.data.active ? "ACTIVA" : "INACTIVA"} subtitle={`${branchResult.data.code}${branchResult.data.address ? ` · ${branchResult.data.address}` : ""}`} title={branchResult.data.name}><main className="mx-auto max-w-7xl p-5 sm:p-10">{!modal ? <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches">← Volver a sucursales</Link> : null}<div className={modal ? "hidden" : "mt-4 flex flex-wrap items-start justify-between gap-3"}><div><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Sucursal</p><h1 className="mt-1 text-3xl font-black">{branchResult.data.name}</h1><p className="mt-1 text-stone-600">{branchResult.data.code}{branchResult.data.address ? ` · ${branchResult.data.address}` : ""}</p></div><StatusBadge tone={branchResult.data.active ? "success" : "neutral"}>{branchResult.data.active ? "ACTIVA" : "INACTIVA"}</StatusBadge></div>
     <BranchTabs active={tab} branchId={id} rangeParams={rangeParams} />
-    {tab === "summary" ? <><SalesRangeFilter error={range.error} range={range} /><BranchSummary comparisonLabel={comparisonLabel(range)} periodLabel={periodLabel(range)} alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={periodMetrics} products={topProducts} profit={profit} stockCounts={stockCounts} />
-      {isProductionBranch ? null : <CarryPlanPanel branchId={id} branchName={branchResult.data.name} timeZone={context.timezone} />}
+    {tab === "summary" ? <><SalesRangeFilter error={range.error} range={range} /><BranchSummary board={board} boardUnavailable={operationsResult?.error?.message ?? null} branchId={id} branchName={branchResult.data.name} change={change} comparisonLabel={comparisonLabel(range)} isProduction={isProductionBranch} metrics={periodMetrics} periodLabel={periodLabel(range)} profit={profit} stockCounts={stockCounts} timeZone={context.timezone} />
       <section className="mt-7"><SectionHeader description="Nombre, código y dirección de esta sucursal." title="Editar datos" /><div className="mt-3 rounded-xl border bg-white p-4"><BranchForm branch={{ id, name: branchResult.data.name, code: branchResult.data.code, address: branchResult.data.address, active: branchResult.data.active }} /></div>
         <SectionHeader description="Desactivar conserva todo el historial; eliminar sólo es posible si la sucursal nunca operó." title="Estado de la sucursal" />
         <div className="mt-3"><BranchLifecyclePanel active={branchResult.data.active} branchId={id} /></div>

@@ -7,7 +7,7 @@ const metrics = { grossCents: 10_000_000, kilograms: 10, units: 0, salesCount: 4
 const full: BranchProfitability = { grossProfitCents: 4_000_000, grossMarginBps: 4000, missingCostItems: 0, missingCostSales: 0, missingCostRevenueCents: 0 };
 
 function render(profit: BranchProfitability | null, overrides: Partial<typeof metrics> = {}) {
-  return renderToStaticMarkup(<BranchSummary alerts={[]} branchId="b1" change={null} comparisonLabel="ayer" metrics={{ ...metrics, ...overrides }} periodLabel="hoy" products={[]} profit={profit} stockCounts={{ out: 0, low: 0, normal: 0 }} />);
+  return renderToStaticMarkup(<BranchSummary board={null} branchId="b1" branchName="Avenida" change={null} comparisonLabel="ayer" isProduction={false} metrics={{ ...metrics, ...overrides }} periodLabel="hoy" profit={profit} stockCounts={{ out: 0, low: 0, normal: 0 }} timeZone="America/Argentina/Buenos_Aires" />);
 }
 
 describe("BranchSummary profitability cards", () => {

@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Resumen operativo de sucursal: aplicar y probar (acción del usuario)
+
+Implementado 2026-10-10 (D-079). **Migración pendiente: `202610140077_branch_operations_summary.sql`** (2 funciones de sólo lectura; no toca tablas ni datos). Orden: `supabase db push --dry-run` → `supabase db push` → `git push` (Vercel). Hay que aplicar la migración antes de desplegar el Admin: el Resumen llama a RPC nuevas (si faltan, el bloque «Qué está pasando» avisa que no pudo calcularse y las métricas siguen).
+
+1. Admin → Sucursales → Avenida → Resumen: en 10–20 s debe entenderse qué se vende, qué llevar, qué casi no rota y qué stock parece raro. Probar Hoy / Ayer / 7 / 30 días: Más vendidos cambia con el período; «Qué llevar» (7 días) y Baja rotación (14 días) no.
+2. Pata Muslo en Avenida: tocar el producto y comparar «Debería quedar» contra «Stock ledger» y los tickets listados; debe coincidir con la diferencia que ya muestra Stock → Por sucursal → «Ver movimientos».
+3. Probar el conteo físico desde el modal (escribir no cambia nada; confirmar exige motivo) y «Ver carga» (cantidades editables, no crea movimientos).
+4. Revisar los umbrales de `INSIGHT_RULES` (`lib/branch-insights.ts`) con datos reales: ¿«Baja rotación» marca lo que Fran considera parado? ¿«Vende bien» (3 kg / 5 u en 7 días) es razonable para el negocio?
+5. Confirmar las decisiones no pedidas de D-079.
+6. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `branch_operations_summary.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
 ## P0 — Auditoría por producto + sucursal: aplicar y probar con el caso real (acción del usuario)
 
 Implementado 2026-10-09 (D-078). **Migración pendiente: `202610120075_product_branch_stock_audit.sql`** (3 funciones de sólo lectura; no toca tablas ni datos). Orden: `supabase db push --dry-run` (debe listar la 075 y las anteriores que falten) → `supabase db push` **antes** de desplegar el Admin (las pantallas llaman a RPC nuevas) → `git push` (Vercel). Sin instalador nuevo del POS.
