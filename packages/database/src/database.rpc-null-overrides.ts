@@ -57,6 +57,26 @@ export interface RpcNullOverrides {
     }
     Returns: string
   }
+  get_branch_profitability_summary: {
+    Args: {
+      p_branch_id?: string
+      p_from: string
+      p_to: string
+    }
+    Returns: {
+      branch_id: string
+      branch_name: string
+      cost_cents: number
+      costed_revenue_cents: number
+      // Null when no line of the period has a known historical cost (no margin to report).
+      gross_margin_bps: number | null
+      gross_profit_cents: number
+      missing_cost_items: number
+      missing_cost_revenue_cents: number
+      missing_cost_sales: number
+      revenue_cents: number
+    }[]
+  }
   get_profitability_analytics: {
     Args: {
       p_branch_id?: string | null

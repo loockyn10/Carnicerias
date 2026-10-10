@@ -30,7 +30,7 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
   // Período de las métricas del Resumen: días calendario de la organización (el mismo rango que se eligió en Sucursales).
   const range = resolveSalesRange({ preset: queryValue("preset"), from: queryValue("from"), to: queryValue("to") }, context.timezone);
   const supabase = await createClient();
-  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult, rangeSummaryResult, organizationResult] = await Promise.all([
+  const [branchResult, dashboardResult, stockResult, weekSalesResult, recentSalesResult, restocksResult, wasteResult, rangeSummaryResult, organizationResult, profitabilityResult] = await Promise.all([
     supabase.from("branches").select("id, name, code, address, active").eq("organization_id", context.organizationId).eq("id", id).maybeSingle(),
     supabase.rpc("get_admin_dashboard", { p_branch_id: id }),
     // Alerts only (most urgent first): the whole branch catalog is never fetched for the summary.
@@ -41,7 +41,9 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     supabase.from("stock_operations").select("id, waste_reason, occurred_at").eq("organization_id", context.organizationId).eq("branch_id", id).eq("operation_type", "WASTE").order("occurred_at", { ascending: false }).limit(6),
     // Totales del período en el servidor (sólo ventas COMPLETED); también trae el período anterior para la variación.
     supabase.rpc("get_branch_sales_summary", { p_from: range.from, p_to: range.to, p_branch_id: id }),
-    supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle()
+    supabase.from("organizations").select("production_branch_id").eq("id", context.organizationId).maybeSingle(),
+    // Ganancia bruta del mismo rango (mismas fórmulas que /admin/analytics). Es un complemento: si falla, el Resumen sigue sin esas tarjetas.
+    supabase.rpc("get_branch_profitability_summary", { p_from: range.from, p_to: range.to, p_branch_id: id })
   ]);
   if (!branchResult.data) {
     // Reached with modal=true when Next's route interception (see
@@ -79,6 +81,8 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
     grossCents: periodRow?.total_cents ?? 0, previousGrossCents: periodRow?.previous_total_cents ?? 0, salesCount: periodRow?.sales_count ?? 0,
     averageTicketCents: periodRow?.sales_count ? Math.round(periodRow.total_cents / periodRow.sales_count) : 0, kilograms: (periodRow?.weight_grams ?? 0) / 1000, units: periodRow?.units ?? 0
   };
+  const profitRow = profitabilityResult.error ? undefined : profitabilityResult.data[0];
+  const profit = profitRow ? { grossProfitCents: profitRow.gross_profit_cents, grossMarginBps: profitRow.gross_margin_bps, missingCostItems: profitRow.missing_cost_items, missingCostSales: profitRow.missing_cost_sales, missingCostRevenueCents: profitRow.missing_cost_revenue_cents } : null;
   const todayGrossCents = (weekSalesResult.data ?? []).filter((sale) => (sale.completed_at ?? "") >= todayStart).reduce((sum, sale) => sum + sale.total_cents, 0);
   const stock = (stockResult.data ?? []).map((row) => ({
     ...row, current: row.current_stock_grams, minimum: row.minimum_stock_grams, target: row.target_stock_grams,
@@ -112,7 +116,7 @@ export async function BranchPage({ params, searchParams, modal = false }: { para
 
   return <BranchDetailFrame modal={modal} status={branchResult.data.active ? "ACTIVA" : "INACTIVA"} subtitle={`${branchResult.data.code}${branchResult.data.address ? ` · ${branchResult.data.address}` : ""}`} title={branchResult.data.name}><main className="mx-auto max-w-7xl p-5 sm:p-10">{!modal ? <Link className="text-sm font-bold text-rose-800 hover:underline" href="/admin/branches">← Volver a sucursales</Link> : null}<div className={modal ? "hidden" : "mt-4 flex flex-wrap items-start justify-between gap-3"}><div><p className="text-sm font-bold uppercase tracking-wider text-rose-800">Sucursal</p><h1 className="mt-1 text-3xl font-black">{branchResult.data.name}</h1><p className="mt-1 text-stone-600">{branchResult.data.code}{branchResult.data.address ? ` · ${branchResult.data.address}` : ""}</p></div><StatusBadge tone={branchResult.data.active ? "success" : "neutral"}>{branchResult.data.active ? "ACTIVA" : "INACTIVA"}</StatusBadge></div>
     <BranchTabs active={tab} branchId={id} rangeParams={rangeParams} />
-    {tab === "summary" ? <><SalesRangeFilter error={range.error} range={range} /><BranchSummary comparisonLabel={comparisonLabel(range)} periodLabel={periodLabel(range)} alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={periodMetrics} products={topProducts} stockCounts={stockCounts} />
+    {tab === "summary" ? <><SalesRangeFilter error={range.error} range={range} /><BranchSummary comparisonLabel={comparisonLabel(range)} periodLabel={periodLabel(range)} alerts={urgent.map((row) => ({ productId: row.product_id, productName: row.product_name, unitType: row.unit_type, current: row.current, suggested: row.suggested, rank: row.priority.rank, label: row.priority.label }))} branchId={id} change={change} metrics={periodMetrics} products={topProducts} profit={profit} stockCounts={stockCounts} />
       {isProductionBranch ? null : <CarryPlanPanel branchId={id} branchName={branchResult.data.name} timeZone={context.timezone} />}
       <section className="mt-7"><SectionHeader description="Nombre, código y dirección de esta sucursal." title="Editar datos" /><div className="mt-3 rounded-xl border bg-white p-4"><BranchForm branch={{ id, name: branchResult.data.name, code: branchResult.data.code, address: branchResult.data.address, active: branchResult.data.active }} /></div>
         <SectionHeader description="Desactivar conserva todo el historial; eliminar sólo es posible si la sucursal nunca operó." title="Estado de la sucursal" />

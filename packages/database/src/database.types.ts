@@ -4492,6 +4492,21 @@ export type Database = {
           window_start: string
         }[]
       }
+      get_branch_profitability_summary: {
+        Args: { p_branch_id?: string; p_from: string; p_to: string }
+        Returns: {
+          branch_id: string
+          branch_name: string
+          cost_cents: number
+          costed_revenue_cents: number
+          gross_margin_bps: number
+          gross_profit_cents: number
+          missing_cost_items: number
+          missing_cost_revenue_cents: number
+          missing_cost_sales: number
+          revenue_cents: number
+        }[]
+      }
       get_branch_sales_summary: {
         Args: { p_branch_id?: string; p_from: string; p_to: string }
         Returns: {
