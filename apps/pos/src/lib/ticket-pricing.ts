@@ -216,6 +216,12 @@ export function findMergeableUnitLine(ticket: readonly TicketLine[], productId: 
   return ticket.find((line) => line.productId === productId && line.quantityUnits != null && (includeManual || !line.manualPriceApplied) && (line.packCount != null) === packMode);
 }
 
+/** La línea UNIT a la que se suma cantidad ahora que el Pack es automático (depende de las unidades, no de un modo): la normal del producto o,
+ * si sólo hay una línea Pack (p. ej. 10 u), esa. Al sumar se recalcula todo desde las unidades totales (9 + 1 → Pack; 10 + 1 → ya no). */
+export function findUnitLineToMerge(ticket: readonly TicketLine[], productId: string, includeManual = false): TicketLine | undefined {
+  return findMergeableUnitLine(ticket, productId, false, includeManual) ?? findMergeableUnitLine(ticket, productId, true);
+}
+
 /** Cómo se lee una línea UNIT en el ticket: la cantidad (con el Pack explícito) y la etiqueta del Pack, si lo hay. La promoción de
  * sucursal no lleva etiqueta: su ahorro ya se lee en el precio por unidad final (`finalPricePerUnitCents`). */
 export function describeUnitLine(line: TicketLine): { quantityLabel: string; badge: string | null } {
@@ -254,8 +260,51 @@ export function finalPricePerKgCents(line: TicketLine): bigint | null {
 export function finalPricePerUnitCents(line: TicketLine): bigint | null {
   const units = line.quantityUnits ?? 0;
   if (units <= 0) return null;
-  const perUnit = divideRoundHalfUp(line.subtotalCents, BigInt(units));
+  const perUnit = effectiveUnitPriceCents(line.subtotalCents, units);
   return perUnit === shownBasePriceCents(line) ? null : perUnit;
+}
+
+/** Precio efectivo por unidad: el total real de la línea (el que se cobra) dividido las unidades, en centavos enteros half-up (sin floats). */
+export function effectiveUnitPriceCents(subtotalCents: bigint, units: number): bigint {
+  return divideRoundHalfUp(subtotalCents, BigInt(units));
+}
+
+/**
+ * Precio por unidad que paga un cliente que lleva 1 pack del producto (efectivo, sin recargo = el precio de lista que muestra el catálogo),
+ * calculado por el motor del Pack (`calculateUnitPackLinePricing`): el mismo redondeo que la venta. Null si no hay pack o no baja el precio.
+ */
+export function packOfferUnitPriceCents(listPriceCents: bigint, offer: PackOffer | null): bigint | null {
+  if (!offer || listPriceCents <= 0n) return null;
+  try {
+    const pricing = calculateUnitPackLinePricing({
+      listPriceCents, pack: { packCount: 1, packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps }, paymentMethod: "CASH", cashDiscountBps: 0n
+    });
+    const perUnit = effectiveUnitPriceCents(pricing.subtotalCents, pricing.quantityUnits);
+    return perUnit < listPriceCents ? perUnit : null;
+  } catch {
+    return null;
+  }
+}
+
+/** "Pack 10 u · 25% OFF · $ 1.237,50/u": la etiqueta del Pack en el catálogo (lista Central y grilla). */
+export function packOfferLabel(listPriceCents: bigint, offer: PackOffer): string {
+  const perUnit = packOfferUnitPriceCents(listPriceCents, offer);
+  return `Pack ${String(offer.packSizeUnits)} u · ${packDiscountLabel(offer.packDiscountBps)}${perUnit === null ? "" : ` · ${formatCurrency(perUnit)}/u`}`;
+}
+
+/**
+ * Pack automático: una línea UNIT de `units` unidades reales se vende como Pack cuando el motor existente lo admite, sin que el operador lo
+ * elija. Un Pack es `packCount × packSizeUnits` unidades exactas (`calculateUnitPackLinePricing`), así que sólo califican los múltiplos exactos
+ * del tamaño del pack (10, 20, ...); 11 o 19 unidades siguen el descuento por cantidad. Para no cobrarle de más al cliente, el Pack sólo se
+ * aplica si su porcentaje supera al del escalón por cantidad que le tocaría a esas unidades (el Pack es mutuamente excluyente con él).
+ * Sin versión del pack (`packConfigId` vacío), con % inválido o en 0 % no hay Pack.
+ */
+export function autoPackSale(units: number, offer: PackOffer | null, tiers: readonly BranchUnitPromotion[] = []): UnitPackSale | null {
+  if (!offer || offer.packConfigId === "" || !isValidPackDiscountBps(offer.packDiscountBps) || offer.packDiscountBps <= 0) return null;
+  if (!Number.isSafeInteger(units) || offer.packSizeUnits < 2 || units < offer.packSizeUnits || units % offer.packSizeUnits !== 0) return null;
+  const tierBps = tiers.length ? selectQuantityTier(tiers, units)?.discountBps ?? 0 : 0;
+  if (offer.packDiscountBps <= tierBps) return null;
+  return { packCount: units / offer.packSizeUnits, packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, packConfigId: offer.packConfigId };
 }
 
 /**
@@ -431,45 +480,37 @@ export function summarizeTicket(ticket: readonly TicketLine[], discountBps: bigi
 }
 
 export interface UnitLineRequest {
-  /** Unidades REALES de la línea resultante (en modo Pack: packs × tamaño del pack). */
+  /** Unidades REALES de la línea resultante. */
   units: number;
+  /** El Pack que corresponde automáticamente a esas unidades (null = línea normal). */
   packSale: UnitPackSale | null;
   /** Id de la línea que se reemplaza (edición o fusión); "" = línea nueva. */
   lineId: string;
-  /** La línea existente a la que se suma lo que se carga (null al editar o si no hay otra del mismo producto y modo). */
+  /** La línea existente a la que se suma lo que se carga (null al editar o si no hay otra del mismo producto). */
   mergedLine: TicketLine | undefined;
 }
 
 /**
  * Qué línea UNIT resulta de lo cargado en el modal de cantidad, tanto al agregar desde la grilla/buscador como al modificar
- * una línea ya agregada (mismo modal): agregar suma a la línea del mismo producto y modo, así "desde N unidades" cuenta todas las
- * del producto; modificar reemplaza la línea. `packOffer` es null si el producto no tiene pack (o no es el POS de escritorio, o falta
- * la versión que respalda la venta en el servidor): entonces `packMode` se ignora y la cantidad son unidades.
+ * una línea ya agregada (mismo modal): agregar suma a la línea del producto, así "desde N unidades" cuenta todas las del producto;
+ * modificar reemplaza la línea. La cantidad siempre son unidades reales y el Pack se decide solo (`autoPackSale`): `packOffer` es null
+ * si el producto no tiene pack (o no es el POS de escritorio, o falta la versión que respalda la venta en el servidor).
  */
 export function resolveUnitLineRequest(input: {
-  ticket: readonly TicketLine[]; productId: string; packOffer: PackOffer | null; packMode: boolean; quantity: number; editingLineId: string | null;
+  ticket: readonly TicketLine[]; productId: string; packOffer: PackOffer | null; quantity: number; editingLineId: string | null;
+  branchPromotions?: readonly BranchUnitPromotion[];
 }): UnitLineRequest {
-  // Sin la versión del pack (el servidor que la envía) o con un porcentaje inválido no hay Pack: la venta no podría validarse allá.
-  const offer = input.packMode && input.packOffer && input.packOffer.packConfigId !== "" && isValidPackDiscountBps(input.packOffer.packDiscountBps) ? input.packOffer : null;
-  const usePack = offer !== null;
-  const mergedLine = input.editingLineId ? undefined : findMergeableUnitLine(input.ticket, input.productId, usePack);
-  const baseCount = mergedLine ? (usePack ? (mergedLine.packCount ?? 0) : (mergedLine.quantityUnits ?? 0)) : 0;
-  const count = baseCount + input.quantity;
+  const mergedLine = input.editingLineId ? undefined : findUnitLineToMerge(input.ticket, input.productId);
+  const units = (mergedLine?.quantityUnits ?? 0) + input.quantity;
   return {
-    units: offer ? count * offer.packSizeUnits : count,
-    packSale: offer ? { packCount: count, packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, packConfigId: offer.packConfigId } : null,
+    units,
+    packSale: autoPackSale(units, input.packOffer, input.branchPromotions),
     lineId: input.editingLineId ?? mergedLine?.id ?? "",
     mergedLine
   };
 }
 
-/**
- * Estado inicial del modal de cantidad: producto nuevo → 1 unidad normal (el escaneo nunca activa el Pack); línea cargada como
- * Pack → se reabre en modo Pack con su cantidad de packs (si el producto todavía tiene pack); línea normal → sus unidades,
- * con la opción Pack disponible para convertirla.
- */
-export function unitModalState(line: TicketLine | undefined, packSizeUnits: number | null): { packMode: boolean; quantity: number } {
-  if (!line) return { packMode: false, quantity: 1 };
-  const keepPack = line.packCount != null && packSizeUnits != null;
-  return { packMode: keepPack, quantity: keepPack ? (line.packCount ?? 1) : (line.quantityUnits ?? 1) };
+/** Cantidad inicial del modal: producto nuevo → 1 unidad; línea ya cargada (normal o Pack) → sus unidades reales. */
+export function unitModalQuantity(line: TicketLine | undefined): number {
+  return line?.quantityUnits ?? 1;
 }

@@ -1,11 +1,12 @@
-import type { BranchUnitPromotion } from "@carnicerias/business-logic";
+import { formatCurrency, type BranchUnitPromotion } from "@carnicerias/business-logic";
 import { createOfflineSale } from "@carnicerias/sync";
 import type { TicketLine } from "@carnicerias/types";
 import { describe, expect, it } from "vitest";
 
 import {
-  applyManualPrice, buildUnitTicketLine, carryManualPrice, describeUnitLine, findMergeableUnitLine, repriceTicketLine, resolveUnitLineRequest,
-  restoreNormalPrice, summarizeTicket, unitModalState, type DiscountRule, type PricingContext
+  applyManualPrice, buildUnitTicketLine, carryManualPrice, describeUnitLine, effectiveUnitPriceCents, finalPricePerUnitCents, findMergeableUnitLine, findUnitLineToMerge, packOfferLabel, packOfferUnitPriceCents,
+  promotedUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, unitPromotionLabel,
+  restoreNormalPrice, summarizeTicket, unitModalQuantity, type DiscountRule, type PricingContext
 } from "./ticket-pricing";
 
 // Dinero en centavos: $1.000 = 100_000n. Recargo de tarjeta configurado: 10 %.
@@ -358,82 +359,130 @@ describe("snapshot hacia el servidor (createOfflineSale)", () => {
   });
 });
 
-describe("flujo del modal de cantidad (grilla, escáner y edición comparten el mismo componente)", () => {
+describe("flujo del modal de cantidad: el Pack se activa solo según las unidades", () => {
+  const OFFER = { packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "cfg-8" };
   const request = (ticket: TicketLine[], overrides: Partial<Parameters<typeof resolveUnitLineRequest>[0]> = {}) =>
-    resolveUnitLineRequest({ ticket, productId: "leche", packOffer: { packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "cfg-8" }, packMode: false, quantity: 1, editingLineId: null, ...overrides });
+    resolveUnitLineRequest({ ticket, productId: "leche", packOffer: OFFER, quantity: 1, editingLineId: null, ...overrides });
 
-  it("grilla: 1 pack agrega 8 unidades reales y 2 packs agregan 16", () => {
-    expect(request([], { packMode: true, quantity: 1 })).toMatchObject({ units: 8, packSale: { packCount: 1, packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "cfg-8" }, lineId: "", mergedLine: undefined });
-    expect(request([], { packMode: true, quantity: 2 })).toMatchObject({ units: 16, packSale: { packCount: 2, packSizeUnits: 8 } });
-    const built = buildUnitTicketLine(leche, 16, "x", null, "CASH", CARD_BPS, { packSale: { packCount: 2, packSizeUnits: 8, packDiscountBps: 2_000 } });
+  it("7 unidades no son Pack; 8 sí, sin que el operador elija nada; 16 son 2 packs", () => {
+    expect(request([], { quantity: 7 })).toMatchObject({ units: 7, packSale: null });
+    expect(request([], { quantity: 8 })).toMatchObject({ units: 8, packSale: { packCount: 1, packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "cfg-8" }, lineId: "", mergedLine: undefined });
+    expect(request([], { quantity: 16 })).toMatchObject({ units: 16, packSale: { packCount: 2, packSizeUnits: 8 } });
+    const built = buildUnitTicketLine(leche, 16, "x", null, "CASH", CARD_BPS, { packSale: request([], { quantity: 16 }).packSale });
     expect(built.subtotalCents).toBe(1_280_000n);
   });
 
-  it("grilla: un producto sin pack ignora el modo Pack (la cantidad son unidades)", () => {
-    expect(request([], { packOffer: null, packMode: true, quantity: 3 })).toMatchObject({ units: 3, packSale: null });
+  it("sólo los múltiplos exactos del pack califican (la semántica existente de un Pack): 9, 11 y 15 siguen el descuento por cantidad", () => {
+    for (const quantity of [9, 11, 15, 17]) expect(request([], { quantity })).toMatchObject({ units: quantity, packSale: null });
+  });
+
+  it("subir a 8 activa el Pack, bajar a 7 lo quita y volver a subir lo vuelve a activar (mismo resultado cada vez)", () => {
+    const priceAt = (quantity: number) => {
+      const req = request([], { quantity, branchPromotions: [FROM_3_15] });
+      return buildUnitTicketLine(leche, req.units, "x", null, "CASH", CARD_BPS, { branchPromotions: [FROM_3_15], packSale: req.packSale }).subtotalCents;
+    };
+    expect(priceAt(7)).toBe(595_000n); // 15 % por cantidad
+    expect(priceAt(8)).toBe(640_000n); // Pack 20 %
+    expect(priceAt(7)).toBe(595_000n);
+    expect(priceAt(8)).toBe(640_000n);
+  });
+
+  it("un producto sin pack nunca es Pack", () => {
+    expect(request([], { packOffer: null, quantity: 8 })).toMatchObject({ units: 8, packSale: null });
   });
 
   it("sin la versión del pack o con un % inválido (servidor anterior) no hay Pack: la venta no podría validarse", () => {
-    expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: 2_000, packConfigId: "" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
-    expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: 10_000, packConfigId: "cfg-8" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
-    expect(request([], { packOffer: { packSizeUnits: 8, packDiscountBps: -1, packConfigId: "cfg-8" }, packMode: true, quantity: 2 })).toMatchObject({ units: 2, packSale: null });
+    expect(request([], { packOffer: { ...OFFER, packConfigId: "" }, quantity: 8 })).toMatchObject({ packSale: null });
+    expect(request([], { packOffer: { ...OFFER, packDiscountBps: 10_000 }, quantity: 8 })).toMatchObject({ packSale: null });
+    expect(request([], { packOffer: { ...OFFER, packDiscountBps: -1 }, quantity: 8 })).toMatchObject({ packSale: null });
   });
 
-  it("un Pack con 0 % (D-068) sí se ofrece: carga 2 packs de 8 = 16 unidades reales a precio de lista, sin descuento", () => {
-    const offer = { packSizeUnits: 8, packDiscountBps: 0, packConfigId: "cfg-8-0" };
-    const req = request([], { packOffer: offer, packMode: true, quantity: 2 });
-    expect(req).toMatchObject({ units: 16, packSale: { packCount: 2, packSizeUnits: 8, packDiscountBps: 0 } });
-    const line = buildUnitTicketLine(leche, req.units, "x", null, "CASH", CARD_BPS, { packSale: req.packSale });
-    expect(line.subtotalCents).toBe(1_600_000n);
-    expect(line.promotionDiscountCents).toBe(0n);
-    expect(line.soldAsPack).toBe(true);
-    expect(line.packDiscountBps).toBe(0);
-    // Con tarjeta el recargo sigue aplicando sobre el total de la línea (D-044), también sin descuento.
-    expect(buildUnitTicketLine(leche, req.units, "x", null, "DEBIT", CARD_BPS, { packSale: req.packSale }).subtotalCents).toBe(1_760_000n);
+  it("un Pack con 0 % (D-068) no se activa solo: no hay ahorro que mostrar ni snapshot de Pack que guardar", () => {
+    expect(request([], { packOffer: { ...OFFER, packDiscountBps: 0, packConfigId: "cfg-8-0" }, quantity: 16 })).toMatchObject({ units: 16, packSale: null });
   });
 
-  it("el Pack del modal lleva el % del producto: 25 % → 2 packs de 8 son 16 unidades reales y $12.000", () => {
-    const offer = { packSizeUnits: 8, packDiscountBps: 2_500, packConfigId: "cfg-8-2500" };
-    const req = request([], { packOffer: offer, packMode: true, quantity: 2 });
-    expect(req).toMatchObject({ units: 16, packSale: { packCount: 2, packSizeUnits: 8, packDiscountBps: 2_500 } });
-    expect(buildUnitTicketLine(leche, req.units, "x", null, "CASH", CARD_BPS, { packSale: req.packSale }).subtotalCents).toBe(1_200_000n);
+  it("el Pack se aplica sólo si mejora el escalón por cantidad que le tocaría a esas unidades", () => {
+    const tier30: BranchUnitPromotion = { id: "promo-30", minimumUnits: 3, discountBps: 3_000 };
+    expect(request([], { quantity: 8, branchPromotions: [tier30] })).toMatchObject({ packSale: null }); // 30 % > Pack 20 %
+    expect(request([], { quantity: 8, branchPromotions: [FROM_3_15] })).toMatchObject({ packSale: { packCount: 1 } }); // Pack 20 % > 15 %
+    expect(request([], { quantity: 8, branchPromotions: [{ ...FROM_3_15, discountBps: 2_000 }] })).toMatchObject({ packSale: null }); // empate: gana la promoción
   });
 
-  it("agregar suma al mismo producto y modo; un Pack y una línea normal no se mezclan", () => {
-    const normalLine = normal(2);
+  it("agregar suma a la línea del producto y el Pack se recalcula con las unidades totales (5 + 3 → Pack; 8 + 1 → ya no)", () => {
+    const five = normal(5);
+    expect(request([five], { quantity: 3 })).toMatchObject({ units: 8, lineId: five.id, packSale: { packCount: 1, packSizeUnits: 8 } });
     const pack = packLine(1);
-    expect(request([normalLine], { quantity: 1 })).toMatchObject({ units: 3, lineId: normalLine.id, packSale: null });
-    expect(request([pack], { packMode: true, quantity: 2 })).toMatchObject({ units: 24, lineId: pack.id, packSale: { packCount: 3, packSizeUnits: 8 } });
-    expect(request([pack], { quantity: 1 })).toMatchObject({ units: 1, lineId: "", mergedLine: undefined });
-    expect(request([normalLine], { packMode: true, quantity: 1 })).toMatchObject({ units: 8, lineId: "", mergedLine: undefined });
+    expect(request([pack], { quantity: 1 })).toMatchObject({ units: 9, lineId: pack.id, packSale: null });
+    expect(request([pack], { quantity: 8 })).toMatchObject({ units: 16, lineId: pack.id, packSale: { packCount: 2 } });
   });
 
-  it("modificar una línea la reemplaza (no la fusiona) y conserva su id", () => {
+  it("modificar una línea la reemplaza (no la fusiona) y conserva su id; abrirla muestra sus unidades reales", () => {
     const scanned = normal(1);
     expect(request([scanned], { editingLineId: scanned.id, quantity: 4 })).toMatchObject({ units: 4, lineId: scanned.id, mergedLine: undefined });
+    expect(unitModalQuantity(undefined)).toBe(1);
+    expect(unitModalQuantity(scanned)).toBe(1);
+    expect(unitModalQuantity(packLine(2))).toBe(16); // una línea Pack se reabre en unidades reales
+    const reopened = request([packLine(2)], { editingLineId: packLine(2).id, quantity: 8 });
+    expect(reopened).toMatchObject({ units: 8, packSale: { packCount: 1 } });
   });
 
-  it("escaneo → editar cantidad: la línea escaneada (1 u normal) se abre con la opción Pack y puede convertirse", () => {
-    const scanned = normal(1);
-    expect(unitModalState(scanned, 8)).toEqual({ packMode: false, quantity: 1 });
-    // Toca Pack con cantidad 1 → 8 unidades reales con 20 %.
-    const converted = request([scanned], { editingLineId: scanned.id, packMode: true, quantity: 1 });
-    expect(converted).toMatchObject({ units: 8, packSale: { packCount: 1, packSizeUnits: 8 } });
-    const line = buildUnitTicketLine(leche, converted.units, scanned.id, null, "CASH", CARD_BPS, { packSale: converted.packSale });
-    expect(line).toMatchObject({ id: scanned.id, quantityUnits: 8, subtotalCents: 640_000n, soldAsPack: true });
-  });
-
-  it("un producto nuevo abre el modal con 1 unidad normal; una línea Pack se reabre en modo Pack con sus packs", () => {
-    expect(unitModalState(undefined, 8)).toEqual({ packMode: false, quantity: 1 });
-    expect(unitModalState(packLine(2), 8)).toEqual({ packMode: true, quantity: 2 });
-    // Si el producto ya no tiene pack, la línea se reabre en unidades reales.
-    expect(unitModalState(packLine(2), null)).toEqual({ packMode: false, quantity: 16 });
-  });
-
-  it("el escáner suma a la línea normal aunque tenga precio manual, y nunca a un Pack", () => {
+  it("el escáner suma a la línea normal (aunque tenga precio manual) o, si sólo hay una línea Pack, a esa", () => {
     const manual = applyManualPrice(normal(2), 90_000n);
-    expect(findMergeableUnitLine([packLine(1), manual], "leche", false, true)?.id).toBe(manual.id);
-    expect(findMergeableUnitLine([packLine(1)], "leche", false, true)).toBeUndefined();
+    expect(findUnitLineToMerge([packLine(1), manual], "leche", true)?.id).toBe(manual.id);
+    expect(findUnitLineToMerge([packLine(1)], "leche", true)?.id).toBe(packLine(1).id);
+    expect(findUnitLineToMerge([], "leche", true)).toBeUndefined();
+  });
+});
+
+// Caso real: AZUCAR JL 1KG. $1.650 lista, desde 3 → 15 %, desde 5 → 20 %, Pack de 10 → 25 %.
+describe("precio efectivo por unidad (azúcar: lista $1.650, 3→15 %, 5→20 %, Pack 10→25 %)", () => {
+  const azucar = { productId: "azucar", productName: "AZUCAR JL 1KG.", pricePerKgCents: 165_000n };
+  const tiers: BranchUnitPromotion[] = [{ id: "t3", minimumUnits: 3, discountBps: 1_500 }, { id: "t5", minimumUnits: 5, discountBps: 2_000 }];
+  const OFFER = { packSizeUnits: 10, packDiscountBps: 2_500, packConfigId: "cfg-10-2500" };
+  /** Lo que muestra el modal: la línea que resuelve el pedido, calculada por el MISMO motor que cobra. */
+  const modal = (quantity: number, method: PricingContext["paymentMethod"] = "CASH") => {
+    const req = resolveUnitLineRequest({ ticket: [], productId: "azucar", packOffer: OFFER, quantity, editingLineId: null, branchPromotions: tiers });
+    const line = buildUnitTicketLine(azucar, req.units, "x", null, method, CARD_BPS, { branchPromotions: tiers, packSale: req.packSale });
+    return { req, line, perUnit: effectiveUnitPriceCents(line.subtotalCents, req.units) };
+  };
+
+  it.each([
+    [1, 165_000n, 165_000n, false], [2, 330_000n, 165_000n, false], [3, 420_750n, 140_250n, false], [4, 561_000n, 140_250n, false],
+    [5, 660_000n, 132_000n, false], [9, 1_188_000n, 132_000n, false], [10, 1_237_500n, 123_750n, true]
+  ])("%i unidades → total %s, %s por unidad (pack: %s)", (quantity, total, perUnit, pack) => {
+    const { req, line, perUnit: shown } = modal(quantity);
+    expect(line.subtotalCents).toBe(total);
+    expect(shown).toBe(perUnit);
+    expect(req.packSale !== null).toBe(pack);
+    expect(line.soldAsPack === true).toBe(pack);
+  });
+
+  it("10 unidades: $1.237,50/u y total $12.375, igual que la línea que se cobra (pesos y centavos, sin floats)", () => {
+    const { line, perUnit } = modal(10);
+    expect(formatCurrency(perUnit)).toBe("$ 1.237,50");
+    expect(formatCurrency(line.subtotalCents)).toBe("$ 12.375");
+    expect(finalPricePerUnitCents(line)).toBe(perUnit); // el ticket muestra lo mismo que el modal
+    expect(perUnit * 10n).toBe(line.subtotalCents);
+  });
+
+  it("el precio por unidad del catálogo es el del motor: lista $1.650 → Pack $1.237,50/u y 3 u → $1.402,50/u", () => {
+    expect(packOfferUnitPriceCents(azucar.pricePerKgCents, OFFER)).toBe(123_750n);
+    expect(packOfferLabel(azucar.pricePerKgCents, OFFER)).toBe("Pack 10 u · 25% OFF · $ 1.237,50/u");
+    expect(promotedUnitPriceCents(azucar.pricePerKgCents, { id: "t3", minimumUnits: 3, discountBps: 1_500 })).toBe(140_250n);
+    expect(unitPromotionLabel(azucar.pricePerKgCents, tiers)).toBe("$ 1.402,50/u desde 3 u · $ 1.320/u desde 5 u");
+    expect(packOfferUnitPriceCents(azucar.pricePerKgCents, null)).toBeNull();
+  });
+
+  it("es idéntico offline: el cálculo sólo usa el catálogo sincronizado (sin red) y la repreciación no lo cambia", () => {
+    const { line } = modal(10);
+    const ctx: PricingContext = { paymentMethod: "CASH", discounts: [], cashDiscountBps: CARD_BPS, branchId: BRANCH, branchPromotions: tiers };
+    expect(repriceTicketLine(line, ctx).subtotalCents).toBe(1_237_500n);
+  });
+
+  it("con tarjeta el precio por unidad sale del total real (con recargo), no del 25 % a secas", () => {
+    const { line, perUnit } = modal(10, "DEBIT");
+    expect(line.subtotalCents).toBe(1_361_250n); // 12.375 + 10 %
+    expect(perUnit).toBe(136_125n);
   });
 });
 

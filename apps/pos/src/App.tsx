@@ -31,8 +31,8 @@ import { TicketLineDetail } from "./TicketLineDetail";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
-  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findMergeableUnitLine, findPackRule,
-  repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalState, unitPromotionLabel, type DiscountRule, type PackOffer
+  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, findUnitLineToMerge,
+  autoPackSale, effectiveUnitPriceCents, packOfferLabel, packOfferUnitPriceCents, promotedUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalQuantity, unitPromotionLabel, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
 import { ManualPriceModal } from "./ManualPriceModal";
 import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
@@ -352,10 +352,9 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(null);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [weightInput, setWeightInput] = useState("");
-  const [quantityInput, setQuantityInput] = useState(1);
+  // null = campo vacío mientras se reemplaza el número (estado transitorio; confirmar queda deshabilitado).
+  const [quantityInput, setQuantityInput] = useState<number | null>(1);
   const [sellAsPack, setSellAsPack] = useState(false);
-  // Producto UNIT con pack: la cantidad del modal son PACKS (cada uno = pack_size_units unidades reales, con el % OFF de ese producto).
-  const [packMode, setPackMode] = useState(false);
   // Promoción global de la sucursal ("desde N unidades, X %" sobre toda la línea, sólo UNIT); viaja con el catálogo y se lee de SQLite.
   const [branchPromotions, setBranchPromotions] = useState<BranchUnitPromotion[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(INITIAL_PAYMENT_METHOD);
@@ -1107,10 +1106,8 @@ export default function App() {
     setSelectedProduct(product);
     setEditingLineId(line?.id ?? null);
     setWeightInput(line ? (line.weightGrams / 1_000).toFixed(3).replace(".", ",") : "");
-    // Una línea cargada como Pack se vuelve a abrir en modo Pack (la cantidad son packs); una normal, en unidades.
-    const modal = unitModalState(line, packOfferOf(product)?.packSizeUnits ?? null);
-    setPackMode(modal.packMode);
-    setQuantityInput(modal.quantity);
+    // La cantidad del modal son siempre unidades reales (el Pack, si corresponde, se aplica solo).
+    setQuantityInput(unitModalQuantity(line));
     setSellAsPack(line?.sellAsPack ?? line?.promotionMode === "PACK_FIXED_TOTAL");
     setError(null);
   }
@@ -1132,7 +1129,7 @@ export default function App() {
     const unitPromo = unitPromotionBadgeLabel(product);
     if (unitPromo) badges.push({ kind: "PROMO", label: unitPromo });
     const offer = packOfferOf(product);
-    if (offer) badges.push({ kind: "PACK", label: `Pack ${String(offer.packSizeUnits)} u · ${packDiscountLabel(offer.packDiscountBps)}` });
+    if (offer) badges.push({ kind: "PACK", label: packOfferLabel(product.pricePerKgCents, offer) });
     return badges;
   }
 
@@ -1140,6 +1137,7 @@ export default function App() {
   // una card sin stock es un <button disabled> — no dispara onClick aunque se fuerce el evento.
   function renderProductCard(product: CatalogProduct, outOfStock: boolean) {
     const unitPromo = unitPromotionBadgeLabel(product);
+    const cardPackOffer = product.unitType === "UNIT" && !isPriceMissing(product) ? packOfferOf(product) : null;
     return (
       <button
         key={product.productId}
@@ -1163,6 +1161,7 @@ export default function App() {
                 return label ? <span className="mt-1 block text-xs font-bold text-amber-300" key={rule.id}>{label}</span> : null;
               })}
               {unitPromo ? <span className="mt-1 block text-xs font-bold text-amber-300">{unitPromo}</span> : null}
+              {cardPackOffer ? <span className="mt-1 block text-xs font-bold text-sky-300">{packOfferLabel(product.pricePerKgCents, cardPackOffer)}</span> : null}
             </>}
       </button>
     );
@@ -1179,13 +1178,13 @@ export default function App() {
   const unitPromotions = desktop ? branchPromotions : NO_BRANCH_PROMOTIONS;
 
   /**
-   * Cómo queda la línea UNIT que se está cargando en el modal: las unidades REALES (en modo Pack: packs × tamaño del pack),
-   * el Pack si corresponde y, si el producto ya está en el ticket en el mismo modo, la línea a la que se suma.
+   * Cómo queda la línea UNIT que se está cargando en el modal: las unidades REALES, el Pack si esas unidades lo alcanzan
+   * (automático) y, si el producto ya está en el ticket, la línea a la que se suma.
    */
   function unitLineRequest(product: CatalogProduct): { units: number; packSale: UnitPackSale | null; lineId: string; mergedLine: TicketLine | undefined } {
     return resolveUnitLineRequest({
       ticket: ticketRef.current, productId: product.productId, packOffer: packOfferOf(product),
-      packMode, quantity: quantityInput, editingLineId
+      quantity: quantityInput ?? 0, editingLineId, branchPromotions: unitPromotions
     });
   }
 
@@ -1204,6 +1203,8 @@ export default function App() {
    */
   function commitSelectedProductLine(explicitWeightGrams?: number) {
     if (!selectedProduct) return;
+    // Cantidad vacía (se está reemplazando el número): no hay nada que confirmar todavía.
+    if (selectedProduct.unitType === "UNIT" && quantityInput === null) return;
     if (!editingLineId && isPriceMissing(selectedProduct)) {
       // Defensa en profundidad: el precio pudo cambiar a 0 entre abrir el diálogo y confirmarlo.
       const missing = selectedProduct;
@@ -1228,7 +1229,7 @@ export default function App() {
       let line: TicketLine;
       let mergedLineId: string | null = null;
       if (isUnit) {
-        if (!Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
+        if (quantityInput === null || !Number.isInteger(quantityInput) || quantityInput <= 0) throw new Error("Cantidad inválida");
         // Unidades REALES (en modo Pack: packs × tamaño) y, si el producto ya está en el ticket, se suma a esa línea: así
         // "desde N unidades" cuenta todas las del mismo producto, vengan de la grilla o del scanner.
         const request = unitLineRequest(selectedProduct);
@@ -1260,7 +1261,6 @@ export default function App() {
       setWeightInput("");
       setQuantityInput(1);
       setSellAsPack(false);
-      setPackMode(false);
       focusSearchForNextProduct();
     } catch (weightError) {
       setError(weightError instanceof Error ? weightError.message : "Cantidad inválida");
@@ -1301,10 +1301,10 @@ export default function App() {
     if (interceptMissingPrice(product)) return;
     // Read/write through a ref so two scans landing before React re-renders both count.
     const current = ticketRef.current;
-    // Un escaneo agrega UNA unidad normal (nunca un Pack): a la línea normal del producto si ya existe, aunque tenga precio manual.
-    const existing = findMergeableUnitLine(current, product.productId, false, true);
+    // Un escaneo agrega UNA unidad a la línea del producto si ya existe (aunque tenga precio manual); el Pack se decide solo por las unidades totales.
+    const existing = findUnitLineToMerge(current, product.productId, true);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: unitPromotions });
+    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: unitPromotions, packSale: autoPackSale(quantity, packOfferOf(product), unitPromotions) });
     try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
     ticketRef.current = next;
@@ -2590,9 +2590,13 @@ export default function App() {
                 <UnitQuantityFields
                   quantity={quantityInput}
                   onQuantityChange={setQuantityInput}
-                  pack={packOfferOf(selectedProduct)}
-                  packMode={packMode}
-                  onPackModeChange={setPackMode}
+                  lineUnits={unitLineRequest(selectedProduct).units}
+                  pack={(() => {
+                    const offer = packOfferOf(selectedProduct);
+                    if (!offer) return null;
+                    const sale = quantityInput === null ? null : unitLineRequest(selectedProduct).packSale;
+                    return { packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, unitPriceCents: packOfferUnitPriceCents(selectedProduct.pricePerKgCents, offer), applied: sale !== null, packCount: sale?.packCount ?? 0 };
+                  })()}
                 />
                 {packRuleForSelectedProduct?.packQuantityUnits != null && packRuleForSelectedProduct.packPriceCents != null ? (
                   <p className="mt-3 rounded-2xl border border-amber-500/60 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-200">
@@ -2601,20 +2605,23 @@ export default function App() {
                 ) : null}
                 {unitPromotions.length > 0 ? (
                   <ul className="mt-3 space-y-1 text-sm font-bold text-emerald-300" data-testid="quantity-tiers">
-                    {unitPromotions.map((tier) => <li key={tier.id}>{quantityTierLabel(tier)}</li>)}
+                    {unitPromotions.map((tier) => {
+                      const tierUnitPrice = promotedUnitPriceCents(selectedProduct.pricePerKgCents, tier);
+                      return <li key={tier.id}>{quantityTierLabel(tier)}{tierUnitPrice === null ? "" : ` · ${formatCurrency(tierUnitPrice)}/u`}</li>;
+                    })}
                   </ul>
                 ) : null}
               </>
             )}
             {shouldDisplayTicketAmounts(paymentMethod) ? (
               <div className="mt-5 rounded-2xl bg-stone-950 p-4">
-                {(() => { if (!paymentMethod) return null; try {
+                {(() => { if (!paymentMethod) return null; if (selectedProduct.unitType === "UNIT" && quantityInput === null) return <strong className="block text-4xl font-black text-stone-600">—</strong>; try {
                   // Editando una línea con precio manual: se previsualiza con ese precio (sin promoción ni recargo).
                   const editedLine = editingLineId ? ticket.find((candidate) => candidate.id === editingLineId) : undefined;
                   if (editedLine?.manualPriceApplied && editedLine.manualUnitPriceCents != null) {
                     const manual = calculateManualLinePricing({
                       listPriceCents: selectedProduct.pricePerKgCents, manualUnitPriceCents: editedLine.manualUnitPriceCents,
-                      quantity: selectedProduct.unitType === "WEIGHT" ? parseWeightToGrams(weightInput) : quantityInput,
+                      quantity: selectedProduct.unitType === "WEIGHT" ? parseWeightToGrams(weightInput) : quantityInput ?? 0,
                       quantityDivisor: selectedProduct.unitType === "WEIGHT" ? 1_000 : 1
                     });
                     return <><p className="text-sm text-stone-400">Precio lista: {formatCurrency(manual.listSubtotalCents)}</p>
@@ -2640,13 +2647,14 @@ export default function App() {
                     </>}
                     {/* El recargo por tarjeta se aplica al total comercial completo, packs incluidos, sin excepción (D-044) — se muestra siempre que corresponda, no sólo fuera de un pack. */}
                     {preview.cardSurchargeCents > 0n ? <p className="mt-1 font-bold text-amber-400">Recargo tarjeta: +{formatCurrency(preview.cardSurchargeCents)}</p> : null}
+                    {unitRequest ? <p className="mt-2 text-sm text-stone-400">Precio por unidad: <strong className="text-xl font-black text-emerald-300" data-testid="unit-price-preview">{formatCurrency(effectiveUnitPriceCents(preview.subtotalCents, unitRequest.units))}/u</strong></p> : null}
                     <span className="mt-2 block text-sm text-stone-400">Total</span><strong className="block text-4xl font-black text-rose-400">{formatCurrency(preview.subtotalCents)}</strong></>;
                 } catch { return <strong className="block text-4xl font-black text-rose-400">$ 0</strong>; } })()}
               </div>
             ) : null}
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button className="rounded-xl border border-stone-600 px-4 py-3 font-bold hover:bg-stone-800" type="button" onClick={() => setSelectedProduct(null)}>Volver</button>
-              <button className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500" type="submit">Confirmar línea</button>
+              <button className="rounded-xl bg-rose-600 px-4 py-3 font-black hover:bg-rose-500 disabled:opacity-40" disabled={selectedProduct.unitType === "UNIT" && quantityInput === null} type="submit">Confirmar línea</button>
             </div>
           </form>
         </div>
