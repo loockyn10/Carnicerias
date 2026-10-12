@@ -1,7 +1,8 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { formatPriceText, hasPromotion, heroPrice, type OfferItem } from "../../lib/artwork";
-import { placeLogo, type ArtworkBranding, type ArtworkContact } from "../../lib/artwork-branding";
+import { placeLogoFor, type ArtworkBranding, type ArtworkContact } from "../../lib/artwork-branding";
+import { ARTWORK_DISPLAY_FONT_FAMILY } from "../../lib/artwork-display-font-data";
 import { ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import type { Rect } from "../../lib/artwork-layout";
 import { burstPoints, organicBlobPath, organicPillPath } from "../../lib/artwork-shapes";
@@ -20,6 +21,8 @@ import type { OfferPrice } from "../../lib/signage";
  */
 
 export const FONT_STACK = `${ARTWORK_FONT_FAMILY}, Arial, Helvetica, sans-serif`;
+/** Fuente de TÍTULOS promocionales (Anton, condensada y pesada): sólo el titular («OFERTA»); nombre, mecánica y precio siguen en la sans. */
+export const DISPLAY_FONT_STACK = `${ARTWORK_DISPLAY_FONT_FAMILY}, Impact, "Arial Narrow", sans-serif`;
 
 export function Box({ rect, children, style }: { rect: Rect; children?: ReactNode; style?: CSSProperties }) {
   return <div style={{ position: "absolute", left: rect.x, top: rect.y, width: rect.w, height: rect.h, display: "flex", ...style }}>{children}</div>;
@@ -32,17 +35,17 @@ const JUSTIFY: Record<TextAlign, "flex-start" | "center" | "flex-end"> = { start
 
 /** Línea de texto de un solo renglón, sin ajuste automático (el tamaño ya viene calculado). */
 export function Line({ text, size, color, weight = 900, lineHeight = 1, align = "center", decoration }: {
-  text: string; size: number; color: string; weight?: 700 | 900; lineHeight?: number; align?: "center" | "flex-start" | "flex-end"; decoration?: "line-through";
+  text: string; size: number; color: string; weight?: 400 | 700 | 900; lineHeight?: number; align?: "center" | "flex-start" | "flex-end"; decoration?: "line-through";
 }) {
   const height = Math.round(size * lineHeight);
   return <div style={{
     display: "flex", justifyContent: align, alignItems: "center", width: "100%", height, fontSize: size, lineHeight: `${String(height)}px`,
-    fontWeight: weight, color, whiteSpace: "nowrap", ...(decoration ? { textDecoration: decoration } : {})
+    fontWeight: weight, color, whiteSpace: "nowrap", ...(weight === 400 ? { fontFamily: DISPLAY_FONT_STACK } : {}), ...(decoration ? { textDecoration: decoration } : {})
   }}>{text}</div>;
 }
 
 export function TextBlock({ fitted, color, lineHeight = 1.02, weight = 900, align = "center" }: {
-  fitted: FittedText; color: string; lineHeight?: number; weight?: 700 | 900; align?: TextAlign;
+  fitted: FittedText; color: string; lineHeight?: number; weight?: 400 | 700 | 900; align?: TextAlign;
 }) {
   return <div style={{ display: "flex", flexDirection: "column", width: "100%", alignItems: JUSTIFY[align], justifyContent: "center" }}>
     {fitted.lines.map((line, index) => <Line align={JUSTIFY[align]} color={color} key={`${String(index)}-${line}`} lineHeight={lineHeight} size={fitted.size} text={line} weight={weight} />)}
@@ -60,7 +63,7 @@ export function Canvas({ format, children, testId, variant }: { format: ArtworkF
 // Franja verde + LOGO real
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Zona vertical de la franja donde se acomoda el logo (en Story, dentro de las zonas seguras). */
+/** Zona base del logo (en Story, dentro de las zonas seguras): sólo para el nombre de respaldo; el logo usa `placeLogoFor`. */
 function logoArea(format: ArtworkFormat): Rect {
   const { height } = ARTWORK_FORMATS[format];
   const band = BAND_WIDTH[format];
@@ -80,15 +83,15 @@ export function BrandBand({ branding, format }: { branding: ArtworkBranding; for
   const band = BAND_WIDTH[format];
   const area = logoArea(format);
   const logo = branding.logo;
+  const placement = logo ? placeLogoFor(logo, format, logo.scalePercent) : null;
   return <>
-    <Box rect={{ x: 0, y: 0, w: band, h: spec.height }} style={{ background: branding.colors.green }} />
-    {logo ? <LogoImage area={area} imageUrl={logo.imageUrl} logo={logo} /> : <FallbackName area={area} name={branding.businessName} />}
+    <Box rect={{ x: 0, y: 0, w: placement?.band ?? band, h: spec.height }} style={{ background: branding.colors.green }} />
+    {logo && placement ? <LogoImage imageUrl={logo.imageUrl} place={placement} /> : <FallbackName area={area} name={branding.businessName} />}
   </>;
 }
 
-function LogoImage({ area, imageUrl, logo }: { area: Rect; imageUrl: string; logo: { width: number; height: number } }) {
-  const place = placeLogo(logo, area);
-  return <Box rect={{ x: place.left, y: place.top, w: place.width, h: place.height }} style={{ transform: place.rotate === 0 ? "none" : `rotate(${String(place.rotate)}deg)` }}>
+function LogoImage({ imageUrl, place }: { imageUrl: string; place: ReturnType<typeof placeLogoFor> }) {
+  return <Box rect={{ x: place.left, y: place.top, w: place.width, h: place.height }} style={place.rotate === 0 ? {} : { transform: `rotate(${String(place.rotate)}deg)` }}>
     {/* Satori (PNG) y el preview comparten esta etiqueta <img>: next/image no aplica. */}
     <img alt="" data-testid="artwork-logo" height={place.height} src={imageUrl} style={{ width: place.width, height: place.height, objectFit: "contain" }} width={place.width} />
   </Box>;
@@ -109,10 +112,13 @@ function FallbackName({ area, name }: { area: Rect; name: string }) {
 // Texto, foto
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Titular manual de la pieza, en rojo, de un solo renglón. */
+/** Anton es mucho más angosta que la sans: el mismo tamaño de diseño se agranda para que el titular siga ocupando su lugar y se lea a distancia. */
+const DISPLAY_SIZE_BOOST = 1.5;
+
+/** Titular manual de la pieza («OFERTA»), en rojo, de un solo renglón y en la fuente de títulos (Anton). */
 export function Headline({ rect, text, maxSize, color, align = "center" }: { rect: Rect; text: string; maxSize: number; color: string; align?: TextAlign }) {
-  const fitted = fitText({ text, maxWidth: rect.w, maxLines: 1, maxSize, minSize: 44 });
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}><TextBlock align={align} color={color} fitted={fitted} lineHeight={1} /></Box>;
+  const fitted = fitText({ text, maxWidth: rect.w, maxLines: 1, maxSize: Math.min(Math.round(maxSize * DISPLAY_SIZE_BOOST), rect.h), minSize: 44, weight: 400 });
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}><TextBlock align={align} color={color} fitted={fitted} lineHeight={1} weight={400} /></Box>;
 }
 
 /** Nombre del producto (hasta `maxLines` renglones) y, para productos por peso, «X KG» en verde debajo (sólo `showUnitLabel`). */

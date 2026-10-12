@@ -1,4 +1,4 @@
-import { BRAND_COLORS, emptyArtworkBranding, type ArtworkBranding } from "./artwork-branding";
+import { BRAND_COLORS, emptyArtworkBranding, normalizeLogoScale, type ArtworkBranding } from "./artwork-branding";
 import { clampSlideSeconds, type OfferSlideData, type SignageView } from "./signage";
 
 /**
@@ -190,7 +190,7 @@ function readBranding(value: unknown): ArtworkBranding {
   const validLogo = imageUrl !== null && typeof width === "number" && width > 0 && typeof height === "number" && height > 0;
   return {
     businessName: typeof raw.businessName === "string" && raw.businessName.trim() ? raw.businessName : fallback.businessName,
-    logo: validLogo ? { imageUrl, width, height } : null,
+    logo: validLogo ? { imageUrl, width, height, scalePercent: normalizeLogoScale(logo?.scalePercent) } : null,
     contact: null,
     colors: BRAND_COLORS
   };

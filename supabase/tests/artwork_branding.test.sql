@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(54);
+select plan(65);
 
 -- Covers 202610090072 (D-075): logo de cartelería de la organización (Storage + referencia) y teléfono / ciudad por sucursal.
 -- El logo vive en el bucket privado `product-artwork` (carpeta `<org>/branding/`); el contacto es de la SUCURSAL: una pieza nunca
@@ -49,6 +49,7 @@ select ok(not has_table_privilege('authenticated', 'public.organization_artwork_
 select ok(not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'organization_artwork_logos' and (data_type = 'bytea' or column_name ~ 'base64|blob|data')),
   'the logo table keeps a path and metadata only: no bytea, base64 or blob column');
 select ok(not has_function_privilege('anon', 'public.set_organization_artwork_logo(text,integer,integer)', 'EXECUTE'), 'anonymous cannot register a logo');
+select ok(not has_function_privilege('anon', 'public.set_organization_artwork_logo_scale(integer)', 'EXECUTE'), 'anonymous cannot change the logo size');
 select ok(not has_function_privilege('anon', 'public.remove_organization_artwork_logo()', 'EXECUTE'), 'anonymous cannot remove a logo');
 select ok(not has_function_privilege('anon', 'public.set_branch_artwork_contact(uuid,text,text,text)', 'EXECUTE'), 'anonymous cannot edit a branch contact');
 select ok(not has_function_privilege('anon', 'public.get_artwork_branding(uuid)', 'EXECUTE'), 'anonymous cannot read the branding');
@@ -62,6 +63,7 @@ select set_config('request.jwt.claim.sub', 'd1000000-0000-4000-8000-000000000002
 select set_config('request.jwt.claims', '{"sub":"d1000000-0000-4000-8000-000000000002","role":"authenticated"}', true);
 select throws_ok($$select public.set_organization_artwork_logo('d2000000-0000-4000-8000-000000000001/branding/d6000000-0000-4000-8000-000000000001.png', 400, 900)$$, '42501', null, 'an employee (no catalog.write) cannot register the logo');
 select throws_ok($$select public.remove_organization_artwork_logo()$$, '42501', null, 'nor remove it');
+select throws_ok($$select public.set_organization_artwork_logo_scale(120)$$, '42501', null, 'nor change its size');
 select throws_ok($$select public.set_branch_artwork_contact('d3000000-0000-4000-8000-000000000001', '123', 'x', 'y')$$, '42501', null, 'nor edit a branch contact (branches.write)');
 
 select set_config('request.jwt.claim.sub', 'd1000000-0000-4000-8000-000000000001', true);
@@ -87,6 +89,15 @@ select is(public.set_organization_artwork_logo('d2000000-0000-4000-8000-00000000
 select is((select count(*) from public.organization_artwork_logos where organization_id = 'd2000000-0000-4000-8000-000000000001'), 1::bigint, 'there is only ONE logo per organization');
 select is(public.get_artwork_branding(null) -> 'logo' ->> 'contentType', 'image/jpeg', 'the new logo replaced the old one');
 select is((select count(*) from public.audit_logs where event_type = 'ARTWORK_LOGO_SET'), 2::bigint, 'each registration is audited');
+select is((public.get_artwork_branding(null) -> 'logo' ->> 'scalePercent')::integer, 100, 'the logo size defaults to 100 %');
+select is(public.set_organization_artwork_logo_scale(140) ->> 'scalePercent', '140', 'an admin sets the logo size');
+select is((public.get_artwork_branding(null) -> 'logo' ->> 'scalePercent')::integer, 140, 'and the branding facts carry it');
+select throws_ok($$select public.set_organization_artwork_logo_scale(69)$$, '22023', null, 'below 70 % is rejected');
+select throws_ok($$select public.set_organization_artwork_logo_scale(161)$$, '22023', null, 'above 160 % is rejected');
+select throws_ok($$select public.set_organization_artwork_logo_scale(null)$$, '22023', null, 'null is rejected');
+select public.set_organization_artwork_logo('d2000000-0000-4000-8000-000000000001/branding/d6000000-0000-4000-8000-000000000003.jpg', 500, 800);
+select is((public.get_artwork_branding(null) -> 'logo' ->> 'scalePercent')::integer, 140, 'registering the logo again keeps the chosen size');
+select is((select count(*) from public.audit_logs where event_type = 'ARTWORK_LOGO_SCALE_SET'), 1::bigint, 'the size change is audited');
 
 -- ---------------------------------------------------------------------------------------------
 -- Contacto por sucursal (sin mezclar sucursales)
@@ -124,6 +135,7 @@ select set_config('request.jwt.claim.sub', 'd1000000-0000-4000-8000-000000000001
 select set_config('request.jwt.claims', '{"sub":"d1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is(public.remove_organization_artwork_logo() ->> 'removedPath', 'd2000000-0000-4000-8000-000000000001/branding/d6000000-0000-4000-8000-000000000003.jpg', 'removing returns the object path for Storage cleanup');
 select is(public.get_artwork_branding(null) -> 'logo', 'null'::jsonb, 'after removing, the logo is gone');
+select throws_ok($$select public.set_organization_artwork_logo_scale(120)$$, '22023', 'Todavía no hay un logo cargado', 'there is no size to set without a logo');
 select is(public.remove_organization_artwork_logo() ->> 'removedPath', null::text, 'removing again is a no-op');
 
 select * from finish();

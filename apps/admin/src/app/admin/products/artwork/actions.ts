@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { requireAdminContext } from "../../../../lib/admin";
 import { ARTWORK_UNAVAILABLE_LABELS, parseArtworkFacts, type ArtworkFacts } from "../../../../lib/artwork";
-import { parseArtworkBrandingFacts, type ArtworkBrandingFacts } from "../../../../lib/artwork-branding";
+import { LOGO_SCALE_MAX, LOGO_SCALE_MIN, parseArtworkBrandingFacts, type ArtworkBrandingFacts } from "../../../../lib/artwork-branding";
 import {
   ARTWORK_BUCKET, buildLogoPath, buildPhotoPath, isValidLogoPath, isValidPhotoPath, SIGNED_URL_SECONDS, type StoredPhotoType
 } from "../../../../lib/artwork-photo";
@@ -170,6 +170,25 @@ export async function removeArtworkLogoAction(branchId: string | null): Promise<
     return await readBranding(supabase, branchId);
   } catch (error) {
     return { kind: "error", message: message(error, "No se pudo quitar el logo") };
+  }
+}
+
+/** Tamaño del logo en las piezas (70-160 %). Sólo presentación: no toca precios ni promociones. */
+export async function saveArtworkLogoScaleAction(scalePercent: number, branchId: string | null): Promise<BrandingLoadResult> {
+  try {
+    await requireAdminContext();
+    if (!Number.isInteger(scalePercent) || scalePercent < LOGO_SCALE_MIN || scalePercent > LOGO_SCALE_MAX) {
+      return { kind: "error", message: `El tamaño del logo tiene que estar entre ${String(LOGO_SCALE_MIN)} % y ${String(LOGO_SCALE_MAX)} %` };
+    }
+    if (branchId !== null && !isUuid(branchId)) return { kind: "error", message: "Sucursal inválida" };
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("set_organization_artwork_logo_scale", { p_scale_percent: scalePercent });
+    if (error) return { kind: "error", message: error.message };
+    revalidatePath("/admin/products/artwork");
+    revalidatePath("/admin/products/signage");
+    return await readBranding(supabase, branchId);
+  } catch (error) {
+    return { kind: "error", message: message(error, "No se pudo guardar el tamaño del logo") };
   }
 }
 

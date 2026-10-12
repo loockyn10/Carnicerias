@@ -6,7 +6,8 @@ import { ArtworkIdentityModal } from "./artwork-identity-modal";
 
 vi.mock("../app/admin/products/artwork/actions", () => ({
   removeArtworkLogoAction: () => Promise.resolve({ kind: "error", message: "x" }),
-  saveBranchContactAction: () => Promise.resolve({ kind: "error", message: "x" })
+  saveBranchContactAction: () => Promise.resolve({ kind: "error", message: "x" }),
+  saveArtworkLogoScaleAction: () => Promise.resolve({ kind: "error", message: "x" })
 }));
 vi.mock("../lib/artwork-photo-client", () => ({ uploadArtworkLogo: () => Promise.resolve({ kind: "error", message: "x" }) }));
 
@@ -71,5 +72,29 @@ describe("Configurar identidad", () => {
 
   it("los botones no envían ningún formulario (type=button)", () => {
     for (const match of modal({ logo, branch: central }).matchAll(/<button[^>]*>/g)) expect(match[0]).toContain('type="button"');
+  });
+});
+
+describe("Tamaño del logo", () => {
+  it("con logo: control - / + con el porcentaje actual (100 % por defecto), rango 70-160 y vista previa en la franja", () => {
+    const html = modal({ logo, branch: central }, { logoUrl: "https://example.test/logo.png" });
+    expect(html).toContain("Tamaño del logo");
+    expect(html).toMatch(/identity-logo-scale-value[^>]*>100%</);
+    expect(html).toContain('min="70"');
+    expect(html).toContain('max="160"');
+    expect(html).toContain('aria-label="Agrandar el logo"');
+    expect(html).toContain('data-testid="identity-logo-band-feed"');
+    expect(html).toContain('data-testid="identity-logo-band-tv"');
+  });
+
+  it("muestra el porcentaje guardado", () => {
+    const html = modal({ logo: { ...logo, scalePercent: 135 }, branch: central }, { logoUrl: "https://example.test/logo.png" });
+    expect(html).toMatch(/identity-logo-scale-value[^>]*>135%</);
+  });
+
+  it("sin logo (nombre de la organización): el control no se muestra y se explica por qué", () => {
+    const html = modal({ logo: null, branch: central });
+    expect(html).not.toContain('data-testid="identity-logo-scale-value"');
+    expect(html).toContain('data-testid="identity-logo-size-disabled"');
   });
 });

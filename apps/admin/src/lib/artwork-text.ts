@@ -1,3 +1,4 @@
+import { ANTON_WIDTHS } from "./artwork-display-metrics";
 import { INTER_700_WIDTHS, INTER_900_WIDTHS, type GlyphWidths } from "./artwork-metrics";
 
 /**
@@ -6,9 +7,10 @@ import { INTER_700_WIDTHS, INTER_900_WIDTHS, type GlyphWidths } from "./artwork-
  * motor que lo dibuja (cada línea se renderiza explícita y sin ajuste automático de renglones).
  */
 
-export type ArtworkWeight = 700 | 900;
+/** 400 = Anton (fuente de títulos promocionales); 700/900 = Inter (todo lo demás). */
+export type ArtworkWeight = 400 | 700 | 900;
 
-const WIDTHS: Record<ArtworkWeight, GlyphWidths> = { 700: INTER_700_WIDTHS, 900: INTER_900_WIDTHS };
+const WIDTHS: Record<ArtworkWeight, GlyphWidths> = { 400: ANTON_WIDTHS, 700: INTER_700_WIDTHS, 900: INTER_900_WIDTHS };
 
 /** Margen de seguridad sobre el ancho medido (kerning y redondeos de cada motor de texto). */
 const SAFETY = 1.035;

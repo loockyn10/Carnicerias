@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { OfferArtworkModel } from "../../lib/artwork";
 import type { HeroVariantId } from "../../lib/artwork-hero-layouts";
+import { ARTWORK_DISPLAY_FONT_400_BASE64, ARTWORK_DISPLAY_FONT_FAMILY } from "../../lib/artwork-display-font-data";
 import { ARTWORK_FONT_700_BASE64, ARTWORK_FONT_900_BASE64, ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import { ARTWORK_FORMATS, type ArtworkFormat } from "../../lib/artwork-tokens";
 import { OfferArtwork } from "./offer-artwork";
@@ -12,7 +13,8 @@ const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : us
 
 /** La misma fuente embebida que usa el PNG: el preview y la imagen exportada miden y dibujan el texto igual. */
 export const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:900;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_900_BASE64}) format("woff")}`
-  + `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:700;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_700_BASE64}) format("woff")}`;
+  + `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";font-weight:700;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_FONT_700_BASE64}) format("woff")}`
+  + `@font-face{font-family:"${ARTWORK_DISPLAY_FONT_FAMILY}";font-weight:400;font-style:normal;src:url(data:font/woff;base64,${ARTWORK_DISPLAY_FONT_400_BASE64}) format("woff")}`;
 
 /**
  * Preview de la pieza: dibuja el MISMO renderer que el PNG (`OfferArtwork`) a su tamaño de diseño (1920 × 1080, 1080 × 1350 o

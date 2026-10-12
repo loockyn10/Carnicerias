@@ -2,13 +2,38 @@
 
 import { useRef, useState } from "react";
 
-import { removeArtworkLogoAction, saveBranchContactAction, type BrandingLoadResult } from "../app/admin/products/artwork/actions";
+import { removeArtworkLogoAction, saveArtworkLogoScaleAction, saveBranchContactAction, type BrandingLoadResult } from "../app/admin/products/artwork/actions";
+import { LOGO_SCALE_DEFAULT, LOGO_SCALE_MAX, LOGO_SCALE_MIN, maxLogoScalePercent, normalizeLogoScale, placeLogoFor } from "../lib/artwork-branding";
 import { formatBytes, MAX_PHOTO_BYTES } from "../lib/artwork-photo";
 import { uploadArtworkLogo } from "../lib/artwork-photo-client";
 import { ARTWORK_COLORS } from "../lib/artwork-tokens";
 
 const input = "w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-normal";
 const secondaryButton = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-bold disabled:opacity-50";
+
+const SCALE_STEP = 5;
+/** Franjas de ejemplo (a escala) para ver el logo en Feed y TV mientras se ajusta el tamaño. */
+const PREVIEW_BANDS = [
+  { format: "feed", label: "Feed / Story", height: 1350, zoom: 0.2 },
+  { format: "tv", label: "TV", height: 1080, zoom: 0.25 }
+] as const;
+
+/** Vista previa inmediata del logo dentro de la franja verde, con la misma geometría que las piezas (no se deforma ni se corta). */
+function LogoScalePreview({ logo, logoUrl, scale }: { logo: { width: number; height: number }; logoUrl: string; scale: number }) {
+  return <div className="flex items-end gap-4" data-testid="identity-logo-preview">
+    {PREVIEW_BANDS.map(({ format, label, height, zoom }) => {
+      const place = placeLogoFor(logo, format, scale);
+      return <figure className="grid justify-items-center gap-1" key={format}>
+        <div className="relative overflow-hidden" data-testid={`identity-logo-band-${format}`} style={{ width: place.band * zoom, height: height * zoom, background: ARTWORK_COLORS.BRAND_GREEN }}>
+          <div className="absolute flex" style={{ left: place.left * zoom, top: place.top * zoom, width: place.width * zoom, height: place.height * zoom, transform: place.rotate === 0 ? "none" : `rotate(${String(place.rotate)}deg)` }}>
+            <img alt="" className="h-full w-full object-contain" src={logoUrl} />
+          </div>
+        </div>
+        <figcaption className="text-[11px] text-stone-500">{label}</figcaption>
+      </figure>;
+    })}
+  </div>;
+}
 
 type Loaded = Extract<BrandingLoadResult, { kind: "ok" }>;
 
@@ -28,10 +53,13 @@ export function ArtworkIdentityModal({ branding, branchId, branchName, onChanged
   const [phone, setPhone] = useState(branch?.phone ?? "");
   const [address, setAddress] = useState(branch?.address ?? "");
   const [city, setCity] = useState(branch?.city ?? "");
-  const [busy, setBusy] = useState<"logo" | "remove" | "contact" | null>(null);
+  const [busy, setBusy] = useState<"logo" | "remove" | "contact" | "scale" | null>(null);
   const [message, setMessage] = useState<{ kind: "error" | "ok"; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const logo = branding.facts.logo;
+  const savedScale = normalizeLogoScale(logo?.scalePercent);
+  const [scale, setScale] = useState(savedScale);
+  const limit = logo ? Math.min(...PREVIEW_BANDS.map(({ format }) => maxLogoScalePercent(logo, format))) : LOGO_SCALE_MAX;
 
   function apply(result: BrandingLoadResult, okText: string) {
     if (result.kind === "error") { setMessage({ kind: "error", text: result.message }); return; }
@@ -56,6 +84,14 @@ export function ArtworkIdentityModal({ branding, branchId, branchName, onChanged
     const result = await removeArtworkLogoAction(branchId);
     setBusy(null);
     apply(result, "Logo quitado.");
+  }
+
+  async function saveScale() {
+    setMessage(null);
+    setBusy("scale");
+    const result = await saveArtworkLogoScaleAction(scale, branchId);
+    setBusy(null);
+    apply(result, "Tamaño del logo guardado.");
   }
 
   async function saveContact() {
@@ -90,6 +126,19 @@ export function ArtworkIdentityModal({ branding, branchId, branchName, onChanged
             {logo ? <button className={`${secondaryButton} text-red-700`} disabled={busy !== null} onClick={() => { void removeLogo(); }} type="button">{busy === "remove" ? "Quitando…" : "Eliminar"}</button> : null}
           </div>
         </div>
+        {logo && branding.logoUrl ? <div className="mt-2 grid gap-3 rounded-lg border border-stone-200 p-3" data-testid="identity-logo-size">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm font-bold" htmlFor="identity-logo-scale">Tamaño del logo</label>
+            <button aria-label="Achicar el logo" className={secondaryButton} disabled={busy !== null || scale <= LOGO_SCALE_MIN} onClick={() => { setScale(normalizeLogoScale(scale - SCALE_STEP)); }} type="button">-</button>
+            <output className="w-14 text-center text-base font-black" data-testid="identity-logo-scale-value" htmlFor="identity-logo-scale">{`${String(scale)}%`}</output>
+            <button aria-label="Agrandar el logo" className={secondaryButton} disabled={busy !== null || scale >= LOGO_SCALE_MAX} onClick={() => { setScale(normalizeLogoScale(scale + SCALE_STEP)); }} type="button">+</button>
+            <button className={secondaryButton} disabled={busy !== null || scale === LOGO_SCALE_DEFAULT} onClick={() => { setScale(LOGO_SCALE_DEFAULT); }} type="button">100%</button>
+          </div>
+          <input aria-label="Tamaño del logo" className="w-full" id="identity-logo-scale" max={LOGO_SCALE_MAX} min={LOGO_SCALE_MIN} onChange={(event) => { setScale(normalizeLogoScale(Number(event.target.value))); }} step={SCALE_STEP} type="range" value={scale} />
+          <LogoScalePreview logo={logo} logoUrl={branding.logoUrl} scale={scale} />
+          {scale > limit ? <p className="text-xs text-amber-700" data-testid="identity-logo-limit">Con este logo la franja ya se llena en {limit}%: más allá no crece (nunca se corta ni se deforma).</p> : null}
+          <div><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-50" disabled={busy !== null || scale === savedScale} onClick={() => { void saveScale(); }} type="button">{busy === "scale" ? "Guardando…" : "Guardar tamaño"}</button></div>
+        </div> : <p className="text-xs text-stone-500" data-testid="identity-logo-size-disabled">Sin logo cargado no hay tamaño para ajustar: las piezas muestran el nombre de la organización.</p>}
         <p className="text-xs text-stone-500">Preferentemente PNG con fondo transparente · hasta {formatBytes(MAX_PHOTO_BYTES)}. Va dentro de la franja verde de las piezas; si es apaisado se acuesta de abajo hacia arriba.</p>
       </div>
 

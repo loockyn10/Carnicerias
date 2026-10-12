@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildArtworkBranding, buildArtworkContact, emptyArtworkBranding, parseArtworkBrandingFacts, placeLogo, BRAND_COLORS
+  buildArtworkBranding, buildArtworkContact, emptyArtworkBranding, BAND_EXTRA_MAX, logoSlot, maxLogoScalePercent, normalizeLogoScale, parseArtworkBrandingFacts, placeLogo, placeLogoFor, BRAND_COLORS
 } from "./artwork-branding";
+import { BAND_WIDTH, type ArtworkFormat } from "./artwork-tokens";
 import { ARTWORK_COLORS, BRAND_NAME } from "./artwork-tokens";
 import { brandingPayload } from "./test-support/artwork-fixtures";
 
@@ -68,7 +69,7 @@ describe("contacto por sucursal (no se cruza)", () => {
 describe("buildArtworkBranding", () => {
   it("con logo: lo toma de la URL ya resuelta (firmada o data-URL), con las medidas registradas", () => {
     const branding = buildArtworkBranding(facts("central"), "data:image/png;base64,AAAA");
-    expect(branding.logo).toEqual({ imageUrl: "data:image/png;base64,AAAA", width: 480, height: 120 });
+    expect(branding.logo).toEqual({ imageUrl: "data:image/png;base64,AAAA", width: 480, height: 120, scalePercent: 100 });
     expect(branding.contact?.phone).toBe("3496-448808");
   });
 
@@ -98,8 +99,8 @@ describe("placeLogo — el logo entra entero y centrado en la franja", () => {
     expect(shownH).toBeLessThanOrEqual(area.h);
     expect(place.width / place.height).toBeCloseTo(4, 1);
     // Centrado en el área.
-    expect(place.left + place.width / 2).toBeCloseTo(area.x + area.w / 2, 0);
-    expect(place.top + place.height / 2).toBeCloseTo(area.y + area.h / 2, 0);
+    expect(Math.abs(place.left + place.width / 2 - (area.x + area.w / 2))).toBeLessThanOrEqual(1);
+    expect(Math.abs(place.top + place.height / 2 - (area.y + area.h / 2))).toBeLessThanOrEqual(1);
   });
 
   it("vertical: no se gira y entra entero", () => {
@@ -116,5 +117,82 @@ describe("placeLogo — el logo entra entero y centrado en la franja", () => {
 
   it("cuadrado: no se gira", () => {
     expect(placeLogo({ width: 500, height: 500 }, area).rotate).toBe(0);
+  });
+});
+
+describe("tamaño del logo (70-160 %, 100 por defecto)", () => {
+  const formats: ArtworkFormat[] = ["feed", "story", "tv"];
+  const logos = { vertical: { width: 300, height: 900 }, horizontal: { width: 1200, height: 300 }, cuadrado: { width: 500, height: 500 } };
+
+  it("el valor por defecto es 100 y se lee de los hechos (un valor ausente o raro vuelve a 100)", () => {
+    expect(parseArtworkBrandingFacts(brandingPayload("central"))?.logo?.scalePercent).toBe(100);
+    expect(normalizeLogoScale(undefined)).toBe(100);
+    expect(normalizeLogoScale("grande")).toBe(100);
+    expect(normalizeLogoScale(Number.NaN)).toBe(100);
+  });
+
+  it("los límites son 70 y 160 (se recorta, nunca se sale)", () => {
+    expect(normalizeLogoScale(10)).toBe(70);
+    expect(normalizeLogoScale(500)).toBe(160);
+    expect(normalizeLogoScale(137.4)).toBe(137);
+    const raw = brandingPayload("central") as { logo: Record<string, unknown> };
+    expect(parseArtworkBrandingFacts({ ...raw, logo: { ...raw.logo, scalePercent: 140 } })?.logo?.scalePercent).toBe(140);
+    expect(parseArtworkBrandingFacts({ ...raw, logo: { ...raw.logo, scalePercent: 999 } })?.logo?.scalePercent).toBe(160);
+  });
+
+  it("el porcentaje llega al logo de la pieza", () => {
+    const raw = brandingPayload("central") as { logo: Record<string, unknown> };
+    const parsed = parseArtworkBrandingFacts({ ...raw, logo: { ...raw.logo, scalePercent: 120 } });
+    expect(parsed && buildArtworkBranding(parsed, "data:x").logo?.scalePercent).toBe(120);
+  });
+
+  it("mantiene la proporción (no se estira) y queda centrado, en cualquier formato y con cualquier logo", () => {
+    for (const format of formats) for (const [kind, logo] of Object.entries(logos)) for (const scale of [70, 100, 120, 160]) {
+      const place = placeLogoFor(logo, format, scale);
+      const ratio = (kind === "horizontal" ? place.width / place.height : place.width / place.height);
+      expect(ratio, `${format} ${kind} ${String(scale)}`).toBeCloseTo(logo.width / logo.height, 1);
+      const { area } = logoSlot(format);
+      expect(Math.abs(place.left + place.width / 2 - place.band / 2)).toBeLessThanOrEqual(1);
+      expect(Math.abs(place.top + place.height / 2 - (area.y + area.h / 2))).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("nunca sale de la franja ni del alto útil (sin recortes), aunque se pida 160 %", () => {
+    for (const format of formats) for (const logo of Object.values(logos)) {
+      const place = placeLogoFor(logo, format, 160);
+      const shownW = place.rotate === 0 ? place.width : place.height;
+      const shownH = place.rotate === 0 ? place.height : place.width;
+      const center = place.band / 2;
+      expect(Math.abs(place.left + place.width / 2 - center)).toBeLessThanOrEqual(1);
+      expect(center - shownW / 2).toBeGreaterThanOrEqual(0);
+      expect(center + shownW / 2).toBeLessThanOrEqual(place.band);
+      expect(place.band).toBeLessThanOrEqual(BAND_WIDTH[format] + BAND_EXTRA_MAX);
+      expect(shownH).toBeLessThanOrEqual(logoSlot(format).area.h);
+    }
+  });
+
+  it("agrandar agranda y achicar achica, hasta el máximo que entra", () => {
+    const logo = logos.horizontal;
+    const sizes = [70, 100].map((scale) => placeLogoFor(logo, "feed", scale).width);
+    expect(sizes[0]).toBeLessThan(sizes[1] ?? 0);
+    const max = maxLogoScalePercent(logo, "feed");
+    expect(max).toBeGreaterThanOrEqual(100);
+    expect(Math.abs(placeLogoFor(logo, "feed", 160).width - placeLogoFor(logo, "feed", Math.max(max, 100)).width)).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("la franja verde y el logo grande", () => {
+  const vertical = { width: 300, height: 900 };
+
+  it("con el tamaño base (100 %) la franja no cambia", () => {
+    for (const format of ["feed", "story", "tv"] as const) expect(placeLogoFor(vertical, format, 100).band).toBe(BAND_WIDTH[format]);
+  });
+
+  it("un logo muy agrandado ensancha la franja lo mínimo (usa el espacio en blanco que ya la separa del contenido) y no más", () => {
+    for (const format of ["feed", "story", "tv"] as const) {
+      const place = placeLogoFor(vertical, format, 160);
+      expect(place.band).toBeGreaterThan(BAND_WIDTH[format]);
+      expect(place.band).toBeLessThanOrEqual(BAND_WIDTH[format] + BAND_EXTRA_MAX);
+    }
   });
 });

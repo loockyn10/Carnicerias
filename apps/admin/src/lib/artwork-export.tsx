@@ -8,6 +8,7 @@ import {
 import { isHeroVariant, type HeroVariantId } from "./artwork-hero-layouts";
 import { buildArtworkBranding, parseArtworkBrandingFacts, type ArtworkBranding, type ArtworkContact } from "./artwork-branding";
 import { MAX_PHOTO_BYTES } from "./artwork-photo";
+import { ARTWORK_DISPLAY_FONT_400_BASE64, ARTWORK_DISPLAY_FONT_FAMILY } from "./artwork-display-font-data";
 import { ARTWORK_FONT_700_BASE64, ARTWORK_FONT_900_BASE64, ARTWORK_FONT_FAMILY } from "./artwork-font-data";
 import {
   ARTWORK_FORMATS, COLLAGE_MAX_ITEMS, COLLAGE_MIN_ITEMS, defaultHeadline, isArtworkTemplate, isExportableFormat,
@@ -219,7 +220,8 @@ export async function renderArtworkPng(model: OfferArtworkModel, format: Artwork
     height: spec.height,
     fonts: [
       { name: ARTWORK_FONT_FAMILY, data: fontBytes(ARTWORK_FONT_900_BASE64), weight: 900, style: "normal" },
-      { name: ARTWORK_FONT_FAMILY, data: fontBytes(ARTWORK_FONT_700_BASE64), weight: 700, style: "normal" }
+      { name: ARTWORK_FONT_FAMILY, data: fontBytes(ARTWORK_FONT_700_BASE64), weight: 700, style: "normal" },
+      { name: ARTWORK_DISPLAY_FONT_FAMILY, data: fontBytes(ARTWORK_DISPLAY_FONT_400_BASE64), weight: 400, style: "normal" }
     ]
   });
   return new Uint8Array(await response.arrayBuffer());

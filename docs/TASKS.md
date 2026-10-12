@@ -26,6 +26,7 @@ Implementado 2026-10-10 (D-083). **Migración pendiente: `202610180081_quantity_
 ## P0 — Cartelería: carpetas, «Generar todo actualizado» y TV automática: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-11 (D-086). **Migración pendiente: `202610200084_signage_folders_and_sources.sql`** (columnas nuevas en carpetas/pantallas/fotos, resolvedor único, 8 RPC, trigger de compatibilidad; **requiere la 081 y la 082**, o sea 069–073 antes). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+Pulido de identidad (tamaño del logo + «OFERTA» en Anton): **migración pendiente `202610200086_artwork_logo_scale.sql`** (aplicarla antes de desplegar el Admin; después `pnpm db:types`).
 
 1. Gráficas → «+ Nueva carpeta» («Ofertas finde», Feed + Story): marcar 5 o más promociones ya cargadas → «Guardar carpeta». Abrirla: debe decir ✓ precios vigentes y avisar las promociones sin foto o que vencen mañana.
 2. «Generar todo actualizado»: esperar el avance («8 / 10»), mirar las piezas (Feed y Story) y «Descargar todo (ZIP)»: carpeta `Ofertas finde - dd-mm-aaaa/Feed` y `/Story`. Cambiar el precio de una promoción en Promociones y volver a generar **sin tocar la carpeta**: la pieza nueva trae el precio nuevo.

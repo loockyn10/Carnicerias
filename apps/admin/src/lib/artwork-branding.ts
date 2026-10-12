@@ -1,5 +1,5 @@
 import { sanitizeGlyphs } from "./artwork-text";
-import { ARTWORK_COLORS, BRAND_NAME } from "./artwork-tokens";
+import { ARTWORK_COLORS, ARTWORK_FORMATS, BAND_WIDTH, BRAND_NAME, STORY_SAFE, type ArtworkFormat } from "./artwork-tokens";
 
 /**
  * Identidad compartida de TODAS las piezas (D-075): logo, colores de marca y contacto de la sucursal. Una sola especificación que leen
@@ -18,6 +18,8 @@ export interface ArtworkLogoRef {
   contentType: "image/jpeg" | "image/png";
   width: number;
   height: number;
+  /** Tamaño elegido en «Configurar identidad» (70-160; 100 = base). Ausente = 100. */
+  scalePercent?: number;
 }
 
 /** Hechos que entrega `get_artwork_branding(sucursal)`. */
@@ -32,6 +34,17 @@ export interface ArtworkLogo {
   imageUrl: string;
   width: number;
   height: number;
+  /** 70-160 (100 = tamaño base de la franja). */
+  scalePercent: number;
+}
+
+export const LOGO_SCALE_MIN = 70;
+export const LOGO_SCALE_MAX = 160;
+export const LOGO_SCALE_DEFAULT = 100;
+
+/** Porcentaje válido (entero entre 70 y 160); cualquier otra cosa vuelve al tamaño base. */
+export function normalizeLogoScale(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(LOGO_SCALE_MAX, Math.max(LOGO_SCALE_MIN, Math.round(value))) : LOGO_SCALE_DEFAULT;
 }
 
 /** Contacto ya normalizado para imprimir: al menos un dato presente (si no hay ninguno, la pieza no dibuja el bloque). */
@@ -77,7 +90,7 @@ function parseLogo(raw: unknown): ArtworkLogoRef | null {
   const height = asPositiveInt(raw.height);
   const contentType = raw.contentType;
   if (!storagePath || !width || !height || (contentType !== "image/jpeg" && contentType !== "image/png")) return null;
-  return { storagePath, contentType, width, height };
+  return { storagePath, contentType, width, height, scalePercent: normalizeLogoScale(raw.scalePercent) };
 }
 
 /** JSON de `get_artwork_branding` → hechos. `null` = respuesta que no se entiende. */
@@ -109,7 +122,7 @@ export function buildArtworkContact(branch: ArtworkBrandingFacts["branch"]): Art
 
 /** Hechos + URL de la imagen del logo (ya resuelta: firmada para el preview o data-URL para el PNG) → identidad de la pieza. */
 export function buildArtworkBranding(facts: ArtworkBrandingFacts, logoImageUrl: string | null): ArtworkBranding {
-  const logo = facts.logo && logoImageUrl ? { imageUrl: logoImageUrl, width: facts.logo.width, height: facts.logo.height } : null;
+  const logo = facts.logo && logoImageUrl ? { imageUrl: logoImageUrl, width: facts.logo.width, height: facts.logo.height, scalePercent: normalizeLogoScale(facts.logo.scalePercent) } : null;
   return {
     businessName: printable(facts.organizationName) ?? BRAND_NAME,
     logo,
@@ -141,15 +154,63 @@ export interface LogoPlacement {
  * Cómo se acomoda el logo en `area` (px dentro de la franja). Un logo apaisado (más ancho que alto, p. ej. «SuperOfertas» escrito
  * en horizontal) se gira -90° para que ocupe el alto de la franja; uno vertical se deja como está. Siempre entra entero y centrado.
  */
-export function placeLogo(logo: { width: number; height: number }, area: { x: number; y: number; w: number; h: number }): LogoPlacement {
+export function placeLogo(
+  logo: { width: number; height: number }, area: { x: number; y: number; w: number; h: number }, scalePercent = LOGO_SCALE_DEFAULT,
+  limit?: { w: number; h: number }
+): LogoPlacement {
   const rotate = logo.width > logo.height ? -90 : 0;
   // Lo que ocupa en pantalla (después de rotar): ancho/alto intercambiados si se gira.
   const shownW = rotate === 0 ? logo.width : logo.height;
   const shownH = rotate === 0 ? logo.height : logo.width;
-  const scale = Math.min(area.w / shownW, area.h / shownH);
+  const fit = Math.min(area.w / shownW, area.h / shownH);
+  // El porcentaje agranda o achica el tamaño base SIN deformar (misma escala en ancho y alto); `limit` es lo máximo que entra en la franja.
+  const wanted = fit * (normalizeLogoScale(scalePercent) / 100);
+  const scale = limit ? Math.min(wanted, limit.w / shownW, limit.h / shownH) : wanted;
   const width = Math.max(1, Math.round(logo.width * scale));
   const height = Math.max(1, Math.round(logo.height * scale));
   const cx = area.x + area.w / 2;
   const cy = area.y + area.h / 2;
   return { left: Math.round(cx - width / 2), top: Math.round(cy - height / 2), width, height, rotate };
+}
+
+/**
+ * Dónde va el logo en cada formato: `area` es la zona base (100 %: dentro de los márgenes de la franja y, en Story, de las zonas seguras)
+ * y `limit` lo máximo que puede ocupar un logo agrandado (casi todo el ancho de la franja; nunca se corta ni sale de ella).
+ */
+export function logoSlot(format: ArtworkFormat): { area: { x: number; y: number; w: number; h: number }; limit: { w: number; h: number } } {
+  const { height } = ARTWORK_FORMATS[format];
+  const band = BAND_WIDTH[format];
+  const pad = Math.round(band * 0.11);
+  const top = format === "story" ? STORY_SAFE.top : 40;
+  const bottom = format === "story" ? height - STORY_SAFE.bottom : height - 40;
+  const area = { x: pad, y: top + 12, w: band - pad * 2, h: bottom - top - 24 };
+  return { area, limit: { w: Math.round((band + BAND_EXTRA_MAX) * 0.94), h: area.h } };
+}
+
+/**
+ * Cuánto puede ensancharse la franja verde (px) cuando un logo agrandado lo necesita: sale del espacio en blanco que ya separa la franja
+ * del contenido (`CONTENT_GAP`, 36 px), así que ninguna composición se mueve ni se achica. Con el tamaño base la franja NO cambia.
+ */
+export const BAND_EXTRA_MAX = 20;
+
+/** Lo más grande (en %) que el logo puede mostrarse en `format` sin salirse de la franja; a partir de ahí el porcentaje ya no crece. */
+export function maxLogoScalePercent(logo: { width: number; height: number }, format: ArtworkFormat): number {
+  const { area, limit } = logoSlot(format);
+  const rotated = logo.width > logo.height;
+  const shownW = rotated ? logo.height : logo.width;
+  const shownH = rotated ? logo.width : logo.height;
+  const fit = Math.min(area.w / shownW, area.h / shownH);
+  return Math.floor((Math.min(limit.w / shownW, limit.h / shownH) / fit) * 100);
+}
+
+/** Caja del logo ya escalada para `format` (la usan las piezas y la vista previa de «Configurar identidad»). */
+export function placeLogoFor(logo: { width: number; height: number }, format: ArtworkFormat, scalePercent: number): LogoPlacement & { band: number } {
+  const { area, limit } = logoSlot(format);
+  const place = placeLogo(logo, area, scalePercent, limit);
+  const shownW = place.rotate === 0 ? place.width : place.height;
+  const base = BAND_WIDTH[format];
+  // La franja sólo se ensancha lo justo para que el logo agrandado respire (6 % de margen a cada lado) y nunca más que `BAND_EXTRA_MAX`.
+  const band = Math.min(base + BAND_EXTRA_MAX, Math.max(base, Math.ceil(shownW / 0.88)));
+  const shift = Math.round((band - base) / 2);
+  return { ...place, left: place.left + shift, band };
 }

@@ -1632,6 +1632,7 @@ export type Database = {
           created_by: string | null
           height_px: number
           organization_id: string
+          scale_percent: number
           size_bytes: number
           storage_path: string
           updated_at: string
@@ -1643,6 +1644,7 @@ export type Database = {
           created_by?: string | null
           height_px: number
           organization_id: string
+          scale_percent?: number
           size_bytes: number
           storage_path: string
           updated_at?: string
@@ -1654,6 +1656,7 @@ export type Database = {
           created_by?: string | null
           height_px?: number
           organization_id?: string
+          scale_percent?: number
           size_bytes?: number
           storage_path?: string
           updated_at?: string
@@ -5875,6 +5878,10 @@ export type Database = {
           p_storage_path: string
           p_width_px: number
         }
+        Returns: Json
+      }
+      set_organization_artwork_logo_scale: {
+        Args: { p_scale_percent: number }
         Returns: Json
       }
       set_pos_device_status: {

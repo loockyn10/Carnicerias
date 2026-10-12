@@ -173,7 +173,7 @@ describe("fetchSignageView (cliente del televisor)", () => {
     }));
     if (result.kind !== "ok") throw new Error("sin vista");
     expect(result.view.slides.map((slide) => slide.imageUrl)).toEqual([null, "/api/tv/t/media/b?v=1", null]);
-    expect(result.view.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120 });
+    expect(result.view.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120, scalePercent: 100 });
     expect(result.view.branding.contact).toBeNull();
     expect(result.view.branding.colors.green).toBe("#0B8A2F");
   });

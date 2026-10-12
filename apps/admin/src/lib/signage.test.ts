@@ -185,7 +185,7 @@ describe("identidad y fotos de la cartelería de TV (D-076)", () => {
   it("cada oferta lleva su foto resuelta por el resolvedor de la superficie y la identidad lleva el logo", () => {
     const view = buildSignageView(payload(), media);
     expect(view?.slides[0]?.imageUrl).toBe("/api/tv/t/media/a?v=org/prod/file.png");
-    expect(view?.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=org/branding/logo.png", width: 600, height: 200 });
+    expect(view?.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=org/branding/logo.png", width: 600, height: 200, scalePercent: 100 });
     expect(view?.branding.contact).toBeNull();
   });
 
