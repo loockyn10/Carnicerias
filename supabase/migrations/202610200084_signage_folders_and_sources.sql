@@ -288,57 +288,30 @@ declare
   d public.digital_signage_displays%rowtype;
   at_time timestamptz := now();
   v_result jsonb;
-  v_tiers jsonb;
 begin
   select * into d from public.digital_signage_displays where id = p_display_id;
   if not found then return '[]'::jsonb; end if;
-  v_tiers := app_private.signage_bulk_tiers(d.organization_id, d.branch_id, at_time);
 
   if d.content_source = 'ALL_PROMOTIONS' then
-    -- Tres fuentes, todas ya existentes (nada se copia ni se crea): (1) promociones explícitas de producto (product_weight_discounts: tramos por
-    -- peso y packs por total fijo); (2) productos UNIT con escalón «llevando N» vigente (los de la sucursal, o los globales sin sucursal); (3)
-    -- productos UNIT con Pack propio (D-064). (2) y (3) entran como UNA presentación por producto: el motor de TypeScript anuncia la de menor
-    -- precio por unidad (no una pantalla por escalón). Un producto con promoción explícita no se repite como producto.
+    -- Las promociones EXPLÍCITAS creadas en el módulo Promociones (product_weight_discounts: tramos por peso y packs por total fijo, p. ej.
+    -- «12 u por $8.900»). Las reglas globales de pricing (escalones «llevando N», Packs de producto) NO son contenido promocional elegido: siguen
+    -- funcionando en el POS pero no generan diapositivas por sí solas.
     select coalesce(jsonb_agg(jsonb_build_object(
-      'slide_id', x.ref_id, 'entry_id', x.ref_id, 'kind', x.kind, 'ord', x.ord,
-      'product_ref', case when x.kind = 'PRODUCT' then x.ref_id end, 'promotion_id', case when x.kind = 'PROMOTION' then x.ref_id end
+      'slide_id', x.promotion_id, 'entry_id', x.promotion_id, 'kind', 'PROMOTION', 'ord', x.ord, 'product_ref', null, 'promotion_id', x.promotion_id
     ) order by x.ord), '[]'::jsonb)
     into v_result
     from (
-      select u.ref_id, u.kind, (row_number() over (order by u.name, u.ref_id))::integer as ord
-      from (
-        select w.id as ref_id, 'PROMOTION'::text as kind, p.name
-        from public.product_weight_discounts w
-        join public.products p on p.id = w.product_id and p.organization_id = w.organization_id
-        where w.organization_id = d.organization_id
-          and app_private.signage_promotion_status(w.active, w.valid_from, w.valid_until, at_time) = 'ACTIVE'
-          and (w.branch_id is null or w.branch_id = d.branch_id)
-          and (d.branch_id is null or exists (
-            select 1 from public.branch_product_assortment a
-            where a.branch_id = d.branch_id and a.product_id = p.id and a.organization_id = p.organization_id
-          ))
-        union all
-        select p.id, 'PRODUCT', p.name
-        from public.products p
-        where p.organization_id = d.organization_id and p.active and p.unit_type = 'UNIT'
-          and (jsonb_array_length(v_tiers) > 0 or (p.pack_size_units is not null and coalesce(p.pack_discount_bps, 0) > 0))
-          and exists (
-            select 1 from public.product_prices pp
-            where pp.organization_id = p.organization_id and pp.product_id = p.id and (pp.branch_id = d.branch_id or pp.branch_id is null)
-              and pp.valid_from <= at_time and (pp.valid_to is null or pp.valid_to > at_time) and pp.price_cents > 0
-          )
-          and (d.branch_id is null or exists (
-            select 1 from public.branch_product_assortment a
-            where a.branch_id = d.branch_id and a.product_id = p.id and a.organization_id = p.organization_id
-          ))
-          and not exists (
-            select 1 from public.product_weight_discounts w
-            where w.product_id = p.id and w.organization_id = p.organization_id
-              and app_private.signage_promotion_status(w.active, w.valid_from, w.valid_until, at_time) = 'ACTIVE'
-              and (w.branch_id is null or w.branch_id = d.branch_id)
-          )
-      ) u
-      order by u.name, u.ref_id
+      select w.id as promotion_id, (row_number() over (order by p.name, w.id))::integer as ord
+      from public.product_weight_discounts w
+      join public.products p on p.id = w.product_id and p.organization_id = w.organization_id
+      where w.organization_id = d.organization_id
+        and app_private.signage_promotion_status(w.active, w.valid_from, w.valid_until, at_time) = 'ACTIVE'
+        and (w.branch_id is null or w.branch_id = d.branch_id)
+        and (d.branch_id is null or exists (
+          select 1 from public.branch_product_assortment a
+          where a.branch_id = d.branch_id and a.product_id = p.id and a.organization_id = p.organization_id
+        ))
+      order by p.name, w.id
       limit 100
     ) x;
     return v_result;

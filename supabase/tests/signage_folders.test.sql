@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(172);
+select plan(165);
 
 -- Covers 202610200084 (D-086): CARPETAS de gráficas y TV alimentada por PROMOCIONES.
 --   * una pantalla nueva reproduce «todas las promociones activas» que le aplican (sucursal, surtido, vigencia) sin cargar nada a mano;
@@ -446,86 +446,84 @@ select is((select s ->> 'packSizeUnits' from jsonb_array_elements(public.get_sig
 select is(public.t_sf_tv('global') ~ 'Coca Cola', true, 'and the TV keeps playing the promotion of that product');
 
 -- ---------------------------------------------------------------------------------------------
--- «Todas las promociones activas» incluye las promociones que ya usa el POS: escalones «llevando N» y Packs de producto (sin tablas
--- paralelas ni precios copiados: la pantalla lee los mismos escalones/packs que el POS y el motor de TypeScript calcula la oferta).
+-- «Todas las promociones activas» = SÓLO las promociones EXPLÍCITAS creadas en el módulo Promociones (product_weight_discounts).
+-- Las reglas globales de pricing (escalones «llevando N», Packs de producto) siguen valiendo en el POS pero NO generan diapositivas.
 -- ---------------------------------------------------------------------------------------------
 reset role;
--- 0a Azúcar JL 1KG ($1.650, Pack 10 u 25 %), 0b Galletitas ($1.000, sólo escalones), 0c Fideos ($900, sólo Pack 6 u 10 %), 0d Sal ($500 sin precio, con escalones).
+-- 0a Azúcar JL 1KG ($1.650, Pack 10 u 25 %), 0b Galletitas ($1.000, sólo escalones), 0c Fideos ($900, sólo Pack 6 u 10 %): reglas de pricing, SIN promoción.
+-- 0e/0f/0g/0h: promociones creadas a mano (HAMBURGUESA POLLO 12 u $8.900 global, HAMBURGUESA CERDO 12 u $15.000 sólo Avenida, CHICHARRON 1 u $10.000, MIXTA vencida).
 insert into public.products (id, organization_id, category_id, name, slug, sku, unit_type, active, inventory_role, pack_size_units, pack_discount_bps) values
   ('95000000-0000-4000-8000-00000000000a', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'AZUCAR JL 1KG', 'pg-azucar', 'PG-0A', 'UNIT', true, 'SELLABLE', 10, 2500),
   ('95000000-0000-4000-8000-00000000000b', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'Galletitas', 'pg-galletitas', 'PG-0B', 'UNIT', true, 'SELLABLE', null, null),
   ('95000000-0000-4000-8000-00000000000c', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'Fideos', 'pg-fideos', 'PG-0C', 'UNIT', true, 'SELLABLE', 6, 1000),
-  ('95000000-0000-4000-8000-00000000000d', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'Sal', 'pg-sal', 'PG-0D', 'UNIT', true, 'SELLABLE', null, null);
+  ('95000000-0000-4000-8000-00000000000e', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'HAMBURGUESA POLLO', 'pg-hamb-pollo', 'PG-0E', 'UNIT', true, 'SELLABLE', null, null),
+  ('95000000-0000-4000-8000-00000000000f', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'HAMBURGUESA CERDO', 'pg-hamb-cerdo', 'PG-0F', 'UNIT', true, 'SELLABLE', null, null),
+  ('95000000-0000-4000-8000-000000000010', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'CHICHARRON BOLSA 5KG', 'pg-chicharron', 'PG-10', 'UNIT', true, 'SELLABLE', null, null),
+  ('95000000-0000-4000-8000-000000000011', '92000000-0000-4000-8000-000000000001', '94000000-0000-4000-8000-000000000001', 'HAMBURGUESA MIXTA', 'pg-hamb-mixta', 'PG-11', 'UNIT', true, 'SELLABLE', null, null);
 insert into public.branch_product_assortment (organization_id, branch_id, product_id)
 select p.organization_id, b.id, p.id from public.products p join public.branches b on b.organization_id = p.organization_id
-where p.id in ('95000000-0000-4000-8000-00000000000a', '95000000-0000-4000-8000-00000000000b', '95000000-0000-4000-8000-00000000000c', '95000000-0000-4000-8000-00000000000d');
-insert into public.product_prices (organization_id, product_id, branch_id, price_cents, valid_from) values
-  ('92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-00000000000a', null, 165000, now() - interval '5 day'),
-  ('92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-00000000000b', null, 100000, now() - interval '5 day'),
-  ('92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-00000000000c', null, 90000, now() - interval '5 day');
--- Escalones de AVENIDA (3 u 15 %, 5 u 20 %); Janssen no tiene; la organización tiene los suyos para las pantallas sin sucursal.
+where p.id in ('95000000-0000-4000-8000-00000000000a', '95000000-0000-4000-8000-00000000000b', '95000000-0000-4000-8000-00000000000c',
+  '95000000-0000-4000-8000-00000000000e', '95000000-0000-4000-8000-00000000000f', '95000000-0000-4000-8000-000000000010', '95000000-0000-4000-8000-000000000011');
+insert into public.product_prices (organization_id, product_id, branch_id, price_cents, valid_from)
+select '92000000-0000-4000-8000-000000000001', x.id, null, x.cents, now() - interval '5 day' from (values
+  ('95000000-0000-4000-8000-00000000000a'::uuid, 165000), ('95000000-0000-4000-8000-00000000000b', 100000), ('95000000-0000-4000-8000-00000000000c', 90000),
+  ('95000000-0000-4000-8000-00000000000e', 90000), ('95000000-0000-4000-8000-00000000000f', 130000), ('95000000-0000-4000-8000-000000000010', 1100000),
+  ('95000000-0000-4000-8000-000000000011', 90000)) as x(id, cents);
+-- Reglas globales: escalones 3 u 15 % y 5 u 20 % (Avenida y la organización).
 insert into public.branch_promotions (organization_id, branch_id, minimum_units, discount_bps) values
   ('92000000-0000-4000-8000-000000000001', '93000000-0000-4000-8000-000000000001', 3, 1500),
   ('92000000-0000-4000-8000-000000000001', '93000000-0000-4000-8000-000000000001', 5, 2000);
 insert into public.organization_quantity_discount_tiers (organization_id, minimum_units, discount_bps) values
   ('92000000-0000-4000-8000-000000000001', 3, 1500), ('92000000-0000-4000-8000-000000000001', 5, 2000);
-set local role authenticated;
-select set_config('request.jwt.claim.sub', '91000000-0000-4000-8000-000000000001', true);
-select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-
 reset role;
 create function public.t_sf_slide(p_name text, p_product text) returns jsonb language sql stable as $$
   select s from jsonb_array_elements(public.get_signage_display(public.t_sf_tok(p_name)) -> 'slides') s where s ->> 'name' = p_product limit 1 $$;
 grant execute on function public.t_sf_slide(text, text) to authenticated, anon;
+-- Antes de crear promociones manuales: sólo con reglas globales, NADA de eso se reproduce.
 set local role authenticated;
+select set_config('request.jwt.claim.sub', '91000000-0000-4000-8000-000000000001', true);
 select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-
 select public.save_signage_display_source(public.t_sf_id('avenida'), 'TV Avenida', '93000000-0000-4000-8000-000000000001', 8, true, 'ALL_PROMOTIONS', null);
 select public.save_signage_display_source(public.t_sf_id('janssen'), 'TV Janssen', '93000000-0000-4000-8000-000000000002', 8, true, 'ALL_PROMOTIONS', null);
-select is(public.t_sf_tv('avenida') ~ 'AZUCAR JL 1KG', true, 'Avenida plays AZUCAR JL 1KG automatically (3u + 5u + Pack) with no slide loaded by hand');
-select is(public.t_sf_slide('avenida', 'AZUCAR JL 1KG') -> 'bulkTiers', '[{"minimumUnits":3,"discountBps":1500},{"minimumUnits":5,"discountBps":2000}]'::jsonb, 'with BOTH quantity tiers the POS reads (3u 15 %, 5u 20 %)');
-select is((public.t_sf_slide('avenida', 'AZUCAR JL 1KG') ->> 'packSizeUnits') || '/' || (public.t_sf_slide('avenida', 'AZUCAR JL 1KG') ->> 'packDiscountBps') || '/' || (public.t_sf_slide('avenida', 'AZUCAR JL 1KG') ->> 'listPriceCents'), '10/2500/165000', 'its Pack (10 u, 25 %) and the CURRENT list price (nothing is copied)');
-select is(public.t_sf_tv('avenida') ~ 'Galletitas', true, 'a product with only quantity tiers is played too');
-select is(public.t_sf_tv('avenida') ~ 'Fideos', true, 'a product with only a Pack is played');
-select is(public.t_sf_tv('avenida') ~ 'Sal', false, 'a product WITHOUT price never plays, even with tiers');
-select is(array_length(string_to_array(public.t_sf_tv('avenida'), 'Coca Cola'), 1) - 1, 1, 'a product that already has an explicit promotion is not repeated as a product slide');
-select is(array_length(string_to_array(public.t_sf_tv('avenida'), 'AZUCAR JL 1KG'), 1) - 1, 1, 'and AZUCAR (3u + 5u + Pack) is ONE slide, not three');
-select is(public.t_sf_reasons('avenida') ~ 'AZUCAR JL 1KG:OK', true, 'the editor view lists it as available');
--- Sucursal: Janssen no tiene escalones, sí el Pack.
-select is(public.t_sf_slide('janssen', 'AZUCAR JL 1KG') -> 'bulkTiers', '[]'::jsonb, 'Janssen has no quantity tiers (they are per branch, same as the POS)');
-select is(public.t_sf_tv('janssen') ~ 'AZUCAR JL 1KG', true, 'but still plays AZUCAR because of its Pack');
-select is(public.t_sf_tv('janssen') ~ 'Galletitas', false, 'Galletitas (tiers only) does not play where there are no tiers');
-select is(public.t_sf_tv('janssen') ~ 'Fideos', true, 'the Pack-only product plays in Janssen');
--- Pantalla sin sucursal: los escalones de la organización.
-select is(public.t_sf_slide('global', 'Galletitas') -> 'bulkTiers', '[{"minimumUnits":3,"discountBps":1500},{"minimumUnits":5,"discountBps":2000}]'::jsonb, 'a screen with no branch uses the organization tiers');
-select is(public.t_sf_tv('global') ~ 'AZUCAR JL 1KG', true, 'and plays AZUCAR too');
--- Surtido, organización y datos sensibles.
+select is(public.t_sf_tv('avenida') ~ 'Galletitas', false, 'a product with only the global 3u/5u tiers does NOT play (Avenida has those tiers)');
+select is(public.t_sf_tv('avenida') ~ 'AZUCAR|Fideos', false, 'nor one with only a product Pack / pricing config and no explicit promotion');
+select is(public.t_sf_tv('global') ~ 'AZUCAR|Fideos|Galletitas', false, 'nor on a screen with no branch (organization tiers)');
+select is(public.t_sf_tv('avenida'), 'Chorizo | Coca Cola | Costilla de cerdo | Matambre', 'the TV keeps playing exactly the explicit promotions, however many global rules exist');
+select is(public.t_sf_slide('avenida', 'Coca Cola') -> 'bulkTiers', '[{"minimumUnits":3,"discountBps":1500},{"minimumUnits":5,"discountBps":2000}]'::jsonb, 'the global rules still reach the slide facts (the POS pricing is untouched)');
+-- Promociones creadas a mano: aparecen solas.
 reset role;
-delete from public.branch_product_assortment where branch_id = '93000000-0000-4000-8000-000000000002' and product_id = '95000000-0000-4000-8000-00000000000a';
+insert into public.product_weight_discounts (id, organization_id, product_id, branch_id, promotion_mode, pack_quantity_units, pack_price_cents, valid_from, valid_until) values
+  ('96000000-0000-4000-8000-000000000020', '92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-00000000000e', null, 'PACK_FIXED_TOTAL', 12, 890000, now() - interval '1 hour', null),
+  ('96000000-0000-4000-8000-000000000021', '92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-00000000000f', '93000000-0000-4000-8000-000000000001', 'PACK_FIXED_TOTAL', 12, 1500000, now() - interval '1 hour', null),
+  ('96000000-0000-4000-8000-000000000022', '92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-000000000010', null, 'PACK_FIXED_TOTAL', 1, 1000000, now() - interval '1 hour', null),
+  ('96000000-0000-4000-8000-000000000023', '92000000-0000-4000-8000-000000000001', '95000000-0000-4000-8000-000000000011', null, 'PACK_FIXED_TOTAL', 12, 800000, now() - interval '10 day', now() - interval '1 day');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-select is(public.t_sf_tv('janssen') ~ 'AZUCAR JL 1KG', false, 'out of the Janssen assortment AZUCAR no longer plays there');
-select is(public.t_sf_tv('avenida') ~ 'AZUCAR JL 1KG', true, 'and keeps playing in Avenida');
-select is(public.t_sf_tv('b-display') ~ 'AZUCAR|Galletitas|Fideos', false, 'another organization never sees these products');
+select is(public.t_sf_tv('avenida'), 'CHICHARRON BOLSA 5KG | Chorizo | Coca Cola | Costilla de cerdo | HAMBURGUESA CERDO | HAMBURGUESA POLLO | Matambre', 'several active manual promotions play together with the existing ones (global, Avenida, 1 u)');
+select is(public.t_sf_tv('janssen') ~ 'HAMBURGUESA POLLO' and public.t_sf_tv('janssen') ~ 'CHICHARRON', true, 'a global promotion plays in every branch');
+select is(public.t_sf_tv('janssen') ~ 'HAMBURGUESA CERDO', false, 'a promotion of ANOTHER branch does not play');
+select is(public.t_sf_tv('avenida') ~ 'MIXTA', false, 'an expired manual promotion does not play');
+select is(public.t_sf_tv('global') ~ 'HAMBURGUESA POLLO', true, 'a screen with no branch plays the global ones');
+select is(public.t_sf_tv('global') ~ 'HAMBURGUESA CERDO', false, 'but not a branch-only promotion');
+select is(public.t_sf_tv('b-display') ~ 'HAMBURGUESA|CHICHARRON', false, 'another organization never sees them');
+select is((public.t_sf_slide('avenida', 'HAMBURGUESA POLLO') -> 'promotion' ->> 'packQuantityUnits') || '/' || (public.t_sf_slide('avenida', 'HAMBURGUESA POLLO') -> 'promotion' ->> 'packPriceCents'), '12/890000', 'the slide carries the promotion as created: 12 u for $8.900');
 select ok(public.get_signage_display(public.t_sf_tok('avenida'))::text !~* 'cost_cents|costCents|margin|organization_id|organizationId', 'the TV payload carries no costs or tenant ids');
--- Cambios y desactivación: se reflejan en la siguiente lectura (el polling de la TV).
+-- Desactivación y cambio de producto.
 reset role;
-update public.branch_promotions set active = false, valid_until = now() where branch_id = '93000000-0000-4000-8000-000000000001';
+update public.product_weight_discounts set active = false, valid_until = now() where id = '96000000-0000-4000-8000-000000000020';
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-select is(public.t_sf_tv('avenida') ~ 'Galletitas', false, 'closing the tiers removes the tiers-only product from the TV');
-select is(public.t_sf_slide('avenida', 'AZUCAR JL 1KG') -> 'bulkTiers', '[]'::jsonb, 'and AZUCAR keeps only its Pack');
+select is(public.t_sf_tv('avenida') ~ 'HAMBURGUESA POLLO', false, 'an inactivated manual promotion leaves the TV on the next read');
 reset role;
-update public.products set pack_size_units = null, pack_discount_bps = null where id = '95000000-0000-4000-8000-00000000000a';
+delete from public.branch_product_assortment where branch_id = '93000000-0000-4000-8000-000000000001' and product_id = '95000000-0000-4000-8000-000000000010';
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-select is(public.t_sf_tv('avenida') ~ 'AZUCAR JL 1KG', false, 'without tiers or Pack AZUCAR leaves the TV');
+select is(public.t_sf_tv('avenida') ~ 'CHICHARRON', false, 'a promotion whose product is out of the branch assortment does not play');
 reset role;
-update public.products set active = false where id = '95000000-0000-4000-8000-00000000000c';
+update public.products set active = false where id = '95000000-0000-4000-8000-00000000000f';
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"91000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
-select is(public.t_sf_tv('avenida') ~ 'Fideos', false, 'a deactivated product leaves the TV');
-select is(public.t_sf_tv('avenida'), 'Chorizo | Coca Cola | Costilla de cerdo | Matambre', 'the explicit promotions (weight tiers, packs) keep playing next to them');
+select is(public.t_sf_tv('avenida') ~ 'HAMBURGUESA CERDO', false, 'nor one whose product is deactivated');
 
 select * from finish();
 rollback;
