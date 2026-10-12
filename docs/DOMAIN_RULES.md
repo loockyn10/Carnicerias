@@ -102,6 +102,8 @@ El precio manual no modifica `product_prices` ni afecta ventas futuras. El descu
 
 ## Promociones
 
+**Cartelería (D-086):** Promociones es la fuente de verdad comercial de las gráficas (Feed/Story) y de la TV: se carga una sola vez y ninguna pieza, carpeta ni pantalla guarda precio, descuento ni foto; todo se resuelve con el precio y la promoción vigentes (sucursal > global, vigencia, surtido) y el motor de pricing existente. Una promoción vencida, desactivada o futura nunca se genera ni se reproduce como vigente.
+
 Dos modalidades (`promotion_mode`), ver D-039:
 
 - **THRESHOLD** (umbral, "desde cierta cantidad"): porcentaje o precio fijo por kg, sin cambios respecto al modelo anterior. Sólo para productos `WEIGHT`.

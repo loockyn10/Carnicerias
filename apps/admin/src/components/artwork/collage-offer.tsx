@@ -2,7 +2,12 @@ import { hasPromotion, type OfferArtworkModel, type OfferItem } from "../../lib/
 import { collageLayout, tileParts, type CollageFormat, type Rect, type TileSpec } from "../../lib/artwork-layout";
 import { fitText } from "../../lib/artwork-text";
 import { ARTWORK_COLORS as C } from "../../lib/artwork-tokens";
-import { BrandBand, Box, Canvas, ContactBlock, Headline, PhotoBlock, PriceBadge, TextBlock } from "./artwork-parts";
+import { seedFromText } from "../../lib/artwork-shapes";
+import { BrandBand, Box, Canvas, ContactBlock, Headline, PhotoStage, PriceBadge, TextBlock } from "./artwork-parts";
+
+function inflateRect(rect: Rect, by: number): Rect {
+  return { x: rect.x - by, y: rect.y - by, w: rect.w + by * 2, h: rect.h + by * 2 };
+}
 
 /**
  * Plantilla «Collage de ofertas» (D-075): de 2 a 5 productos en una sola pieza, Feed (1080 × 1350) o Story (1080 × 1920). Misma
@@ -15,9 +20,9 @@ function Tile({ spec, item, area }: { spec: TileSpec; item: OfferItem; area: Rec
   const parts = tileParts(spec, hasPromotion(item), area);
   const name = fitText({ text: item.productName, maxWidth: parts.name.w, maxLines: parts.nameMaxLines, maxSize: parts.nameMaxSize, minSize: 20, maxHeight: parts.name.h });
   return <>
-    <PhotoBlock imageUrl={item.imageUrl} rect={parts.photo} />
+    <PhotoStage blob={inflateRect(parts.photo, 10)} imageUrl={item.imageUrl} photo={parts.photo} seed={seedFromText(item.productId)} transparent={item.imageTransparent} />
     <Box rect={parts.name} style={{ alignItems: "center", justifyContent: "center" }}><TextBlock color={C.BLACK} fitted={name} /></Box>
-    <PriceBadge align={parts.priceAlign} conditionMaxSize={Math.round(parts.priceMaxSize * 0.34)} item={item} maxPriceSize={parts.priceMaxSize} rect={parts.price} />
+    <PriceBadge align={parts.priceAlign} conditionMaxSize={Math.round(parts.priceMaxSize * 0.34)} item={item} maxPriceSize={parts.priceMaxSize} rect={parts.price} seed={seedFromText(item.productId) + 3} shape="splash" />
   </>;
 }
 

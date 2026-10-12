@@ -34,7 +34,8 @@ describe.each(renderers)("collage %s", (format, Renderer) => {
     // Una foto por producto (+ el logo) y una pastilla de precio amarilla por producto.
     expect(count(html, "data:image/png;base64,BBBB")).toBe(n);
     expect(count(html, 'data-testid="artwork-price"')).toBe(n);
-    expect(count(html.toLowerCase(), `background:${PRICE_BADGE_YELLOW.toLowerCase()}`)).toBe(n);
+    expect(count(html, "artwork-price-splash")).toBe(n);
+    expect(html.toLowerCase()).toContain(PRICE_BADGE_YELLOW.toLowerCase());
     for (const price of ["11.999", "17.999", "17.999", "5.499", "19.999"].slice(0, n)) expect(text).toContain(price);
   });
 

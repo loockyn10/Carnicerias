@@ -114,7 +114,9 @@ export function fitText(options: {
   for (let size = options.maxSize; size >= options.minSize; size -= 2) {
     const lines = wrapLines(text, size, options.maxWidth, weight);
     const widest = Math.max(0, ...lines.map((line) => textWidth(line, size, weight)));
-    if (lines.length <= options.maxLines && widest <= options.maxWidth && lines.length * size * lineHeight <= maxHeight) return { size, lines, truncated: false };
+    // Una palabra más ancha que la caja se partiría por letras («MILANESA / S»): ese tamaño no sirve, se prueba uno menor.
+    const wordFits = text.split(" ").every((word) => textWidth(word, size, weight) <= options.maxWidth);
+    if (wordFits && lines.length <= options.maxLines && widest <= options.maxWidth && lines.length * size * lineHeight <= maxHeight) return { size, lines, truncated: false };
   }
   const size = options.minSize;
   const lines = wrapLines(text, size, options.maxWidth, weight);

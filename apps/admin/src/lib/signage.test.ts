@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildEditorDisplay, buildOfferSlide, buildSignageView, clampSlideSeconds, findSignageMedia, formatMinimumWeight, isWellFormedToken, moveItem,
+  buildOfferSlide, buildSignageView, clampSlideSeconds, findSignageMedia, formatMinimumWeight, isWellFormedToken, moveItem,
   parseSlideFacts, splitPrice, summarizeOffer, tvPath, type SlideFacts
 } from "./signage";
 
@@ -216,27 +216,7 @@ describe("identidad y fotos de la cartelería de TV (D-076)", () => {
   });
 });
 
-describe("editor del Admin", () => {
-  const adminPayload = {
-    displayId: "d1", name: "TV Despensa Central", enabled: true, branchId: "b1", slideDurationSeconds: 10, tokenRotatedAt: "2026-10-07T12:00:00Z",
-    slides: [
-      { slideId: "s1", position: 0, productId: "p1", name: "Mayonesa", sku: "SKU1", unitType: "UNIT", available: true, unavailableReason: null,
-        listPriceCents: "203500", bulkMinimumUnits: 3, bulkDiscountBps: 1500, weightTiers: [] },
-      { slideId: "s2", position: 1, productId: "p2", name: "Viejo", sku: null, unitType: "UNIT", available: false, unavailableReason: "NO_PRICE",
-        listPriceCents: null, bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [] }
-    ]
-  };
-
-  it("resume la oferta de cada slide y conserva el motivo de los no disponibles", () => {
-    const display = buildEditorDisplay(adminPayload);
-    expect(display?.name).toBe("TV Despensa Central");
-    expect(display?.slideDurationSeconds).toBe(10);
-    expect(display?.branchId).toBe("b1");
-    expect(display?.entries[0]?.summary).toBe("$ 1.729,75 · llevando 3 unidades");
-    expect(display?.entries[0]?.unavailable).toBeNull();
-    expect(display?.entries[1]).toMatchObject({ summary: null, unavailable: "NO_PRICE" });
-  });
-
+describe("textos y reordenamiento del Admin", () => {
   it("summarizeOffer no repite la condición cuando no hay promoción", () => {
     const offer = buildOfferSlide(weight());
     expect(offer && summarizeOffer(offer)).toBe("$ 11.000 / kg");
@@ -256,7 +236,7 @@ describe("editor del Admin", () => {
 describe("privacidad: lo que se dibuja no contiene costos, márgenes ni datos administrativos", () => {
   it("una oferta sólo tiene campos comerciales", () => {
     const offer = buildOfferSlide(unit());
-    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "imageUrl", "key", "name", "price", "priceSuffix", "promo", "regularPrice", "secondary", "unitType", "variant"]);
+    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "imageTransparent", "imageUrl", "key", "mechanic", "name", "price", "priceSuffix", "promo", "regularPrice", "savings", "secondary", "unitType", "validUntil", "variant"]);
   });
 
   it("aunque la base mandara campos de más, la vista no los arrastra", () => {

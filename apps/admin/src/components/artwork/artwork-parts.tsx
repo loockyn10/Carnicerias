@@ -4,6 +4,7 @@ import { formatPriceText, hasPromotion, heroPrice, type OfferItem } from "../../
 import { placeLogo, type ArtworkBranding, type ArtworkContact } from "../../lib/artwork-branding";
 import { ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import type { Rect } from "../../lib/artwork-layout";
+import { burstPoints, organicBlobPath, organicPillPath } from "../../lib/artwork-shapes";
 import { fitText, textWidth, type FittedText } from "../../lib/artwork-text";
 import { ARTWORK_COLORS as C, ARTWORK_FORMATS, BAND_WIDTH, PRICE_BADGE, STORY_SAFE, type ArtworkFormat } from "../../lib/artwork-tokens";
 import type { OfferPrice } from "../../lib/signage";
@@ -24,20 +25,27 @@ export function Box({ rect, children, style }: { rect: Rect; children?: ReactNod
   return <div style={{ position: "absolute", left: rect.x, top: rect.y, width: rect.w, height: rect.h, display: "flex", ...style }}>{children}</div>;
 }
 
+/** Alineación horizontal de un bloque de texto dentro de su caja. */
+export type TextAlign = "start" | "center" | "end";
+
+const JUSTIFY: Record<TextAlign, "flex-start" | "center" | "flex-end"> = { start: "flex-start", center: "center", end: "flex-end" };
+
 /** Línea de texto de un solo renglón, sin ajuste automático (el tamaño ya viene calculado). */
-export function Line({ text, size, color, weight = 900, lineHeight = 1, align = "center" }: {
-  text: string; size: number; color: string; weight?: 700 | 900; lineHeight?: number; align?: "center" | "flex-start";
+export function Line({ text, size, color, weight = 900, lineHeight = 1, align = "center", decoration }: {
+  text: string; size: number; color: string; weight?: 700 | 900; lineHeight?: number; align?: "center" | "flex-start" | "flex-end"; decoration?: "line-through";
 }) {
   const height = Math.round(size * lineHeight);
   return <div style={{
     display: "flex", justifyContent: align, alignItems: "center", width: "100%", height, fontSize: size, lineHeight: `${String(height)}px`,
-    fontWeight: weight, color, whiteSpace: "nowrap"
+    fontWeight: weight, color, whiteSpace: "nowrap", ...(decoration ? { textDecoration: decoration } : {})
   }}>{text}</div>;
 }
 
-export function TextBlock({ fitted, color, lineHeight = 1.02, weight = 900 }: { fitted: FittedText; color: string; lineHeight?: number; weight?: 700 | 900 }) {
-  return <div style={{ display: "flex", flexDirection: "column", width: "100%", alignItems: "center", justifyContent: "center" }}>
-    {fitted.lines.map((line, index) => <Line color={color} key={`${String(index)}-${line}`} lineHeight={lineHeight} size={fitted.size} text={line} weight={weight} />)}
+export function TextBlock({ fitted, color, lineHeight = 1.02, weight = 900, align = "center" }: {
+  fitted: FittedText; color: string; lineHeight?: number; weight?: 700 | 900; align?: TextAlign;
+}) {
+  return <div style={{ display: "flex", flexDirection: "column", width: "100%", alignItems: JUSTIFY[align], justifyContent: "center" }}>
+    {fitted.lines.map((line, index) => <Line align={JUSTIFY[align]} color={color} key={`${String(index)}-${line}`} lineHeight={lineHeight} size={fitted.size} text={line} weight={weight} />)}
   </div>;
 }
 
@@ -102,23 +110,23 @@ function FallbackName({ area, name }: { area: Rect; name: string }) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** Titular manual de la pieza, en rojo, de un solo renglón. */
-export function Headline({ rect, text, maxSize, color }: { rect: Rect; text: string; maxSize: number; color: string }) {
+export function Headline({ rect, text, maxSize, color, align = "center" }: { rect: Rect; text: string; maxSize: number; color: string; align?: TextAlign }) {
   const fitted = fitText({ text, maxWidth: rect.w, maxLines: 1, maxSize, minSize: 44 });
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center" }}><TextBlock color={color} fitted={fitted} lineHeight={1} /></Box>;
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}><TextBlock align={align} color={color} fitted={fitted} lineHeight={1} /></Box>;
 }
 
 /** Nombre del producto (hasta `maxLines` renglones) y, para productos por peso, «X KG» en verde debajo (sólo `showUnitLabel`). */
-export function NameBlock({ rect, item, maxSize, minSize, maxLines, showUnitLabel = true }: {
-  rect: Rect; item: OfferItem; maxSize: number; minSize: number; maxLines: number; showUnitLabel?: boolean;
+export function NameBlock({ rect, item, maxSize, minSize, maxLines, showUnitLabel = true, align = "center" }: {
+  rect: Rect; item: OfferItem; maxSize: number; minSize: number; maxLines: number; showUnitLabel?: boolean; align?: TextAlign;
 }) {
   const label = showUnitLabel ? item.unitLabel : null;
   // El renglón «X KG» ocupa lugar: se descuenta del alto disponible para el nombre.
   const reserve = label ? Math.round(maxSize * 0.62) : 0;
   const fitted = fitText({ text: item.productName, maxWidth: rect.w, maxLines, maxSize, minSize, maxHeight: rect.h - reserve });
   const labelSize = Math.round(fitted.size * 0.72);
-  return <Box rect={rect} style={{ flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-    <TextBlock color={C.BLACK} fitted={fitted} />
-    {label ? <div style={{ display: "flex", width: "100%", marginTop: Math.round(fitted.size * 0.1) }}><Line color={C.BRAND_GREEN} size={labelSize} text={label} /></div> : null}
+  return <Box rect={rect} style={{ flexDirection: "column", alignItems: JUSTIFY[align], justifyContent: "center" }}>
+    <TextBlock align={align} color={C.BLACK} fitted={fitted} />
+    {label ? <div style={{ display: "flex", width: "100%", marginTop: Math.round(fitted.size * 0.1) }}><Line align={JUSTIFY[align]} color={C.BRAND_GREEN} size={labelSize} text={label} /></div> : null}
   </Box>;
 }
 
@@ -140,6 +148,65 @@ export function PhotoBlock({ rect, imageUrl }: { rect: Rect; imageUrl: string | 
   if (!imageUrl) return <PhotoFallback rect={rect} />;
   return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center" }}>
     <img alt="" height={rect.h} src={imageUrl} style={{ width: rect.w, height: rect.h, objectFit: "contain" }} width={rect.w} />
+  </Box>;
+}
+
+/** Mancha orgánica que se estira a `rect` (un `<path>` de la forma 0..100 de `organicBlobPath`). Sólo decoración, sin texto. */
+export function Blob({ rect, seed, color, wobble = 0.16, testId }: { rect: Rect; seed: number; color: string; wobble?: number; testId?: string }) {
+  return <Box rect={rect}>
+    <svg data-testid={testId} height={rect.h} preserveAspectRatio="none" viewBox="0 0 100 100" width={rect.w} xmlns={SVG_NS}>
+      <path d={organicBlobPath(seed, { wobble })} fill={color} />
+    </svg>
+  </Box>;
+}
+
+/**
+ * La foto del producto como protagonista: con fondo TRANSPARENTE se aprovecha con una mancha amarilla suave detrás (un recorte flota
+ * sobre blanco); con fondo propio (JPG o PNG opaco) se deja tal cual para no degradar el diseño con un recuadro blanco sobre color.
+ */
+export function PhotoStage({ photo, blob, seed, imageUrl, transparent }: { photo: Rect; blob: Rect; seed: number; imageUrl: string | null; transparent: boolean }) {
+  return <>
+    {imageUrl && transparent ? <Blob color={C.BLOB_YELLOW} rect={blob} seed={seed} testId="artwork-blob" /> : null}
+    <PhotoBlock imageUrl={imageUrl} rect={photo} />
+  </>;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Mecánica promocional y sello de ahorro
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * La mecánica de la oferta dicha en grande («LLEVANDO 3», «PACK 10 UNIDADES», «DESDE 2 KG»): una etiqueta verde con letras blancas,
+ * ajustada al texto y apenas girada, anclada a `align` dentro de su zona. No se dibuja si la oferta no tiene promoción.
+ */
+export function MechanicTag({ rect, text, maxSize, align = "center", rotate = 0 }: { rect: Rect; text: string | null; maxSize: number; align?: TextAlign; rotate?: number }) {
+  if (!text) return null;
+  const padX = Math.round(maxSize * 0.5);
+  const fitted = fitText({ text, maxWidth: rect.w - padX * 2, maxLines: 1, maxSize, minSize: 28 });
+  const width = Math.min(rect.w, Math.ceil(textWidth(fitted.lines[0] ?? text, fitted.size) + padX * 2));
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}>
+    <div data-testid="artwork-mechanic" style={{
+      display: "flex", alignItems: "center", justifyContent: "center", width, height: rect.h, background: C.BRAND_GREEN, borderRadius: Math.round(rect.h * 0.3),
+      transform: rotate ? `rotate(${String(rotate)}deg)` : "none"
+    }}><Line color={C.WHITE} size={fitted.size} text={fitted.lines[0] ?? text} /></div>
+  </Box>;
+}
+
+/** Sello rojo de ahorro («25% OFF»): estrella de puntas suaves con el porcentaje grande. Sólo si la regla vigente es un porcentaje real. */
+export function SavingsSticker({ rect, text }: { rect: Rect; text: string | null }) {
+  if (!text) return null;
+  const [percent = text, ...rest] = text.split(" ");
+  const tail = rest.join(" ") || "OFF";
+  const percentSize = fitText({ text: percent, maxWidth: Math.round(rect.w * 0.66), maxLines: 1, maxSize: Math.round(rect.w * 0.34), minSize: 24 });
+  const tailSize = Math.round(percentSize.size * 0.5);
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center", transform: "rotate(-8deg)" }}>
+    <svg data-testid="artwork-sticker" height={rect.h} style={{ position: "absolute", left: 0, top: 0 }} viewBox="0 0 100 100" width={rect.w} xmlns={SVG_NS}>
+      <polygon fill={C.ACCENT_RED} points={burstPoints(18, 0.88)} />
+    </svg>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", width: "100%" }}>
+      <Line color={C.WHITE} size={percentSize.size} text={percentSize.lines[0] ?? percent} />
+      <Line color={C.WHITE} size={tailSize} text={tail} />
+    </div>
   </Box>;
 }
 
@@ -182,17 +249,28 @@ function PriceRow({ price, suffix, metrics }: { price: OfferPrice; suffix: strin
 
 export interface BadgeGeometry { size: number; width: number; height: number; padX: number; padY: number; metrics: PriceRowMetrics; conditionSize: number; conditionHeight: number; conditionGap: number }
 
+export type BadgeShape = "pill" | "splash";
+
+export interface BadgeOptions {
+  /** `pill`: rectángulo redondeado (collage). `splash`: mancha orgánica amarilla (protagonista). */
+  shape?: BadgeShape;
+  /** La condición («LLEVANDO 3 UNIDADES») va dentro de la pastilla. Con etiqueta de mecánica aparte se apaga. */
+  showCondition?: boolean;
+}
+
 /**
  * Pastilla amarilla que se ajusta al contenido: el precio más grande que entra en `rect` (tope `maxPriceSize`), con la condición
  * («LLEVANDO 3 UNIDADES») debajo cuando hay promoción. Misma forma para protagonista y collage.
  */
-export function fitBadge(item: OfferItem, rect: { w: number; h: number }, maxPriceSize: number, conditionMaxSize: number): BadgeGeometry {
+export function fitBadge(item: OfferItem, rect: { w: number; h: number }, maxPriceSize: number, conditionMaxSize: number, options: BadgeOptions = {}): BadgeGeometry {
   const price = heroPrice(item);
-  const condition = item.promotionCondition;
+  const condition = options.showCondition === false ? null : item.promotionCondition;
+  const splash = options.shape === "splash";
   const build = (size: number): BadgeGeometry => {
     const metrics = priceRowMetrics(price, item.priceSuffix, size);
-    const padX = Math.round(size * 0.3);
-    const padY = Math.round(size * PRICE_BADGE.paddingRatio);
+    // La mancha es más angosta en sus bordes que un rectángulo: necesita más aire para que el precio no toque el contorno.
+    const padX = Math.round(size * (splash ? 0.36 : 0.3));
+    const padY = Math.round(size * (splash ? 0.17 : PRICE_BADGE.paddingRatio));
     const conditionSize = condition ? Math.max(16, Math.min(conditionMaxSize, Math.round(size * 0.34))) : 0;
     const conditionHeight = condition ? Math.round(conditionSize * 1.1) : 0;
     const conditionGap = condition ? Math.round(conditionSize * 0.25) : 0;
@@ -207,29 +285,47 @@ export function fitBadge(item: OfferItem, rect: { w: number; h: number }, maxPri
   return geometry;
 }
 
-export function PriceBadge({ rect, item, maxPriceSize, conditionMaxSize, align = "center" }: {
-  rect: Rect; item: OfferItem; maxPriceSize: number; conditionMaxSize: number; align?: "start" | "center" | "end";
+const JUSTIFY_ITEMS: Record<"start" | "center" | "end", "flex-start" | "center" | "flex-end"> = { start: "flex-start", center: "center", end: "flex-end" };
+
+export function PriceBadge({ rect, item, maxPriceSize, conditionMaxSize, align = "center", shape = "pill", showCondition = true, seed = 7 }: {
+  rect: Rect; item: OfferItem; maxPriceSize: number; conditionMaxSize: number; align?: "start" | "center" | "end"; shape?: BadgeShape; showCondition?: boolean; seed?: number;
 }) {
-  const geometry = fitBadge(item, rect, maxPriceSize, conditionMaxSize);
-  const condition = item.promotionCondition;
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: align === "start" ? "flex-start" : align === "end" ? "flex-end" : "center" }}>
-    <div style={{
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", width: Math.min(geometry.width, rect.w), height: geometry.height,
-      background: PRICE_BADGE.color, borderRadius: Math.round(geometry.height * PRICE_BADGE.radiusRatio)
-    }}>
-      <PriceRow metrics={geometry.metrics} price={heroPrice(item)} suffix={item.priceSuffix} />
-      {condition ? <div style={{ display: "flex", width: "100%", marginTop: geometry.conditionGap }}><Line color={C.BLACK} size={geometry.conditionSize} text={condition} /></div> : null}
+  const geometry = fitBadge(item, rect, maxPriceSize, conditionMaxSize, { shape, showCondition });
+  const condition = showCondition ? item.promotionCondition : null;
+  const width = Math.min(geometry.width, rect.w);
+  // Sin <>: Satori trata un fragmento como una caja en FILA y deja el precio y la condición lado a lado. Cada cuerpo es una caja en columna.
+  const content = (absolute: boolean) => <div style={{
+    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", width, height: geometry.height,
+    ...(absolute ? { position: "absolute" as const, left: 0, top: 0 } : {})
+  }}>
+    <PriceRow metrics={geometry.metrics} price={heroPrice(item)} suffix={item.priceSuffix} />
+    {condition ? <div style={{ display: "flex", width: "100%", marginTop: geometry.conditionGap }}><Line color={C.BLACK} size={geometry.conditionSize} text={condition} /></div> : null}
+  </div>;
+  if (shape === "splash") {
+    return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY_ITEMS[align] }}>
+      <div data-testid="artwork-price-splash" style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width, height: geometry.height, transform: "rotate(-2deg)" }}>
+        <svg height={geometry.height} preserveAspectRatio="none" style={{ position: "absolute", left: 0, top: 0 }} viewBox="0 0 100 100" width={width} xmlns={SVG_NS}>
+          <path d={organicPillPath(seed)} fill={PRICE_BADGE.color} />
+        </svg>
+        {content(true)}
+      </div>
+    </Box>;
+  }
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY_ITEMS[align] }}>
+    <div style={{ display: "flex", width, height: geometry.height, background: PRICE_BADGE.color, borderRadius: Math.round(geometry.height * PRICE_BADGE.radiusRatio) }}>
+      {content(false)}
     </div>
   </Box>;
 }
 
 /** «PRECIO NORMAL $ 2.050» (sólo con promoción real; sin promoción no se duplica el precio ni se inventa un descuento). */
-export function NormalPriceLine({ rect, item, size }: { rect: Rect; item: OfferItem; size: number }) {
+export function NormalPriceLine({ rect, item, size, align = "center" }: { rect: Rect; item: OfferItem; size: number; align?: TextAlign }) {
   if (!hasPromotion(item)) return null;
-  const suffix = item.priceSuffix ? ` ${item.priceSuffix.replace(/\s+/g, "")}` : "";
+  // «/KG» acompaña al precio normal de un producto por peso; «C/U» (precio por unidad de una oferta) no: el normal ya es el de una unidad.
+  const suffix = item.priceSuffix?.startsWith("/") ? ` ${item.priceSuffix.replace(/\s+/g, "")}` : "";
   const text = `PRECIO NORMAL ${formatPriceText(item.regularPrice)}${suffix}`;
   const fitted = fitText({ text, maxWidth: rect.w, maxLines: 1, maxSize: size, minSize: 20, weight: 700 });
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center" }}><Line color={C.INK_MUTED} size={fitted.size} text={text} weight={700} /></Box>;
+  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}><Line align={JUSTIFY[align]} color={C.INK_MUTED} size={fitted.size} text={text} weight={700} /></Box>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

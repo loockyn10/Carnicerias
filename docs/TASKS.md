@@ -23,15 +23,18 @@ Implementado 2026-10-10 (D-083). **Migración pendiente: `202610180081_quantity_
 4. Confirmar las decisiones de D-083 (el descuento debe crecer con la cantidad; etiquetas/piezas/TV anuncian el escalón más bajo).
 5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `quantity_discount_tiers.test.sql` y los tests modificados (`digital_signage`, `product_label_groups`, `product_artwork`, `global_pricing_config`, `pricing_excluded_categories`) contra Supabase real.
 
-## P0 — Cartelería TV con promociones y grupos: aplicar y probar en un televisor (acción del usuario)
+## P0 — Cartelería: carpetas, «Generar todo actualizado» y TV automática: aplicar y probar (acción del usuario)
 
-Implementado 2026-10-10 (D-084). **Migración pendiente: `202610190082_signage_promotion_groups.sql`** (2 tablas de grupos, columnas nuevas en `digital_signage_slides`, `signage_payload`/`signage_object_is_published` recreadas y 5 RPC; **requiere la `202610180081`** y las de cartelería 069/073). Orden: `db push --dry-run` → `db push` → `git push`. Sin la migración el editor sigue mostrando productos (el catálogo de promociones falla y se omite) pero «Guardar y publicar» usa la RPC nueva: aplicarla antes de desplegar el Admin.
+Implementado 2026-10-11 (D-086). **Migración pendiente: `202610200084_signage_folders_and_sources.sql`** (columnas nuevas en carpetas/pantallas/fotos, resolvedor único, 8 RPC, trigger de compatibilidad; **requiere la 081 y la 082**, o sea 069–073 antes). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
 
-1. Productos → Cartelería → Pantallas: «+ Agregar promociones» (por defecto sólo Activas; Próximas y Vencidas en sus pestañas), elegir varias, «Guardar como grupo» («Ofertas fin de semana») y agregarlo con «Agregar grupo…» a una pantalla de Avenida y a otra de Janssen.
-2. En el televisor (`/tv/<token>`): las promociones rotan en el orden del grupo con foto, precio promocional y «precio normal»; cambiar el precio de una promoción en Promociones y comprobar que la TV lo toma en menos de 1 min sin tocar el grupo; vencer una promoción: la TV la saltea.
-3. Una promoción de Avenida no debe aparecer en la pantalla de Janssen; una sin foto se reproduce con el reemplazo y el editor la marca «⚠ Sin foto».
-4. «Administrar grupos»: renombrar, quitar/ordenar promociones, eliminar (un grupo en uso por una pantalla no se elimina y el mensaje dice cuáles).
-5. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `signage_promotion_groups.test.sql` contra Supabase real; `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+1. Gráficas → «+ Nueva carpeta» («Ofertas finde», Feed + Story): marcar 5 o más promociones ya cargadas → «Guardar carpeta». Abrirla: debe decir ✓ precios vigentes y avisar las promociones sin foto o que vencen mañana.
+2. «Generar todo actualizado»: esperar el avance («8 / 10»), mirar las piezas (Feed y Story) y «Descargar todo (ZIP)»: carpeta `Ofertas finde - dd-mm-aaaa/Feed` y `/Story`. Cambiar el precio de una promoción en Promociones y volver a generar **sin tocar la carpeta**: la pieza nueva trae el precio nuevo.
+3. Una promoción vencida o desactivada dentro de la carpeta debe aparecer como «⚠ Promoción vencida / Inactiva» y NO generarse; sin foto: se genera con el panel de reemplazo y avisa «⚠ Sin foto».
+4. Pantallas TV: cada pantalla ya reproduce «Todas las promociones activas» sin configurar nada (una nueva promoción aparece en menos de 1 minuto; una vencida deja de verse; una de Avenida no se ve en Janssen). «Configurar» → «Usar una carpeta»: sólo se reproduce lo vigente de esa carpeta. Abrir `/tv/<token>` en el televisor real y mirar fotos, precios y las 4 composiciones.
+5. Probar desde el celular: abrir una carpeta, tocar «Generar todo actualizado» y cambiar la fuente de una TV.
+6. Subir/reemplazar una foto PNG recortada (fondo transparente) de un producto: debe verse la mancha amarilla detrás; una foto JPG con fondo no la lleva.
+7. Confirmar las decisiones no pedidas de D-086 (carpetas con productos sueltos, pantallas con lista anterior, orden por nombre en la TV, collage fuera de las carpetas, ZIP armado en el navegador).
+8. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `signage_folders.test.sql` y los tests modificados (`digital_signage`) contra Supabase real.
 
 ## P0 — Costo de personal automático y chips de descuento del POS: aplicar y probar (acción del usuario)
 

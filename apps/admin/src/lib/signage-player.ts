@@ -28,8 +28,9 @@ export interface PlayerState {
 }
 
 export type PlayerAction =
-  | { type: "ADVANCE" }
-  | { type: "REFRESHED"; result: SignageLoadResult };
+  /** `now` (ms): el momento de reproducción; una oferta cuya vigencia terminó se retira aunque no haya conexión para preguntar. */
+  | { type: "ADVANCE"; now?: number }
+  | { type: "REFRESHED"; result: SignageLoadResult; now?: number };
 
 export function initialPlayerState(initial: SignageView | null): PlayerState {
   return { view: initial, revoked: false, index: 0, stale: false };
@@ -46,7 +47,29 @@ export function visibleSlideCount(state: PlayerState): number {
   return state.revoked ? 0 : state.view?.slides.length ?? 0;
 }
 
-export function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
+/** Una oferta sigue vigente mientras no haya llegado el fin de su promoción (sin fin, o fecha ilegible: se conserva). */
+export function isSlideLive(slide: Pick<OfferSlideData, "validUntil">, now: number): boolean {
+  if (slide.validUntil === null) return true;
+  const end = Date.parse(slide.validUntil);
+  return Number.isNaN(end) || end > now;
+}
+
+/**
+ * Retira las ofertas cuya vigencia terminó (el servidor ya no las manda, pero un televisor sin conexión conserva la última presentación:
+ * una promoción vencida no puede seguir en pantalla por horas). Mantiene en pantalla la oferta actual si sigue vigente.
+ */
+export function pruneExpired(state: PlayerState, now: number): PlayerState {
+  const view = state.view;
+  if (!view || view.slides.every((slide) => isSlideLive(slide, now))) return state;
+  const slides = view.slides.filter((slide) => isSlideLive(slide, now));
+  const currentKey = view.slides[state.index]?.key;
+  const kept = currentKey === undefined ? -1 : slides.findIndex((slide) => slide.key === currentKey);
+  const index = kept >= 0 ? kept : Math.min(state.index, Math.max(slides.length - 1, 0));
+  return { ...state, view: { ...view, slides }, index };
+}
+
+export function playerReducer(previous: PlayerState, action: PlayerAction): PlayerState {
+  const state = action.now === undefined ? previous : pruneExpired(previous, action.now);
   if (action.type === "ADVANCE") {
     const count = visibleSlideCount(state);
     return count < 2 ? state : { ...state, index: nextSlideIndex(state.index, count) };
@@ -147,7 +170,12 @@ function readSlide(value: unknown): OfferSlideData | null {
   if (!offer) return null;
   const valid = typeof offer.key === "string" && typeof offer.name === "string" && typeof offer.condition === "string"
     && hasWhole(offer.price) && hasWhole(offer.regularPrice) && (offer.unitType === "UNIT" || offer.unitType === "WEIGHT");
-  return valid ? { ...(offer as unknown as OfferSlideData), imageUrl: ownImageUrl(offer.imageUrl) } : null;
+  if (!valid) return null;
+  const text = (field: unknown): string | null => typeof field === "string" && field.trim() !== "" ? field : null;
+  return {
+    ...(offer as unknown as OfferSlideData), imageUrl: ownImageUrl(offer.imageUrl), imageTransparent: offer.imageTransparent === true,
+    mechanic: text(offer.mechanic), savings: text(offer.savings), validUntil: text(offer.validUntil)
+  };
 }
 
 /** La identidad que llega del servidor: colores siempre los de la marca y nunca contacto (el televisor no lo muestra). */

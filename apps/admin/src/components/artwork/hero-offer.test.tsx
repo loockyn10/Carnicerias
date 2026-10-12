@@ -39,7 +39,10 @@ describe("los tres renderers leen el mismo modelo", () => {
     expect(text).toContain("MAYONESA");
     expect(text).toContain("1.742");
     expect(text).toContain("50");
-    expect(text).toContain("LLEVANDO 3 UNIDADES");
+    // La mecánica se dice como el comercio: «LLEVANDO 3», el precio es por unidad («C/U») y el sello trae el % real de la regla.
+    expect(text).toContain("LLEVANDO 3");
+    expect(text).toContain("C/U");
+    expect(text).toContain("15%");
     expect(text).toContain("PRECIO NORMAL $ 2.050");
   });
 
@@ -218,8 +221,54 @@ describe("el preview dibuja el MISMO renderer que el PNG", () => {
     const model = modelFor("mayo", { headline: "ESPECIAL" });
     const texts = (["tv", "feed", "story"] as const).map((format) => {
       const text = textOf(render(<HeroOffer format={format} model={model} />));
-      return ["ESPECIAL", "MAYONESA", "1.742", "LLEVANDO 3 UNIDADES", "PRECIO NORMAL $ 2.050"].every((piece) => text.includes(piece));
+      return ["ESPECIAL", "MAYONESA", "1.742", "LLEVANDO 3", "PRECIO NORMAL $ 2.050"].every((piece) => text.includes(piece));
     });
     expect(texts).toEqual([true, true, true]);
+  });
+});
+
+describe("composiciones del protagonista: estables y elegibles (D-086)", () => {
+  const model = modelFor("mayo", { headline: "X MAYOR" });
+  const variantOf = (html: string) => /data-artwork-variant="([A-Z_]+)"/.exec(html)?.[1];
+
+  it("sin configuración usa la composición derivada del producto: siempre la misma", () => {
+    const first = variantOf(render(<FeedHeroOffer model={model} />));
+    expect(first).toBeDefined();
+    expect(variantOf(render(<FeedHeroOffer model={model} />))).toBe(first);
+    expect(variantOf(render(<StoryHeroOffer model={model} />))).toBe(first);
+    expect(render(<FeedHeroOffer model={model} />)).toBe(render(<FeedHeroOffer model={model} />));
+  });
+
+  it("la variante explícita manda y cada una dibuja distinto con los mismos textos", () => {
+    const htmls = (["CENTER", "PHOTO_LEFT", "PHOTO_RIGHT", "PRICE_FIRST"] as const).map((variant) => render(<FeedHeroOffer model={model} variant={variant} />));
+    expect(htmls.map(variantOf)).toEqual(["CENTER", "PHOTO_LEFT", "PHOTO_RIGHT", "PRICE_FIRST"]);
+    expect(new Set(htmls).size).toBe(4);
+    for (const html of htmls) {
+      const text = textOf(html);
+      for (const piece of ["X MAYOR", "MAYONESA", "1.742", "LLEVANDO 3", "15%", "PRECIO NORMAL $ 2.050"]) expect(text).toContain(piece);
+    }
+  });
+
+  it("en una serie (carpeta) la posición rota las composiciones A, B, C, D, A…", () => {
+    const ids = [0, 1, 2, 3, 4].map((index) => variantOf(render(<HeroOffer format="story" model={model} slideIndex={index} />)));
+    expect(ids).toEqual(["CENTER", "PHOTO_LEFT", "PHOTO_RIGHT", "PRICE_FIRST", "CENTER"]);
+  });
+
+  it("la mecánica sale como etiqueta propia y el sello «% OFF» sólo con un porcentaje real", () => {
+    const withPromo = render(<FeedHeroOffer model={model} />);
+    expect(withPromo).toContain('data-testid="artwork-mechanic"');
+    expect(withPromo).toContain('data-testid="artwork-sticker"');
+    const plain = render(<FeedHeroOffer model={modelFor("sinFoto")} />);
+    expect(plain).not.toContain('data-testid="artwork-mechanic"');
+    expect(plain).not.toContain('data-testid="artwork-sticker"');
+  });
+
+  it("la mancha amarilla detrás de la foto sólo se dibuja si el recorte tiene fondo transparente", () => {
+    const transparent = heroModel("nalga", { imageUrl: "data:image/png;base64,BBBB" });
+    const first = transparent.items[0];
+    if (!first) throw new Error("sin ítem");
+    const withAlpha: OfferArtworkModel = { ...transparent, items: [{ ...first, imageTransparent: true }] };
+    expect(render(<FeedHeroOffer model={withAlpha} />)).toContain('data-testid="artwork-blob"');
+    expect(render(<FeedHeroOffer model={transparent} />)).not.toContain('data-testid="artwork-blob"');
   });
 });

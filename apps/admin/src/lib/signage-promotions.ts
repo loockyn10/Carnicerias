@@ -31,18 +31,8 @@ export interface PromotionOption {
   summary: string;
 }
 
-export interface PromotionGroup {
-  id: string;
-  name: string;
-  /** Ids de las promociones en el orden del grupo (el orden en que rotan). */
-  promotionIds: string[];
-  /** Pantallas que usan el grupo (un grupo en uso no se puede eliminar). */
-  usedByDisplays: number;
-}
-
 export interface PromotionCatalog {
   promotions: PromotionOption[];
-  groups: PromotionGroup[];
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -87,21 +77,11 @@ function parseOption(raw: unknown): PromotionOption | null {
   };
 }
 
-function parseGroup(raw: unknown): PromotionGroup | null {
-  if (!isRecord(raw)) return null;
-  const id = asString(raw.id);
-  const name = asString(raw.name);
-  if (!id || !name || !Array.isArray(raw.promotionIds)) return null;
-  const used = typeof raw.usedByDisplays === "number" && Number.isSafeInteger(raw.usedByDisplays) ? raw.usedByDisplays : 0;
-  return { id, name, promotionIds: (raw.promotionIds as unknown[]).filter((item): item is string => typeof item === "string"), usedByDisplays: used };
-}
-
 /** JSON de `get_signage_promotion_catalog` → catálogo del editor. Una fila rara se descarta: nunca rompe la pantalla. */
 export function parsePromotionCatalog(raw: unknown): PromotionCatalog {
   if (!isRecord(raw)) throw new Error("Respuesta inválida del servidor");
   const promotions = (Array.isArray(raw.promotions) ? raw.promotions as unknown[] : []).map(parseOption).filter((item): item is PromotionOption => item !== null);
-  const groups = (Array.isArray(raw.groups) ? raw.groups as unknown[] : []).map(parseGroup).filter((item): item is PromotionGroup => item !== null);
-  return { promotions, groups };
+  return { promotions };
 }
 
 /** «Hasta el 20/10/2026», «Desde el 15/10/2026», «Venció el 05/10/2026», «Sin fecha de fin». */
@@ -122,18 +102,3 @@ export function statusCounts(options: readonly PromotionOption[]): Record<Promot
   return counts;
 }
 
-/** Cuántas de las promociones elegidas no tienen foto comercial (el editor avisa: no impide reproducirlas). */
-export function countWithoutPhoto(options: readonly PromotionOption[], selected: ReadonlySet<string>): number {
-  return options.filter((option) => selected.has(option.promotionId) && !option.hasPhoto).length;
-}
-
-/** Texto corto del estado de una promoción dentro de un grupo ya guardado (vigencia, producto, foto). */
-export function groupItemNote(option: PromotionOption | undefined): string {
-  if (!option) return "La promoción ya no existe";
-  const parts: string[] = [];
-  if (option.status !== "ACTIVE") parts.push(`${PROMOTION_STATUS_LABELS[option.status]}: la TV la saltea`);
-  if (option.unavailable === "INACTIVE") parts.push("Producto inactivo");
-  if (option.unavailable === "NO_PRICE") parts.push("Sin precio vigente");
-  if (!option.hasPhoto) parts.push("Sin foto");
-  return parts.join(" · ");
-}

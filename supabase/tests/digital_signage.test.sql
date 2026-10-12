@@ -198,7 +198,7 @@ select is((select string_agg(s ->> 'name', ' | ' order by ord) from jsonb_array_
 select is(public.get_signage_display(public.t_sg_tok('central')) ->> 'organizationName', 'SG Org', 'the brand name is its own organization');
 select is((select array_agg(k order by k) from jsonb_object_keys(public.get_signage_display(public.t_sg_tok('central'))) k), array['logo','organizationName','slideDurationSeconds','slides','status']::text[], 'the payload has exactly the expected top-level keys (logo reference, no ids, branch, config or token)');
 select is((select array_agg(distinct k order by k) from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s, jsonb_object_keys(s) k),
-  array['bulkDiscountBps','bulkMinimumUnits','kind','listPriceCents','name','photo','promotion','slideId','unitType','weightTiers']::text[], 'each slide carries only commercial facts and its photo reference');
+  array['bulkDiscountBps','bulkMinimumUnits','bulkTiers','kind','listPriceCents','name','packDiscountBps','packSizeUnits','photo','promotion','slideId','unitType','weightTiers']::text[], 'each slide carries only commercial facts and its photo reference');
 select ok(public.get_signage_display(public.t_sg_tok('central'))::text !~* 'cost|margin|stock|sale|employee|supplier|123456|765432|sku|SG-0', 'no cost, margin, stock, sales, employee, supplier or SKU leaks into the payload');
 select ok(position('Producto de otra org' in public.get_signage_display(public.t_sg_tok('central'))::text) = 0, 'nothing from another organization appears');
 select is((select s -> 'photo' ->> 'storagePath' from jsonb_array_elements(public.get_signage_display(public.t_sg_tok('central')) -> 'slides') s where s ->> 'name' like 'Mayonesa%'),

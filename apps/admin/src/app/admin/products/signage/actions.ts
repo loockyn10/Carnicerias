@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 
 import { requireAdminContext } from "../../../../lib/admin";
-import { buildSignageView, clampSlideSeconds, type EntryKind } from "../../../../lib/signage";
+import { nullableArg } from "../../../../lib/rpc-args";
+import { buildSignageView, clampSlideSeconds } from "../../../../lib/signage";
 import { parsePromotionCatalog, type PromotionCatalog } from "../../../../lib/signage-promotions";
 import { signageMediaUrls } from "../../../../lib/signage-media";
 import type { SignageLoadResult } from "../../../../lib/signage-player";
@@ -34,33 +35,35 @@ export async function createSignageDisplayAction(input: { name: string; branchId
   }
 }
 
-export interface SignageEntryInput { kind: EntryKind; id: string }
-
-export interface SaveSignageInput {
+export interface SaveSourceInput {
   displayId: string;
   name: string;
   branchId: string | null;
   slideDurationSeconds: number;
   enabled: boolean;
-  /** La lista ordenada de la pantalla: productos, promociones y grupos de promociones (D-084). */
-  entries: SignageEntryInput[];
+  /** «Todas las promociones activas» (por defecto) o una carpeta. La lista armada a mano ya no se puede elegir. */
+  source: "ALL_PROMOTIONS" | "FOLDER";
+  folderId: string | null;
 }
 
-const ENTRY_KINDS: readonly EntryKind[] = ["PRODUCT", "PROMOTION", "GROUP"];
-
-/** «Guardar / Publicar»: configuración + lista ordenada de entradas en una sola transacción. El TV lo toma en su próxima consulta. */
-export async function saveSignageDisplayAction(input: SaveSignageInput): Promise<{ error?: string }> {
+/**
+ * Configura una pantalla (D-086): nombre, sucursal, duración, activa y FUENTE de contenido. No hay lista que armar: con «todas las
+ * promociones activas» la TV reproduce lo que está vigente y le aplica a su sucursal; con una carpeta, lo vigente de esa carpeta. La
+ * vigencia, la sucursal y el precio los resuelve la base en cada consulta del televisor. El TV lo toma en su próxima consulta (≤ 30 s).
+ */
+export async function saveSignageSourceAction(input: SaveSourceInput): Promise<{ error?: string }> {
   try {
     await requireAdminContext();
-    if (!UUID.test(input.displayId) || (input.branchId !== null && !UUID.test(input.branchId))
-        || input.entries.some((entry) => !ENTRY_KINDS.includes(entry.kind) || !UUID.test(entry.id))) {
+    const source: string = input.source;
+    if (!UUID.test(input.displayId) || (input.branchId !== null && !UUID.test(input.branchId)) || (source !== "ALL_PROMOTIONS" && source !== "FOLDER")
+        || (source === "FOLDER") !== (input.folderId !== null) || (input.folderId !== null && !UUID.test(input.folderId))) {
       return { error: "Datos inválidos" };
     }
     const supabase = await createClient();
-    const { error } = await supabase.rpc("save_signage_display_entries", {
-      p_display_id: input.displayId, p_name: input.name, p_branch_id: input.branchId,
+    const { error } = await supabase.rpc("save_signage_display_source", {
+      p_display_id: input.displayId, p_name: input.name, p_branch_id: nullableArg(input.branchId),
       p_slide_duration_seconds: clampSlideSeconds(input.slideDurationSeconds), p_enabled: input.enabled,
-      p_entries: input.entries.map((entry) => ({ kind: entry.kind, id: entry.id }))
+      p_content_source: input.source, ...(input.folderId ? { p_folder_id: input.folderId } : {})
     });
     if (error) return { error: error.message };
     revalidatePath("/admin/products/signage");
@@ -87,39 +90,6 @@ export async function loadPromotionCatalogAction(branchId: string | null, applic
     return { ok: true, catalog: parsePromotionCatalog(data) };
   } catch (error) {
     return { ok: false, error: message(error, "No se pudieron cargar las promociones") };
-  }
-}
-
-export interface SaveGroupInput { groupId: string | null; name: string; promotionIds: string[] }
-
-/** Crea un grupo (`groupId` null) o lo edita: renombra y reemplaza sus promociones, en el orden indicado. Una sola transacción. */
-export async function saveSignageGroupAction(input: SaveGroupInput): Promise<{ error?: string; groupId?: string }> {
-  try {
-    await requireAdminContext();
-    if ((input.groupId !== null && !UUID.test(input.groupId)) || input.promotionIds.some((id) => !UUID.test(id))) return { error: "Datos inválidos" };
-    const supabase = await createClient();
-    const { data, error } = await supabase.rpc("save_signage_group", { p_group_id: input.groupId, p_name: input.name, p_promotion_ids: input.promotionIds });
-    if (error) return { error: error.message };
-    revalidatePath("/admin/products/signage");
-    const result = data as { id?: string } | null;
-    return result?.id ? { groupId: result.id } : {};
-  } catch (error) {
-    return { error: message(error, "No se pudo guardar el grupo") };
-  }
-}
-
-/** Elimina un grupo sólo si ninguna pantalla lo usa (el servidor explica en cuáles está si no se puede). */
-export async function deleteSignageGroupAction(groupId: string): Promise<{ error?: string }> {
-  try {
-    await requireAdminContext();
-    if (!UUID.test(groupId)) return { error: "Grupo inválido" };
-    const supabase = await createClient();
-    const { error } = await supabase.rpc("delete_signage_group", { p_group_id: groupId });
-    if (error) return { error: error.message };
-    revalidatePath("/admin/products/signage");
-    return {};
-  } catch (error) {
-    return { error: message(error, "No se pudo eliminar el grupo") };
   }
 }
 

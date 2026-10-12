@@ -1,0 +1,108 @@
+warning: in the working copy of 'apps/admin/src/app/admin/products/artwork/actions.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/app/admin/products/artwork/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/app/admin/products/signage/actions.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/app/admin/products/signage/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork-workspace.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork-workspace.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/artwork-preview.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/collage-offer.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/collage-offer.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/hero-offer.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/hero-offer.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/offer-artwork.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/tv-offer.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/artwork/tv-offer.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/digital-signage-player.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/signage-promotions.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/signage-promotions.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/components/signage-subnav.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-export.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-export.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-text.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-tokens.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-tv-layouts.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork-tv-layouts.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/artwork.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/signage-player.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/signage-promotions.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/signage-promotions.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/signage.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/signage.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'apps/admin/src/lib/test-support/signage-fixtures.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/CURRENT_STATE.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/DECISIONS.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/DOMAIN_RULES.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/TASKS.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/architecture.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'supabase/tests/digital_signage.test.sql', LF will be replaced by CRLF the next time Git touches it
+ .../src/app/admin/products/artwork/actions.ts      |   3 [32m+[m
+ apps/admin/src/app/admin/products/artwork/page.tsx |  25 [32m+[m[31m-[m
+ .../src/app/admin/products/signage/actions.ts      |  66 [32m++[m[31m---[m
+ apps/admin/src/app/admin/products/signage/page.tsx |  59 [32m++[m[31m---[m
+ .../src/components/artwork-workspace.test.tsx      |   2 [32m+[m[31m-[m
+ apps/admin/src/components/artwork-workspace.tsx    |  15 [32m+[m[31m-[m
+ .../admin/src/components/artwork/artwork-parts.tsx | 158 [32m+++++++++[m[31m---[m
+ .../src/components/artwork/artwork-preview.tsx     |   7 [32m+[m[31m-[m
+ .../src/components/artwork/collage-offer.test.tsx  |   3 [32m+[m[31m-[m
+ .../admin/src/components/artwork/collage-offer.tsx |  11 [32m+[m[31m-[m
+ .../src/components/artwork/hero-offer.test.tsx     |  53 [32m+++[m[31m-[m
+ apps/admin/src/components/artwork/hero-offer.tsx   |  83 [32m+++[m[31m---[m
+ .../admin/src/components/artwork/offer-artwork.tsx |   9 [32m+[m[31m-[m
+ .../admin/src/components/artwork/tv-offer.test.tsx |   9 [32m+[m[31m-[m
+ apps/admin/src/components/artwork/tv-offer.tsx     |  29 [32m++[m[31m-[m
+ .../src/components/digital-signage-player.tsx      |   4 [32m+[m[31m-[m
+ apps/admin/src/components/signage-editor.test.tsx  | 116 [31m---------[m
+ apps/admin/src/components/signage-editor.tsx       | 263 [31m-------------------[m
+ .../src/components/signage-promotions.test.tsx     |  33 [32m+[m[31m--[m
+ apps/admin/src/components/signage-promotions.tsx   | 197 [32m+[m[31m--------------[m
+ apps/admin/src/components/signage-subnav.tsx       |   4 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork-export.test.tsx         |  31 [32m++[m[31m-[m
+ apps/admin/src/lib/artwork-export.tsx              |  18 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork-text.ts                 |   4 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork-tokens.ts               |   4 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork-tv-layouts.test.ts      |  26 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork-tv-layouts.ts           | 135 [32m++++++[m[31m----[m
+ apps/admin/src/lib/artwork.test.ts                 |   2 [32m+[m[31m-[m
+ apps/admin/src/lib/artwork.ts                      |  15 [32m+[m[31m-[m
+ apps/admin/src/lib/signage-entries.ts              |  93 [31m-------[m
+ apps/admin/src/lib/signage-player.ts               |  36 [32m++[m[31m-[m
+ apps/admin/src/lib/signage-promotions.test.ts      | 118 [32m+[m[31m--------[m
+ apps/admin/src/lib/signage-promotions.ts           |  37 [32m+[m[31m--[m
+ apps/admin/src/lib/signage.test.ts                 |  26 [32m+[m[31m-[m
+ apps/admin/src/lib/signage.ts                      | 278 [32m++++++++++[m[31m-----------[m
+ .../admin/src/lib/test-support/signage-fixtures.ts |   4 [32m+[m[31m-[m
+ docs/CURRENT_STATE.md                              |   2 [32m+[m[31m-[m
+ docs/DECISIONS.md                                  |  18 [32m++[m
+ docs/DOMAIN_RULES.md                               |   2 [32m+[m
+ docs/TASKS.md                                      |  21 [32m+[m[31m-[m
+ docs/architecture.md                               |   2 [32m+[m
+ muestras-carteleria/A-nalga-hero-feed.png          | Bin [31m102361[m -> [32m0[m bytes
+ muestras-carteleria/A-nalga-hero-story.png         | Bin [31m110705[m -> [32m0[m bytes
+ muestras-carteleria/A-nalga-hero-tv.png            | Bin [31m103038[m -> [32m0[m bytes
+ muestras-carteleria/A2-mayo-hero-promo-feed.png    | Bin [31m99115[m -> [32m0[m bytes
+ muestras-carteleria/A2-mayo-hero-promo-story.png   | Bin [31m108972[m -> [32m0[m bytes
+ muestras-carteleria/A3-sinfoto-hero-feed.png       | Bin [31m81189[m -> [32m0[m bytes
+ muestras-carteleria/A3-sinfoto-hero-story.png      | Bin [31m89955[m -> [32m0[m bytes
+ muestras-carteleria/A4-largo-hero-feed.png         | Bin [31m96939[m -> [32m0[m bytes
+ muestras-carteleria/A4-largo-hero-story.png        | Bin [31m104867[m -> [32m0[m bytes
+ muestras-carteleria/B-pollo-5-feed.png             | Bin [31m129361[m -> [32m0[m bytes
+ muestras-carteleria/B-pollo-5-story.png            | Bin [31m136599[m -> [32m0[m bytes
+ muestras-carteleria/C-milanesas-3-feed.png         | Bin [31m107900[m -> [32m0[m bytes
+ muestras-carteleria/C-milanesas-3-story.png        | Bin [31m117361[m -> [32m0[m bytes
+ muestras-carteleria/E-2-productos-feed.png         | Bin [31m99095[m -> [32m0[m bytes
+ muestras-carteleria/E-2-productos-story.png        | Bin [31m110116[m -> [32m0[m bytes
+ muestras-carteleria/F-4-productos-feed.png         | Bin [31m126248[m -> [32m0[m bytes
+ muestras-carteleria/F-4-productos-story.png        | Bin [31m133794[m -> [32m0[m bytes
+ muestras-carteleria/G-5-sin-foto-y-largo-feed.png  | Bin [31m121460[m -> [32m0[m bytes
+ muestras-carteleria/G-5-sin-foto-y-largo-story.png | Bin [31m130045[m -> [32m0[m bytes
+ muestras-carteleria/collage-feed-4.png             | Bin [31m126248[m -> [32m0[m bytes
+ muestras-carteleria/collage-feed-5.png             | Bin [31m129361[m -> [32m0[m bytes
+ muestras-carteleria/collage-story-4.png            | Bin [31m133794[m -> [32m0[m bytes
+ muestras-carteleria/tv-slide-1-bondiola.png        | Bin [31m98374[m -> [32m0[m bytes
+ muestras-carteleria/tv-slide-2-choricito.png       | Bin [31m97230[m -> [32m0[m bytes
+ muestras-carteleria/tv-slide-3-vacio.png           | Bin [31m92231[m -> [32m0[m bytes
+ muestras-carteleria/tv-slide-4-milanesas-promo.png | Bin [31m115100[m -> [32m0[m bytes
+ packages/database/src/database.types.ts            | 269 [32m++++++++++++++[m[31m------[m
+ supabase/tests/digital_signage.test.sql            |   2 [32m+[m[31m-[m
+ 69 files changed, 922 insertions(+), 1370 deletions(-)

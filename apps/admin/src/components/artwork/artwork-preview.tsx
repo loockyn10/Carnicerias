@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { OfferArtworkModel } from "../../lib/artwork";
+import type { HeroVariantId } from "../../lib/artwork-hero-layouts";
 import { ARTWORK_FONT_700_BASE64, ARTWORK_FONT_900_BASE64, ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import { ARTWORK_FORMATS, type ArtworkFormat } from "../../lib/artwork-tokens";
 import { OfferArtwork } from "./offer-artwork";
@@ -18,7 +19,9 @@ export const FONT_FACE_CSS = `@font-face{font-family:"${ARTWORK_FONT_FAMILY}";fo
  * 1080 × 1920) y lo escala con `transform` al ancho disponible, sin scroll interno ni recortes. Cambiar de formato no crea otro
  * contenido: es la misma pieza (`model`) con otra composición.
  */
-export function ArtworkPreview({ model, format, maxHeightVh = 72, slideIndex = 0 }: { model: OfferArtworkModel; format: ArtworkFormat; maxHeightVh?: number; slideIndex?: number }) {
+export function ArtworkPreview({ model, format, maxHeightVh = 72, slideIndex, variant }: {
+  model: OfferArtworkModel; format: ArtworkFormat; maxHeightVh?: number; slideIndex?: number | undefined; variant?: HeroVariantId | null | undefined;
+}) {
   const spec = ARTWORK_FORMATS[format];
   const frameRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.3);
@@ -45,7 +48,7 @@ export function ArtworkPreview({ model, format, maxHeightVh = 72, slideIndex = 0
   >
     <style dangerouslySetInnerHTML={{ __html: FONT_FACE_CSS }} />
     <div style={{ position: "absolute", left: 0, top: 0, width: spec.width, height: spec.height, transform: `scale(${String(scale)})`, transformOrigin: "top left" }}>
-      <OfferArtwork format={format} model={model} slideIndex={slideIndex} />
+      <OfferArtwork format={format} model={model} slideIndex={slideIndex} variant={variant} />
     </div>
   </div>;
 }

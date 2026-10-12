@@ -33,7 +33,9 @@ describe("TvOfferSlide — la identidad de Super Ofertas en 16:9", () => {
     expect(textOf(html)).toContain("IMPERDIBLE");
     expect(flat(html)).toContain("NALGA VACUNA");
     expect(count(html, PHOTO_URL)).toBe(1);
-    expect(count(html.toLowerCase(), `background:${PRICE_BADGE_YELLOW.toLowerCase()}`)).toBe(1);
+    // El precio va sobre UNA mancha amarilla (la misma firma visual de las piezas).
+    expect(count(html, "artwork-price-splash")).toBe(1);
+    expect(html.toLowerCase()).toContain(PRICE_BADGE_YELLOW.toLowerCase());
     expect(html).toContain('data-testid="artwork-price"');
   });
 
@@ -53,11 +55,12 @@ describe("TvOfferSlide — la identidad de Super Ofertas en 16:9", () => {
     expect(unit).not.toContain("/KG");
   });
 
-  it("promoción real: precio promocional + «LLEVANDO 3 UNIDADES» + «PRECIO NORMAL» (los del motor, sin recalcular)", () => {
+  it("promoción real: precio promocional + «LLEVANDO 3» + «PRECIO NORMAL» (los del motor, sin recalcular)", () => {
     const text = textOf(render(<TvOfferSlide model={withPhoto("mayo", { headline: "X MAYOR" })} />));
     expect(text).toContain("X MAYOR");
     expect(text).toContain("1.742");
-    expect(text).toContain("LLEVANDO 3 UNIDADES");
+    expect(text).toContain("LLEVANDO 3");
+    expect(text).toContain("15%");
     expect(text).toContain("PRECIO NORMAL $ 2.050");
   });
 

@@ -116,7 +116,7 @@ describe("pestaña Cartelería", () => {
   it("Cartelería tiene dos vistas: las piezas nuevas y las pantallas de TV existentes (D-072 no se pierde)", () => {
     expect(SIGNAGE_SECTIONS.map((section) => section.href)).toEqual(["/admin/products/artwork", "/admin/products/signage"]);
     const html = renderToStaticMarkup(<SignageSubnav active="screens" />);
-    expect(html).toContain("Piezas");
+    expect(html).toContain("Gráficas");
     expect(html).toContain("Pantallas TV");
     expect(html).toMatch(/aria-current="page"[^>]*>Pantallas TV|Pantallas TV<\/a>/);
   });

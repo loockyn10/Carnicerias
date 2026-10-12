@@ -13,6 +13,7 @@ import {
   MAX_HEADLINE_LENGTH, defaultHeadline, formatsForTemplate, isExportableFormat, type ArtworkFormat, type ArtworkTemplate, type ExportableArtworkFormat
 } from "../lib/artwork-tokens";
 import { ArtworkIdentityModal } from "./artwork-identity-modal";
+import { HERO_VARIANTS, HERO_VARIANT_LABELS, type HeroVariantId } from "../lib/artwork-hero-layouts";
 import { TV_LAYOUTS } from "../lib/artwork-tv-layouts";
 import { ArtworkPreview } from "./artwork/artwork-preview";
 import { ProductPicker } from "./product-picker";
@@ -60,6 +61,8 @@ export function ArtworkWorkspace({ branches, defaultBranchId }: { branches: Artw
   const [headline, setHeadline] = useState(defaultHeadline("HERO"));
   const [format, setFormat] = useState<ArtworkFormat>("feed");
   const [tvVariant, setTvVariant] = useState(0);
+  // Composición de Feed/Story: «automática» = la estable de ese producto (nunca al azar); o una fija (A–D).
+  const [variant, setVariant] = useState<HeroVariantId | "AUTO">("AUTO");
   const [hero, setHero] = useState<HeroLoad>({ status: "idle" });
   const [collage, setCollage] = useState<CollageLoad>({ status: "idle" });
   const [brandingState, setBrandingState] = useState<BrandingState>({ status: "loading" });
@@ -181,7 +184,7 @@ export function ArtworkWorkspace({ branches, defaultBranchId }: { branches: Artw
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Sólo ids, plantilla, titular y formato: el precio, la promoción, el logo y el contacto los resuelve el servidor.
-        body: JSON.stringify({ template, productIds, branchId: branchId || null, headline: normalizeHeadline(headline, defaultHeadline(template)), format: target })
+        body: JSON.stringify({ template, productIds, branchId: branchId || null, headline: normalizeHeadline(headline, defaultHeadline(template)), format: target, ...(template === "HERO" && variant !== "AUTO" ? { variant } : {}) })
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -319,7 +322,15 @@ export function ArtworkWorkspace({ branches, defaultBranchId }: { branches: Artw
             >{String.fromCharCode(65 + index)}</button>)}
             <span className="text-xs text-stone-500">En el televisor se alternan solas, una por diapositiva.</span>
           </div> : null}
-          <ArtworkPreview format={shownFormat} model={model} slideIndex={tvVariant} />
+          {template === "HERO" && shownFormat !== "tv" ? <div aria-label="Composición de la pieza" className="mb-2 flex flex-wrap items-center gap-2 text-sm text-stone-600" data-testid="hero-variants" role="group">
+            <span>Composición:</span>
+            {(["AUTO", ...HERO_VARIANTS] as const).map((id) => <button
+              aria-pressed={variant === id}
+              className={`rounded-md border px-3 py-1 font-bold ${variant === id ? "border-rose-800 bg-rose-800 text-white" : "border-stone-300 bg-white text-stone-700 hover:bg-stone-50"}`}
+              data-testid={`hero-variant-${id.toLowerCase()}`} key={id} onClick={() => { setVariant(id); }} type="button"
+            >{id === "AUTO" ? "Automática" : HERO_VARIANT_LABELS[id]}</button>)}
+          </div> : null}
+          <ArtworkPreview format={shownFormat} model={model} slideIndex={shownFormat === "tv" ? tvVariant : undefined} variant={template === "HERO" && variant !== "AUTO" ? variant : null} />
           {missingPhotos > 0 ? <p className="mt-3 text-sm text-amber-800" data-testid="artwork-no-photo">
             {template === "HERO"
               ? <>Este producto no tiene foto comercial: la pieza usa un panel de reemplazo. Subila desde <strong>Administrar producto → Foto para cartelería</strong>.</>

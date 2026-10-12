@@ -37,7 +37,7 @@ describe("parseArtworkExportRequest — el navegador sólo manda ids, plantilla,
 
   it("protagonista (compatible con el pedido anterior): acepta productId y normaliza el titular", () => {
     expect(parseArtworkExportRequest(good)).toEqual({
-      ok: true, value: { template: "HERO", productIds: [PRODUCT_IDS.nalga], branchId: BRANCH_ID, headline: "X MAYOR", format: "feed" }
+      ok: true, value: { template: "HERO", productIds: [PRODUCT_IDS.nalga], branchId: BRANCH_ID, headline: "X MAYOR", format: "feed", variant: null }
     });
     expect(parseArtworkExportRequest({ ...good, template: "HERO", productId: undefined, productIds: [PRODUCT_IDS.nalga] })).toMatchObject({ ok: true });
   });
@@ -45,7 +45,7 @@ describe("parseArtworkExportRequest — el navegador sólo manda ids, plantilla,
   it("collage: de 2 a 5 productos, en el orden dado", () => {
     for (const n of [2, 3, 4, 5]) {
       const parsed = parseArtworkExportRequest({ template: "COLLAGE", productIds: polloIds.slice(0, n), branchId: BRANCH_ID, headline: "ofertas de pollo", format: "story" });
-      expect(parsed).toEqual({ ok: true, value: { template: "COLLAGE", productIds: polloIds.slice(0, n), branchId: BRANCH_ID, headline: "OFERTAS DE POLLO", format: "story" } });
+      expect(parsed).toEqual({ ok: true, value: { template: "COLLAGE", productIds: polloIds.slice(0, n), branchId: BRANCH_ID, headline: "OFERTAS DE POLLO", format: "story", variant: null } });
     }
   });
 
@@ -71,12 +71,12 @@ describe("parseArtworkExportRequest — el navegador sólo manda ids, plantilla,
       items: [{ productName: "GRATIS", price: 1 }]
     });
     expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(Object.keys(parsed.value).sort()).toEqual(["branchId", "format", "headline", "productIds", "template"]);
+    if (parsed.ok) expect(Object.keys(parsed.value).sort()).toEqual(["branchId", "format", "headline", "productIds", "template", "variant"]);
   });
 
   it("sin sucursal = precio general; sin titular = OFERTA (protagonista) / OFERTAS (collage)", () => {
     expect(parseArtworkExportRequest({ productId: PRODUCT_IDS.nalga, format: "story" })).toEqual({
-      ok: true, value: { template: "HERO", productIds: [PRODUCT_IDS.nalga], branchId: null, headline: "OFERTA", format: "story" }
+      ok: true, value: { template: "HERO", productIds: [PRODUCT_IDS.nalga], branchId: null, headline: "OFERTA", format: "story", variant: null }
     });
     expect(parseArtworkExportRequest({ template: "COLLAGE", productIds: polloIds.slice(0, 2), format: "feed" })).toMatchObject({ ok: true, value: { headline: "OFERTAS", branchId: null } });
   });
@@ -152,7 +152,7 @@ describe("executeArtworkExport — el servidor resuelve los datos económicos", 
     const result = await executeArtworkExport(deps, hero("mayo", "feed"), () => new Date("2026-10-08T12:00:00Z"));
     expect(getFacts).toHaveBeenCalledWith(PRODUCT_IDS.mayo, BRANCH_ID);
     expect(result.snapshot).toEqual({
-      generatedAt: "2026-10-08T12:00:00.000Z", template: "HERO", branchId: BRANCH_ID, format: "feed", headline: "OFERTA",
+      generatedAt: "2026-10-08T12:00:00.000Z", template: "HERO", branchId: BRANCH_ID, format: "feed", variant: null, headline: "OFERTA",
       items: [{
         productId: PRODUCT_IDS.mayo, productName: "MAYONESA HELLMANNS 250GR", heroPriceCents: "174250", regularPriceCents: "205000",
         promotionalPriceCents: "174250", promotionCondition: "LLEVANDO 3 UNIDADES", hasPhoto: true
@@ -358,4 +358,25 @@ describe("renderArtworkPng", () => {
     const { model } = await resolveArtwork(deps, { template: "COLLAGE", productIds: polloIds.slice(0, 2), branchId: BRANCH_ID, headline: "OFERTAS" });
     await expect(renderArtworkPng(model, "tv")).rejects.toThrow(/TV/);
   });
+});
+
+describe("composición del protagonista en el pedido (D-086)", () => {
+  const base = { productId: PRODUCT_IDS.nalga, branchId: BRANCH_ID, format: "feed" };
+
+  it("acepta una composición válida o ninguna (la estable del producto) y rechaza una inventada", () => {
+    expect(parseArtworkExportRequest({ ...base, variant: "PHOTO_LEFT" })).toMatchObject({ ok: true, value: { variant: "PHOTO_LEFT" } });
+    expect(parseArtworkExportRequest(base)).toMatchObject({ ok: true, value: { variant: null } });
+    expect(parseArtworkExportRequest({ ...base, variant: "OTRA" })).toEqual({ ok: false, error: "Composición inválida" });
+  });
+
+  it("la composición elegida cambia la pieza y queda en el snapshot; la misma elección da los mismos bytes", async () => {
+    const { deps } = fixtureDeps();
+    const request = (variant: "CENTER" | "PRICE_FIRST") => ({ template: "HERO" as const, productIds: [PRODUCT_IDS.nalga], branchId: BRANCH_ID, headline: "OFERTA", format: "feed" as const, variant });
+    const a = await executeArtworkExport(deps, request("CENTER"));
+    const b = await executeArtworkExport(deps, request("PRICE_FIRST"));
+    const again = await executeArtworkExport(deps, request("CENTER"));
+    expect(Buffer.from(a.png).equals(Buffer.from(b.png))).toBe(false);
+    expect(Buffer.from(a.png).equals(Buffer.from(again.png))).toBe(true);
+    expect(a.snapshot.variant).toBe("CENTER");
+  }, 30_000);
 });

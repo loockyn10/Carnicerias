@@ -16,7 +16,9 @@ export const ARTWORK_COLORS = {
   /** Texto secundario (precio normal, dirección). */
   INK_MUTED: "#4A4A45",
   /** Panel suave (foto que no existe, bloque de contacto). */
-  SURFACE_SOFT: "#EEF4EC"
+  SURFACE_SOFT: "#EEF4EC",
+  /** Mancha suave detrás de un producto recortado (más clara que el amarillo del precio, que sigue siendo la firma). */
+  BLOB_YELLOW: "#FFEF99"
 } as const;
 
 /** Amarillo de la pastilla del precio: firma visual de las piezas del negocio (protagonista y collage lo comparten). */

@@ -2,16 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { must } from "./test-support/must";
 
-import {
-  buildEditorDisplay, buildOfferSlide, buildSignageView, findSignageMedia, parsePromotionFact, parseSlideFacts, type SlideFacts
-} from "./signage";
+import { buildOfferSlide, buildSignageView, findSignageMedia, parsePromotionFact, parseSlideFacts, type SlideFacts } from "./signage";
 import { signageMediaUrls } from "./signage-media";
-import {
-  addEntry, addPromotions, childrenOfGroup, entriesToInput, entryFromGroup, entryFromProduct, entryFromPromotion, entryKey, promotionReason, summarizeEntries
-} from "./signage-entries";
-import {
-  countWithoutPhoto, filterByStatus, groupItemNote, parsePromotionCatalog, statusCounts, validityText, type PromotionOption
-} from "./signage-promotions";
+import { filterByStatus, parsePromotionCatalog, statusCounts, validityText } from "./signage-promotions";
 
 // Promociones y grupos en la cartelería de TV (D-084). Dinero en centavos.
 const UUID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -47,9 +40,9 @@ describe("diapositivas de PROMOCIÓN (precio y condición del motor, nunca a man
     expect(offer?.regularPrice).toEqual({ whole: "16.000", cents: null });
   });
 
-  it("pack por unidades: «POR 3 UNIDADES» y el precio normal de las 3", () => {
+  it("pack por unidades: «PACK 3 UNIDADES» y el precio normal de las 3", () => {
     const offer = buildOfferSlide(facts({ key: COCA, name: "Coca Cola", unitType: "UNIT", listPriceCents: 200_000n, promotion: pack({ promotionId: COCA, packQuantityGrams: null, packQuantityUnits: 3, packPriceCents: "540000" }) }));
-    expect(offer).toMatchObject({ variant: "PACK", condition: "POR 3 UNIDADES", secondary: "Precio normal $ 6.000" });
+    expect(offer).toMatchObject({ variant: "PACK", condition: "PACK 3 UNIDADES", secondary: "Precio normal $ 6.000" });
     expect(offer?.price).toEqual({ whole: "5.400", cents: null });
   });
 
@@ -152,8 +145,7 @@ describe("catálogo de promociones del editor", () => {
       rawOption(MATAMBRE, "Matambre", { status: "UPCOMING", validFrom: "2026-10-20T00:00:00Z" }),
       rawOption(UUID(5), "Vieja", { status: "EXPIRED", validUntil: "2026-10-05T00:00:00Z" }),
       { promotionId: "x" }
-    ],
-    groups: [{ id: UUID(70), name: "Ofertas fin de semana", promotionIds: [COSTILLA, PATA], usedByDisplays: 2 }, { id: "sin-nombre" }]
+    ]
   });
 
   it("resume cada promoción con el motor y descarta las filas raras", () => {
@@ -161,7 +153,7 @@ describe("catálogo de promociones del editor", () => {
     const summaries = Object.fromEntries(catalog.promotions.map((option) => [option.productName, option.summary]));
     expect(summaries["Pata muslo"]).toBe("$ 9.000 / kg · desde 2 kg");
     expect(summaries["Costilla de cerdo"]).toBe("$ 14.000 · por 2 kg");
-    expect(summaries["Coca Cola"]).toBe("$ 5.400 · por 3 unidades");
+    expect(summaries["Coca Cola"]).toBe("$ 5.400 · pack 3 unidades");
   });
 
   it("separa activas, próximas y vencidas (por defecto se ofrecen las activas)", () => {
@@ -180,105 +172,7 @@ describe("catálogo de promociones del editor", () => {
   it("marca las que no tienen foto (se reproducen igual)", () => {
     const sinFoto = catalog.promotions.filter((option) => !option.hasPhoto).map((option) => option.productName);
     expect(sinFoto).toEqual(["Costilla de cerdo"]);
-    expect(countWithoutPhoto(catalog.promotions, new Set([PATA, COSTILLA]))).toBe(1);
   });
 
-  it("lee los grupos con el orden de sus promociones y en cuántas pantallas se usan", () => {
-    expect(catalog.groups).toEqual([{ id: UUID(70), name: "Ofertas fin de semana", promotionIds: [COSTILLA, PATA], usedByDisplays: 2 }]);
-  });
-
-  it("notas de un grupo guardado: vencida, producto inactivo, sin foto o la promoción ya no existe", () => {
-    const by = (name: string) => catalog.promotions.find((option) => option.productName === name);
-    expect(groupItemNote(by("Pata muslo"))).toBe("");
-    expect(groupItemNote(by("Vieja"))).toContain("Vencida");
-    expect(groupItemNote(by("Costilla de cerdo"))).toBe("Sin foto");
-    expect(groupItemNote(undefined)).toBe("La promoción ya no existe");
-    expect(groupItemNote({ ...must(by("Pata muslo")), unavailable: "INACTIVE" })).toContain("Producto inactivo");
-  });
 });
 
-describe("entradas de la pantalla (producto, promoción, grupo)", () => {
-  const catalog = parsePromotionCatalog({
-    promotions: [rawOption(PATA, "Pata muslo"), rawOption(COSTILLA, "Costilla", { hasPhoto: false }), rawOption(MATAMBRE, "Matambre", { status: "EXPIRED", validUntil: "2026-10-05T00:00:00Z" })],
-    groups: [{ id: UUID(70), name: "Pollo", promotionIds: [PATA, COSTILLA, MATAMBRE, UUID(404)], usedByDisplays: 0 }]
-  });
-  const [pata, costilla, matambre] = catalog.promotions as [PromotionOption, PromotionOption, PromotionOption];
-  const group = must(catalog.groups[0]);
-
-  it("una promoción vencida o próxima no se reproduce y lo dice el motivo", () => {
-    expect(promotionReason(pata)).toBeNull();
-    expect(promotionReason(matambre)).toBe("PROMO_EXPIRED");
-    expect(promotionReason({ status: "UPCOMING", unavailable: null })).toBe("PROMO_UPCOMING");
-    expect(promotionReason({ status: "ACTIVE", unavailable: "NO_PRICE" })).toBe("NO_PRICE");
-  });
-
-  it("un grupo conserva sus promociones en orden y marca las que se saltean (la que ya no existe se omite)", () => {
-    const entry = entryFromGroup(group, catalog);
-    expect(entry.children.map((child) => [child.name, child.unavailable])).toEqual([["Pata muslo", null], ["Costilla", null], ["Matambre", "PROMO_EXPIRED"]]);
-    expect(childrenOfGroup(group, catalog.promotions)).toHaveLength(3);
-  });
-
-  it("agrega una vez cada cosa y manda al servidor sólo kind + id (nada de precios)", () => {
-    let entries = addEntry([], entryFromProduct({ id: UUID(900), name: "Producto", sku: null, unitType: "UNIT" })).entries;
-    entries = addEntry(entries, entryFromPromotion(pata)).entries;
-    entries = addEntry(entries, entryFromGroup(group, catalog)).entries;
-    expect(addEntry(entries, entryFromPromotion(pata)).error).toBe("Esa promoción ya está en la presentación");
-    expect(addEntry(entries, entryFromGroup(group, catalog)).error).toBe("Ese grupo ya está en la presentación");
-    expect(entriesToInput(entries)).toEqual([{ kind: "PRODUCT", id: UUID(900) }, { kind: "PROMOTION", id: PATA }, { kind: "GROUP", id: UUID(70) }]);
-    expect(JSON.stringify(entriesToInput(entries))).not.toMatch(/price|precio|name/i);
-    expect(entryKey(must(entries[1]))).toBe(`PROMOTION:${PATA}`);
-  });
-
-  it("agregar varias promociones a la vez saltea las que ya estaban", () => {
-    const first = addPromotions([], [pata, costilla]);
-    expect(first.added).toBe(2);
-    const second = addPromotions(first.entries, [costilla, matambre]);
-    expect(second.added).toBe(1);
-    expect(second.entries.map((entry) => entry.name)).toEqual(["Pata muslo", "Costilla", "Matambre"]);
-  });
-
-  it("resume cuántas entradas no se muestran y cuántas promociones no tienen foto", () => {
-    const entries = addPromotions([], [pata, costilla, matambre]).entries;
-    expect(summarizeEntries(entries)).toEqual({ blocked: 1, withoutPhoto: 1 });
-    expect(summarizeEntries([entryFromGroup(group, catalog)])).toEqual({ blocked: 1, withoutPhoto: 1 });
-  });
-});
-
-describe("editor: la pantalla tal como la devuelve el servidor", () => {
-  const photo = { storagePath: "org/1/photo.png", contentType: "image/png" };
-  const slide = (entryId: string, id: string, name: string, extra: Record<string, unknown>) => ({
-    slideId: id, entryId, kind: "PROMOTION", position: 0, productId: UUID(900), name, sku: null, unitType: "WEIGHT", available: true, unavailableReason: null,
-    listPriceCents: "1000000", bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [],
-    promotion: { promotionId: id, mode: "THRESHOLD", status: "ACTIVE", minimumGrams: 2000, discountType: "PERCENTAGE", discountValue: "1000" }, photo, ...extra
-  });
-  const payload = {
-    displayId: UUID(60), name: "TV Avenida", enabled: true, branchId: UUID(50), slideDurationSeconds: 8, tokenRotatedAt: "2026-10-10T12:00:00Z",
-    entries: [
-      { entryId: UUID(61), position: 0, kind: "PROMOTION", promotionId: PATA, productId: null, groupId: null, groupName: null, groupPromotionCount: 0 },
-      { entryId: UUID(62), position: 1, kind: "GROUP", promotionId: null, productId: null, groupId: UUID(70), groupName: "Ofertas fin de semana", groupPromotionCount: 3 }
-    ],
-    slides: [
-      slide(UUID(61), PATA, "Pata muslo", {}),
-      slide(UUID(62), COSTILLA, "Costilla de cerdo", { photo: null, available: false, unavailableReason: "PROMO_EXPIRED", promotion: { promotionId: COSTILLA, mode: "PACK_FIXED_TOTAL", status: "EXPIRED", packQuantityGrams: 2000, packPriceCents: "1400000" } }),
-      slide(UUID(62), MATAMBRE, "Matambre", { photo: null })
-    ]
-  };
-
-  it("muestra la promoción con su resumen y el grupo con cada promoción, su estado y el aviso de foto", () => {
-    const display = buildEditorDisplay(payload);
-    expect(display?.entries.map((entry) => [entry.kind, entry.name])).toEqual([["PROMOTION", "Pata muslo"], ["GROUP", "Ofertas fin de semana"]]);
-    expect(display?.entries[0]).toMatchObject({ id: PATA, summary: "$ 9.000 / kg · desde 2 kg", unavailable: null, hasPhoto: true });
-    const children = display?.entries[1]?.children ?? [];
-    expect(children.map((child) => [child.name, child.unavailable, child.hasPhoto])).toEqual([["Costilla de cerdo", "PROMO_EXPIRED", false], ["Matambre", null, false]]);
-    expect(children[0]?.summary).toBeNull();
-  });
-
-  it("un servidor anterior (sin entries ni kind) se lee como una lista de productos", () => {
-    const legacy = buildEditorDisplay({
-      displayId: UUID(60), name: "TV", enabled: true, branchId: null, slideDurationSeconds: 8, tokenRotatedAt: "",
-      slides: [{ slideId: UUID(61), productId: UUID(900), name: "Mayonesa", sku: "SKU1", unitType: "UNIT", available: true, unavailableReason: null, listPriceCents: "203500", bulkMinimumUnits: 3, bulkDiscountBps: 1500, weightTiers: [] }]
-    });
-    expect(legacy?.entries).toHaveLength(1);
-    expect(legacy?.entries[0]).toMatchObject({ kind: "PRODUCT", id: UUID(900), name: "Mayonesa", summary: "$ 1.729,75 · llevando 3 unidades" });
-  });
-});

@@ -9,6 +9,7 @@ import {
   ARTWORK_BUCKET, buildLogoPath, buildPhotoPath, isValidLogoPath, isValidPhotoPath, SIGNED_URL_SECONDS, type StoredPhotoType
 } from "../../../../lib/artwork-photo";
 import { COLLAGE_MAX_ITEMS, COLLAGE_MIN_ITEMS } from "../../../../lib/artwork-tokens";
+import { recordPhotoAlpha } from "../../../../lib/artwork-photo-alpha";
 import { readImageInfo } from "../../../../lib/image-size";
 import { createClient } from "../../../../lib/supabase/server";
 import { isUuid } from "../../../../lib/uuid";
@@ -258,6 +259,8 @@ export async function registerArtworkPhotoAction(productId: string, storagePath:
       return { error: error.message };
     }
     await removeObject(supabase, (data as { previousPath?: string | null } | null)?.previousPath);
+    // Un recorte con fondo transparente se aprovecha con una mancha detrás: se analiza una vez, con los bytes reales (mejor esfuerzo).
+    await recordPhotoAlpha(supabase, productId, storagePath).catch(() => null);
     revalidatePath("/admin/products/artwork");
     return await getArtworkPhotoAction(productId);
   } catch (error) {

@@ -10,39 +10,41 @@ const inside = (inner: Rect, outer: Rect) => inner.x >= outer.x && inner.y >= ou
 const overlapArea = (a: Rect, b: Rect) => Math.max(0, Math.min(right(a), right(b)) - Math.max(a.x, b.x)) * Math.max(0, Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y));
 const canvas: Rect = { x: 0, y: 0, w: ARTWORK_FORMATS.tv.width, h: ARTWORK_FORMATS.tv.height };
 
-describe("TV_LAYOUTS — cuatro disposiciones 16:9", () => {
+describe("TV_LAYOUTS — cuatro disposiciones 16:9 propias (no una pieza vertical estirada)", () => {
   it("hay cuatro, con ids distintos: foto izquierda, derecha, central y diagonal", () => {
     expect(TV_LAYOUTS.map((layout) => layout.id)).toEqual(["PHOTO_LEFT", "PHOTO_RIGHT", "PHOTO_CENTER", "DIAGONAL"]);
   });
 
-  it("todo cae dentro del lienzo de 1920 × 1080, a la derecha de la franja verde y con la línea «precio normal» incluida", () => {
+  it("todo cae dentro del lienzo de 1920 × 1080 y a la derecha de la franja verde, con la línea «precio normal» incluida", () => {
     for (const layout of TV_LAYOUTS) {
-      for (const rect of [layout.photo, layout.headline, layout.name, layout.price]) {
+      for (const rect of [layout.photo, layout.headline, layout.name, layout.price, layout.mechanic, layout.sticker, layout.normal]) {
         expect(inside(rect, canvas), layout.id).toBe(true);
         expect(rect.x, layout.id).toBeGreaterThanOrEqual(BAND_WIDTH.tv);
       }
-      expect(bottom(layout.price) + 8 + TV_NORMAL_LINE_HEIGHT, layout.id).toBeLessThanOrEqual(canvas.h);
+      expect(bottom(layout.normal), layout.id).toBeLessThanOrEqual(canvas.h);
+      expect(layout.normal.h, layout.id).toBeGreaterThanOrEqual(TV_NORMAL_LINE_HEIGHT - 12);
     }
   });
 
-  it("la foto es la protagonista: ocupa entre 40 % y 55 % del área útil", () => {
+  it("la foto es la protagonista: ocupa entre 45 % y 65 % del área útil (más que antes)", () => {
     for (const layout of TV_LAYOUTS) {
       const share = (layout.photo.w * layout.photo.h) / (TV_AREA.w * TV_AREA.h);
-      expect(share, layout.id).toBeGreaterThanOrEqual(0.4);
-      expect(share, layout.id).toBeLessThanOrEqual(0.55);
+      expect(share, layout.id).toBeGreaterThanOrEqual(0.45);
+      expect(share, layout.id).toBeLessThanOrEqual(0.65);
     }
   });
 
-  it("titular, nombre y precio no se pisan entre sí ni tapan la foto (la pastilla sólo la roza en la diagonal)", () => {
+  it("titular y nombre no se pisan entre sí ni tapan la foto; el precio, la mecánica y el sello sí se montan sobre ella (a propósito)", () => {
     for (const layout of TV_LAYOUTS) {
       expect(overlapArea(layout.headline, layout.name), layout.id).toBe(0);
-      expect(overlapArea(layout.name, layout.price), layout.id).toBe(0);
       expect(overlapArea(layout.headline, layout.price), layout.id).toBe(0);
+      expect(overlapArea(layout.name, layout.price), layout.id).toBe(0);
+      expect(overlapArea(layout.name, layout.mechanic), layout.id).toBe(0);
       expect(overlapArea(layout.headline, layout.photo), layout.id).toBe(0);
       expect(overlapArea(layout.name, layout.photo), layout.id).toBe(0);
-      const touch = overlapArea(layout.price, layout.photo);
-      if (layout.id === "DIAGONAL") expect(touch).toBeGreaterThan(0);
-      else expect(touch, layout.id).toBe(0);
+      // El precio nunca queda tapado por la mecánica ni por su línea de precio normal.
+      expect(overlapArea(layout.price, layout.normal), layout.id).toBe(0);
+      expect(overlapArea(layout.mechanic, layout.price), layout.id).toBe(0);
     }
   });
 

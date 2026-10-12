@@ -1,13 +1,13 @@
 import Link from "next/link";
 
 export const SIGNAGE_SECTIONS = [
-  { id: "pieces", label: "Piezas", href: "/admin/products/artwork" },
+  { id: "pieces", label: "Gráficas", href: "/admin/products/artwork" },
   { id: "screens", label: "Pantallas TV", href: "/admin/products/signage" }
 ] as const;
 
 export type SignageSection = (typeof SIGNAGE_SECTIONS)[number]["id"];
 
-/** Dos vistas de la pestaña Cartelería: las piezas por producto (D-074) y las pantallas de TV con carrusel (D-072). */
+/** Dos vistas de la pestaña Cartelería: las gráficas para redes (carpetas y piezas, D-074 y D-086) y las pantallas de TV (D-072 y D-086). */
 export function SignageSubnav({ active }: { active: SignageSection }) {
   return <nav aria-label="Cartelería" className="mt-5 inline-flex rounded-lg bg-stone-100 p-1">
     {SIGNAGE_SECTIONS.map((section) => <Link

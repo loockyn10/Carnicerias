@@ -225,14 +225,35 @@ export type Database = {
             foreignKeyName: "branch_expenses_branch_id_organization_id_fkey"
             columns: ["branch_id", "organization_id"]
             isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_expenses_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
             referencedRelation: "branches"
             referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_expenses_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "branch_expenses_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "branch_expenses_voided_by_fkey"
+            columns: ["voided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -533,6 +554,13 @@ export type Database = {
             foreignKeyName: "branch_recurring_cost_versions_branch_id_organization_id_fkey"
             columns: ["branch_id", "organization_id"]
             isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_recurring_cost_versions_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
             referencedRelation: "branches"
             referencedColumns: ["id", "organization_id"]
           },
@@ -542,6 +570,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "branch_recurring_costs"
             referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_recurring_cost_versions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -578,8 +613,22 @@ export type Database = {
             foreignKeyName: "branch_recurring_costs_branch_id_organization_id_fkey"
             columns: ["branch_id", "organization_id"]
             isOneToOne: false
+            referencedRelation: "branch_stock_status"
+            referencedColumns: ["branch_id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_recurring_costs_branch_id_organization_id_fkey"
+            columns: ["branch_id", "organization_id"]
+            isOneToOne: false
             referencedRelation: "branches"
             referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "branch_recurring_costs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "branch_recurring_costs_organization_id_fkey"
@@ -684,9 +733,11 @@ export type Database = {
       digital_signage_displays: {
         Row: {
           branch_id: string | null
+          content_source: string
           created_at: string
           created_by: string | null
           enabled: boolean
+          folder_id: string | null
           id: string
           name: string
           organization_id: string
@@ -697,9 +748,11 @@ export type Database = {
         }
         Insert: {
           branch_id?: string | null
+          content_source?: string
           created_at?: string
           created_by?: string | null
           enabled?: boolean
+          folder_id?: string | null
           id?: string
           name: string
           organization_id: string
@@ -710,9 +763,11 @@ export type Database = {
         }
         Update: {
           branch_id?: string | null
+          content_source?: string
           created_at?: string
           created_by?: string | null
           enabled?: boolean
+          folder_id?: string | null
           id?: string
           name?: string
           organization_id?: string
@@ -742,6 +797,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "digital_signage_displays_folder_fk"
+            columns: ["folder_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "signage_promotion_groups"
+            referencedColumns: ["id", "organization_id"]
           },
           {
             foreignKeyName: "digital_signage_displays_organization_id_fkey"
@@ -1841,6 +1903,13 @@ export type Database = {
             referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "organization_quantity_discount_tiers_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
         ]
       }
       organizations: {
@@ -2214,54 +2283,6 @@ export type Database = {
           },
         ]
       }
-      product_artwork_photos: {
-        Row: {
-          content_type: string
-          created_at: string
-          created_by: string | null
-          organization_id: string
-          product_id: string
-          size_bytes: number
-          storage_path: string
-          updated_at: string
-        }
-        Insert: {
-          content_type: string
-          created_at?: string
-          created_by?: string | null
-          organization_id: string
-          product_id: string
-          size_bytes: number
-          storage_path: string
-          updated_at?: string
-        }
-        Update: {
-          content_type?: string
-          created_at?: string
-          created_by?: string | null
-          organization_id?: string
-          product_id?: string
-          size_bytes?: number
-          storage_path?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "product_artwork_photos_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "product_artwork_photos_product_id_organization_id_fkey"
-            columns: ["product_id", "organization_id"]
-            isOneToOne: false
-            referencedRelation: "products"
-            referencedColumns: ["id", "organization_id"]
-          },
-        ]
-      }
       pricing_receipt_requests: {
         Row: {
           created_at: string
@@ -2301,6 +2322,57 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_artwork_photos: {
+        Row: {
+          content_type: string
+          created_at: string
+          created_by: string | null
+          has_alpha: boolean | null
+          organization_id: string
+          product_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at: string
+        }
+        Insert: {
+          content_type: string
+          created_at?: string
+          created_by?: string | null
+          has_alpha?: boolean | null
+          organization_id: string
+          product_id: string
+          size_bytes: number
+          storage_path: string
+          updated_at?: string
+        }
+        Update: {
+          content_type?: string
+          created_at?: string
+          created_by?: string | null
+          has_alpha?: boolean | null
+          organization_id?: string
+          product_id?: string
+          size_bytes?: number
+          storage_path?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_artwork_photos_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_artwork_photos_product_id_organization_id_fkey"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
           },
         ]
       }
@@ -3880,7 +3952,8 @@ export type Database = {
           id: string
           organization_id: string
           position: number
-          promotion_id: string
+          product_id: string | null
+          promotion_id: string | null
         }
         Insert: {
           created_at?: string
@@ -3888,7 +3961,8 @@ export type Database = {
           id?: string
           organization_id: string
           position: number
-          promotion_id: string
+          product_id?: string | null
+          promotion_id?: string | null
         }
         Update: {
           created_at?: string
@@ -3896,9 +3970,17 @@ export type Database = {
           id?: string
           organization_id?: string
           position?: number
-          promotion_id?: string
+          product_id?: string | null
+          promotion_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "signage_folder_items_product_fk"
+            columns: ["product_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id", "organization_id"]
+          },
           {
             foreignKeyName: "signage_promotion_group_items_group_id_organization_id_fkey"
             columns: ["group_id", "organization_id"]
@@ -3919,6 +4001,8 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string | null
+          generate_feed: boolean
+          generate_story: boolean
           id: string
           name: string
           organization_id: string
@@ -3927,6 +4011,8 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by?: string | null
+          generate_feed?: boolean
+          generate_story?: boolean
           id?: string
           name: string
           organization_id: string
@@ -3935,12 +4021,21 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string | null
+          generate_feed?: boolean
+          generate_story?: boolean
           id?: string
           name?: string
           organization_id?: string
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "signage_promotion_groups_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "signage_promotion_groups_organization_id_fkey"
             columns: ["organization_id"]
@@ -4826,21 +4921,14 @@ export type Database = {
         Args: { p_batch_id: string }
         Returns: undefined
       }
+      delete_signage_folder: { Args: { p_folder_id: string }; Returns: Json }
+      delete_signage_group: { Args: { p_group_id: string }; Returns: Json }
+      end_branch_recurring_cost: {
+        Args: { p_cost_id: string; p_effective_to: string }
+        Returns: Json
+      }
       get_admin_dashboard: { Args: { p_branch_id?: string }; Returns: Json }
       get_artwork_branding: { Args: { p_branch_id?: string }; Returns: Json }
-      delete_signage_group: {
-        Args: {
-          p_group_id: string
-        }
-        Returns: Json
-      }
-      end_branch_recurring_cost: {
-        Args: {
-          p_cost_id: string
-          p_effective_to: string
-        }
-        Returns: Json
-      }
       get_branch_carry_plan: {
         Args: { p_branch_id?: string }
         Returns: {
@@ -4858,11 +4946,7 @@ export type Database = {
         }[]
       }
       get_branch_operating_costs: {
-        Args: {
-          p_branch_id: string
-          p_from: string
-          p_to: string
-        }
+        Args: { p_branch_id: string; p_from: string; p_to: string }
         Returns: Json
       }
       get_branch_operating_result: {
@@ -5179,11 +5263,18 @@ export type Database = {
         Args: { p_display_id: string }
         Returns: Json
       }
-      get_signage_promotion_catalog: {
+      get_signage_displays_overview: { Args: never; Returns: Json }
+      get_signage_folder_facts: {
         Args: {
-          p_applicable_only?: boolean
           p_branch_id?: string
+          p_folder_id: string
+          p_item_ids?: string[]
         }
+        Returns: Json
+      }
+      get_signage_folders: { Args: never; Returns: Json }
+      get_signage_promotion_catalog: {
+        Args: { p_applicable_only?: boolean; p_branch_id?: string }
         Returns: Json
       }
       get_stock_audit_summary: {
@@ -5228,10 +5319,6 @@ export type Database = {
           status: Database["public"]["Enums"]["membership_status"]
         }[]
       }
-      list_production_batches: {
-        Args: { p_branch_id?: string; p_limit?: number; p_status?: string }
-        Returns: Json
-      }
       list_pricing_rows: {
         Args: {
           p_limit?: number
@@ -5239,6 +5326,10 @@ export type Database = {
           p_product_ids?: string[]
           p_query?: string
         }
+        Returns: Json
+      }
+      list_production_batches: {
+        Args: { p_branch_id?: string; p_limit?: number; p_status?: string }
         Returns: Json
       }
       list_products_page: {
@@ -5632,12 +5723,30 @@ export type Database = {
         }
         Returns: Json
       }
-      save_signage_group: {
+      save_signage_display_source: {
         Args: {
-          p_group_id: string
+          p_branch_id: string
+          p_content_source: string
+          p_display_id: string
+          p_enabled: boolean
+          p_folder_id?: string
           p_name: string
-          p_promotion_ids: string[]
+          p_slide_duration_seconds: number
         }
+        Returns: Json
+      }
+      save_signage_folder: {
+        Args: {
+          p_folder_id: string
+          p_generate_feed: boolean
+          p_generate_story: boolean
+          p_items: Json
+          p_name: string
+        }
+        Returns: Json
+      }
+      save_signage_group: {
+        Args: { p_group_id: string; p_name: string; p_promotion_ids: string[] }
         Returns: Json
       }
       save_supplier: {
@@ -5707,7 +5816,12 @@ export type Database = {
         Returns: undefined
       }
       set_branch_artwork_contact: {
-        Args: { p_address: string; p_branch_id: string; p_city: string; p_phone: string }
+        Args: {
+          p_address: string
+          p_branch_id: string
+          p_city: string
+          p_phone: string
+        }
         Returns: Json
       }
       set_branch_products: {
@@ -5756,7 +5870,11 @@ export type Database = {
         Returns: string
       }
       set_organization_artwork_logo: {
-        Args: { p_height_px: number; p_storage_path: string; p_width_px: number }
+        Args: {
+          p_height_px: number
+          p_storage_path: string
+          p_width_px: number
+        }
         Returns: Json
       }
       set_pos_device_status: {
@@ -5778,6 +5896,14 @@ export type Database = {
       }
       set_product_artwork_photo: {
         Args: { p_product_id: string; p_storage_path: string }
+        Returns: Json
+      }
+      set_product_artwork_photo_alpha: {
+        Args: {
+          p_has_alpha: boolean
+          p_product_id: string
+          p_storage_path: string
+        }
         Returns: Json
       }
       set_product_barcodes: {
@@ -5871,6 +5997,10 @@ export type Database = {
         Args: { p_hours: number }
         Returns: undefined
       }
+      signage_object_is_published: {
+        Args: { p_name: string }
+        Returns: boolean
+      }
       stage_import_rows: {
         Args: { p_batch_id: string; p_rows: Json }
         Returns: Json
@@ -5923,10 +6053,7 @@ export type Database = {
         Returns: Json
       }
       void_branch_expense: {
-        Args: {
-          p_expense_id: string
-          p_reason: string
-        }
+        Args: { p_expense_id: string; p_reason: string }
         Returns: Json
       }
       void_settlement: {

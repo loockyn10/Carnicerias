@@ -5,6 +5,7 @@ import {
   artworkFilename, buildCollageArtworkModel, buildOfferArtworkModel, heroPrice, normalizeHeadline, parseArtworkFacts, priceToCents,
   ARTWORK_UNAVAILABLE_LABELS, COLLAGE_COUNT_MESSAGE, type ArtworkFacts, type ArtworkPhotoRef, type OfferArtworkModel
 } from "./artwork";
+import { isHeroVariant, type HeroVariantId } from "./artwork-hero-layouts";
 import { buildArtworkBranding, parseArtworkBrandingFacts, type ArtworkBranding, type ArtworkContact } from "./artwork-branding";
 import { MAX_PHOTO_BYTES } from "./artwork-photo";
 import { ARTWORK_FONT_700_BASE64, ARTWORK_FONT_900_BASE64, ARTWORK_FONT_FAMILY } from "./artwork-font-data";
@@ -45,6 +46,8 @@ export interface ArtworkExportRequest {
   branchId: string | null;
   headline: string;
   format: ExportableArtworkFormat;
+  /** Composición del protagonista (D-086); null/ausente = la estable de ese producto. El collage no la usa. */
+  variant?: HeroVariantId | null | undefined;
 }
 
 type ParsedRequest = { ok: true; value: ArtworkExportRequest } | { ok: false; error: string };
@@ -76,11 +79,13 @@ export function parseArtworkExportRequest(body: unknown): ParsedRequest {
   if (branchId !== null && !isUuid(branchId)) return { ok: false, error: "Sucursal inválida" };
   if (!isExportableFormat(record.format)) return { ok: false, error: "Formato inválido: se puede descargar Feed o Story" };
   if (record.headline !== undefined && record.headline !== null && typeof record.headline !== "string") return { ok: false, error: "Titular inválido" };
+  const variant = record.variant ?? null;
+  if (variant !== null && !isHeroVariant(variant)) return { ok: false, error: "Composición inválida" };
   return {
     ok: true,
     value: {
       template, productIds, branchId: branchId === null ? null : branchId.toLowerCase(),
-      headline: normalizeHeadline(record.headline, defaultHeadline(template)), format: record.format
+      headline: normalizeHeadline(record.headline, defaultHeadline(template)), format: record.format, variant
     }
   };
 }
@@ -115,6 +120,8 @@ export interface ArtworkSnapshot {
   template: ArtworkTemplate;
   branchId: string | null;
   format: ExportableArtworkFormat;
+  /** Composición pedida (null = la estable del producto). */
+  variant: HeroVariantId | null;
   headline: string;
   items: ArtworkSnapshotItem[];
   hasLogo: boolean;
@@ -150,7 +157,7 @@ export function photoToDataUrl(photo: ArtworkPhotoRef, bytes: Uint8Array): strin
 }
 
 /** Identidad de la pieza: logo (leído de Storage, validado y embebido) + contacto de la sucursal elegida. Todo sale del servidor. */
-export async function resolveBranding(deps: ArtworkExportDeps, branchId: string | null): Promise<ArtworkBranding> {
+export async function resolveBranding(deps: Pick<ArtworkExportDeps, "getBranding" | "readPhoto">, branchId: string | null): Promise<ArtworkBranding> {
   const facts = parseArtworkBrandingFacts(await deps.getBranding(branchId));
   if (!facts) throw new ArtworkExportError(500, "No se pudo leer la identidad de la cartelería");
   let logoUrl: string | null = null;
@@ -204,10 +211,10 @@ function fontBytes(base64: string): ArrayBuffer {
 }
 
 /** Dibuja el modelo en PNG a las dimensiones exactas del formato. Determinista: misma entrada, mismos píxeles. En TV, `slideIndex` elige la disposición. */
-export async function renderArtworkPng(model: OfferArtworkModel, format: ArtworkFormat, slideIndex = 0): Promise<Uint8Array> {
+export async function renderArtworkPng(model: OfferArtworkModel, format: ArtworkFormat, slideIndex?: number, variant?: HeroVariantId | null): Promise<Uint8Array> {
   if (model.type === "COLLAGE" && format === "tv") throw new Error("El collage no tiene formato TV");
   const spec = ARTWORK_FORMATS[format];
-  const response = new ImageResponse(<OfferArtwork format={format} model={model} slideIndex={slideIndex} />, {
+  const response = new ImageResponse(<OfferArtwork format={format} model={model} slideIndex={slideIndex} variant={variant} />, {
     width: spec.width,
     height: spec.height,
     fonts: [
@@ -221,7 +228,7 @@ export async function renderArtworkPng(model: OfferArtworkModel, format: Artwork
 export async function executeArtworkExport(deps: ArtworkExportDeps, request: ArtworkExportRequest, now: () => Date = () => new Date()): Promise<ArtworkExportResult> {
   const { model } = await resolveArtwork(deps, request);
   const spec = ARTWORK_FORMATS[request.format];
-  const png = await renderArtworkPng(model, request.format);
+  const png = await renderArtworkPng(model, request.format, undefined, request.variant);
   return {
     png,
     filename: artworkFilename(model, request.format),
@@ -232,6 +239,7 @@ export async function executeArtworkExport(deps: ArtworkExportDeps, request: Art
       template: model.type,
       branchId: request.branchId,
       format: request.format,
+      variant: request.variant ?? null,
       headline: model.headline,
       items: model.items.map((item) => ({
         productId: item.productId,

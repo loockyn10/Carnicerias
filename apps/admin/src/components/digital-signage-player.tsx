@@ -95,7 +95,7 @@ export function DigitalSignagePlayer({ initialView, loadView, brandFallback = ""
   // Rotación: un temporizador por slide visible. Con una sola oferta (o ninguna) no hay nada que rotar.
   useEffect(() => {
     if (count < 2) return;
-    const timer = window.setTimeout(() => { dispatch({ type: "ADVANCE" }); }, durationMs);
+    const timer = window.setTimeout(() => { dispatch({ type: "ADVANCE", now: Date.now() }); }, durationMs);
     return () => { window.clearTimeout(timer); };
   }, [state.index, count, durationMs, current?.key]);
 
@@ -107,7 +107,7 @@ export function DigitalSignagePlayer({ initialView, loadView, brandFallback = ""
       const result = await loadRef.current().catch((): SignageLoadResult => ({ kind: "error" }));
       if (cancelled) return;
       if (result.kind === "ok") lastOkAt.current = Date.now();
-      dispatch({ type: "REFRESHED", result });
+      dispatch({ type: "REFRESHED", result, now: Date.now() });
       timer = window.setTimeout(() => { void tick(); }, nextPollDelay(result.kind));
     };
     timer = window.setTimeout(() => { void tick(); }, nextPollDelay("ok"));

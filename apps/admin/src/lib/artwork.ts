@@ -25,6 +25,8 @@ export interface OfferItem {
   productName: string;
   /** URL o data-URL de la foto comercial; null = el producto no tiene (la pieza dibuja un panel de reemplazo). */
   imageUrl: string | null;
+  /** La foto tiene fondo transparente (recorte): la pieza la aprovecha con una mancha detrás. false = con fondo propio o sin analizar. */
+  imageTransparent: boolean;
   unitType: "UNIT" | "WEIGHT";
   /** Precio vigente de lista (el «precio normal»). */
   regularPrice: OfferPrice;
@@ -32,6 +34,10 @@ export interface OfferItem {
   promotionalPrice: OfferPrice | null;
   /** «LLEVANDO 3 UNIDADES» / «DESDE 2 KG»; null cuando no hay promoción. */
   promotionCondition: string | null;
+  /** La mecánica dicha corta y en grande («LLEVANDO 3», «PACK 10 UNIDADES», «DESDE 2 KG»); null cuando no hay promoción. */
+  mechanic: string | null;
+  /** «25% OFF» cuando la regla vigente es un porcentaje real; null si no aplica (nunca se inventa). */
+  savings: string | null;
   /** Sufijo del precio ("/ KG"); null para productos por unidad. */
   priceSuffix: string | null;
   /** Línea bajo el nombre para productos por peso ("X KG"); null por unidad. */
@@ -106,6 +112,8 @@ function asString(value: unknown): string | null {
 export interface ArtworkPhotoRef {
   storagePath: string;
   contentType: "image/jpeg" | "image/png";
+  /** PNG con fondo transparente (true), con fondo propio (false) o todavía sin analizar (null/ausente). */
+  hasAlpha?: boolean | null;
 }
 
 export type ArtworkUnavailableReason = SlideUnavailableReason;
@@ -130,7 +138,7 @@ function parsePhoto(raw: unknown): ArtworkPhotoRef | null {
   const storagePath = asString(raw.storagePath);
   const contentType = raw.contentType;
   if (!storagePath || (contentType !== "image/jpeg" && contentType !== "image/png")) return null;
-  return { storagePath, contentType };
+  return { storagePath, contentType, hasAlpha: typeof raw.hasAlpha === "boolean" ? raw.hasAlpha : null };
 }
 
 function isReason(value: unknown): value is ArtworkUnavailableReason {
@@ -165,7 +173,7 @@ export function parseArtworkFacts(payload: unknown): ArtworkFacts | null {
   const offer = facts ? buildOfferSlide(facts) : null;
   if (!facts || !offer) return { productId, productName, available: false, unavailableReason: "NO_PRICE", item: null, branch, photo, branchId };
 
-  return { productId, productName, available: true, unavailableReason: null, photo, branchId, branch, item: slideToItemBase(productId, offer) };
+  return { productId, productName, available: true, unavailableReason: null, photo, branchId, branch, item: { ...slideToItemBase(productId, offer), imageTransparent: photo?.hasAlpha === true } };
 }
 
 /**
@@ -176,11 +184,14 @@ export function parseArtworkFacts(payload: unknown): ArtworkFacts | null {
 export function slideToItemBase(productId: string, offer: OfferSlideData): Omit<OfferItem, "imageUrl"> {
   return {
     productId,
+    imageTransparent: offer.imageTransparent,
     productName: sanitizeGlyphs(offer.name.toLocaleUpperCase("es-AR")),
     unitType: offer.unitType,
     regularPrice: offer.promo ? offer.regularPrice : offer.price,
     promotionalPrice: offer.promo ? offer.price : null,
     promotionCondition: offer.promo ? offer.condition : null,
+    mechanic: offer.promo ? offer.mechanic : null,
+    savings: offer.promo ? offer.savings : null,
     priceSuffix: offer.priceSuffix,
     unitLabel: offer.unitType === "WEIGHT" && offer.variant !== "PACK" ? "X KG" : null
   };

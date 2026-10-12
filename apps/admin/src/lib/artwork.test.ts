@@ -37,7 +37,7 @@ describe("OfferArtworkModel — UNIT con promoción «llevando N»", () => {
     expect(mayo.promotionCondition).toBe("LLEVANDO 3 UNIDADES");
     expect(formatPriceText(mayo.regularPrice)).toBe("$ 2.050");
     expect(heroPrice(mayo)).toEqual(mayo.promotionalPrice);
-    expect(mayo.priceSuffix).toBeNull();
+    expect(mayo.priceSuffix).toBe("C/U");
     expect(mayo.unitLabel).toBeNull();
   });
 });

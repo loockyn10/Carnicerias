@@ -4,8 +4,8 @@ import type { OfferSlideData, SignageView } from "../signage";
 /** Oferta de TV lista para dibujar (sin promoción salvo que se pida con `overrides`). */
 export function slideOffer(key: string, name = `Producto ${key}`, whole = "1.000", overrides: Partial<OfferSlideData> = {}): OfferSlideData {
   return {
-    key, variant: "REGULAR", name, price: { whole, cents: null }, priceSuffix: null, condition: "PRECIO UNITARIO", secondary: null, promo: false,
-    unitType: "UNIT", regularPrice: { whole, cents: null }, imageUrl: null, ...overrides
+    key, variant: "REGULAR", name, price: { whole, cents: null }, priceSuffix: null, condition: "PRECIO UNITARIO", mechanic: null, savings: null, validUntil: null, secondary: null, promo: false,
+    unitType: "UNIT", regularPrice: { whole, cents: null }, imageUrl: null, imageTransparent: false, ...overrides
   };
 }
 
