@@ -1,4 +1,5 @@
 import { LabelGroupsWorkspace, type BranchOption, type LabelRunDetail, type LabelRunRow } from "../../../../components/label-groups-workspace";
+import { LabelModeTabs } from "../../../../components/label-mode-tabs";
 import { SectionTabs } from "../../../../components/section-tabs";
 import { requireAdminContext } from "../../../../lib/admin";
 import { describeValues } from "../../../../lib/label-changes";
@@ -7,11 +8,20 @@ import { formatIsoStamp } from "../../../../lib/label-stamp";
 import { createClient } from "../../../../lib/supabase/server";
 import { isUuid } from "../../../../lib/uuid";
 import { PRODUCTOS_TABS } from "../../products-tabs";
+import { OfferSignsView } from "./offers-view";
 
 export default async function ProductLabelsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const context = await requireAdminContext();
   const params = await searchParams;
   const value = (key: string) => typeof params[key] === "string" ? params[key] : "";
+  if (value("mode") === "offers") {
+    return <main className="mx-auto max-w-6xl p-5 sm:p-8">
+      <div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div>
+      <SectionTabs tabs={PRODUCTOS_TABS} />
+      <LabelModeTabs active="offers" />
+      <OfferSignsView organizationId={context.organizationId} requestedBranch={value("branch")} />
+    </main>;
+  }
   const requestedGroup = value("group");
   const requestedRun = value("run");
   const supabase = await createClient();
@@ -69,6 +79,7 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div><p className="text-sm text-stone-500">Inicio / Productos</p><h1 className="mt-1 text-3xl font-black tracking-tight">Productos</h1><p className="mt-2 text-stone-600">Catálogo y precios vigentes.</p></div>
     <SectionTabs tabs={PRODUCTOS_TABS} />
+    <LabelModeTabs active="gondola" />
     <div className="mt-6">
       <h2 className="text-xl font-black">Etiquetas de góndola</h2>
       <p className="mt-1 text-sm text-stone-600">Armá un grupo con los productos que llevan etiqueta física, elegí cuáles imprimir y descargá un PDF A4 (21 etiquetas de 60 × 40 mm por hoja) para imprimir al 100 % y cortar con tijera.</p>
