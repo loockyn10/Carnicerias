@@ -4,6 +4,8 @@ import { createOfferSignDeps } from "../../../../lib/offer-sign-supabase";
 import { createClient } from "../../../../lib/supabase/server";
 import { isUuid } from "../../../../lib/uuid";
 
+const dataUrl = (png: Uint8Array | null) => png ? `data:image/png;base64,${Buffer.from(png).toString("base64")}` : null;
+
 /** La sucursal pedida si es válida; si no, «Central» (o la primera). */
 export function pickBranch(branches: readonly OfferBranchOption[], requested: string): OfferBranchOption | null {
   const wanted = isUuid(requested) ? requested.toLowerCase() : "";
@@ -25,8 +27,8 @@ export async function OfferSignsView({ organizationId, requestedBranch }: { orga
     try {
       const source = await loadOfferSignSource(createOfferSignDeps(supabase), branch.id);
       listing = {
-        branchId: branch.id, branchName: source.branchName, businessName: source.businessName, signs: source.signs,
-        logoDataUrl: source.logoPng ? `data:image/png;base64,${Buffer.from(source.logoPng).toString("base64")}` : null
+        branchId: branch.id, branchName: source.branchName, businessName: source.businessName, signs: source.signs, logoVariant: source.selected,
+        logos: { GENERAL: dataUrl(source.logos.GENERAL), BUTCHER: dataUrl(source.logos.BUTCHER) }
       };
     } catch (failure) {
       error = failure instanceof Error && failure.message ? failure.message : "No se pudieron cargar las promociones";

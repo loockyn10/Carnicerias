@@ -11,7 +11,7 @@ import { buildSignPage } from "../lib/offer-sign-layout";
 import { BRANCH, catalog, choricito, hamburguesas, pataMuslo } from "../lib/test-support/offer-sign-fixtures";
 
 const signs = parseOfferSignCatalog(catalog(choricito(), pataMuslo(), hamburguesas()));
-const listing: OfferSignListing = { branchId: BRANCH, branchName: "Central", businessName: "SUPER OFERTAS", signs, logoDataUrl: null };
+const listing: OfferSignListing = { branchId: BRANCH, branchName: "Central", businessName: "SUPER OFERTAS", signs, logoVariant: "GENERAL", logos: { GENERAL: null, BUTCHER: null } };
 
 describe("pantalla de carteles de ofertas", () => {
   it("lista las promociones con su condición y deja generar sólo con selección", () => {
@@ -36,6 +36,24 @@ describe("pantalla de carteles de ofertas", () => {
     expect(html).toContain("OFERTA");
     expect(html).toContain("6.500");
     expect(html.match(/<image/g)).toHaveLength(3);
+  });
+
+  it("muestra los tres formatos (mediano elegido) y el selector de logo con las dos opciones", () => {
+    const html = renderToStaticMarkup(<OfferSignWorkspace branches={[{ id: BRANCH, name: "Central" }]} error={null} listing={listing} />);
+    expect(html.indexOf("Cartel grande")).toBeLessThan(html.indexOf("Cartel mediano"));
+    expect(html.indexOf("Cartel mediano")).toBeLessThan(html.indexOf("Tira · 3 ofertas"));
+    expect(html).toMatch(/value="MEDIUM" checked|checked=""[^>]*value="MEDIUM"/);
+    expect(html).toContain("Super Ofertas / Despensa");
+    expect(html).toContain("Carnicería (sin cargar)");
+    expect(html).toContain("Subir logo de la carnicería");
+  });
+
+  it("con logo de carnicería cargado queda elegible y el logo guardado es el que se dibuja", () => {
+    const withButcher: OfferSignListing = { ...listing, logoVariant: "BUTCHER", logos: { GENERAL: "data:image/png;base64,GENERALX", BUTCHER: "data:image/png;base64,CARNICERIAX" } };
+    const html = renderToStaticMarkup(<OfferSignWorkspace branches={[{ id: BRANCH, name: "Central" }]} error={null} listing={withButcher} />);
+    expect(html).not.toContain("(sin cargar)");
+    expect(html).toContain("Cambiar logo de la carnicería");
+    expect(html).toContain('<option value="BUTCHER" selected=""');
   });
 
   it("las dos solapas conviven y marcan la activa", () => {

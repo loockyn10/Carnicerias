@@ -21,7 +21,7 @@ export function OfferSignPagePreview({ page, logoDataUrl, label }: { page: SignP
         ? <rect fill="#000" height={rect.height} key={rectIndex} width={rect.width} x={rect.x} y={rect.y} />
         : <rect fill="none" height={rect.height} key={rectIndex} stroke="#000" strokeWidth={rect.strokeMm} width={rect.width} x={rect.x} y={rect.y} />)}
       {logoDataUrl && panel.layout.logo
-        ? <image height={panel.layout.logo.size} href={logoDataUrl} preserveAspectRatio="xMidYMid meet" width={panel.layout.logo.size} x={panel.layout.logo.cx - panel.layout.logo.size / 2} y={panel.layout.logo.cy - panel.layout.logo.size / 2} />
+        ? <image data-testid="offer-sign-logo" height={panel.layout.logo.height} href={logoDataUrl} preserveAspectRatio={panel.layout.logo.align === "middle" ? "xMidYMid meet" : "xMinYMid meet"} width={panel.layout.logo.width} x={panel.layout.logo.x} y={panel.layout.logo.y} />
         : null}
       {panel.layout.texts.map((text, textIndex) => <text
         fill={text.inverse ? "#fff" : "#000"} fontFamily={`"${ARTWORK_DISPLAY_FONT_FAMILY}", Impact, "Arial Narrow", sans-serif`} fontSize={text.sizePt * MM_PER_PT}

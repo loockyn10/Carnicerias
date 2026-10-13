@@ -1,3 +1,4 @@
+import { createButcherLogoUploadPathAction, registerButcherLogoAction } from "../app/admin/products/labels/offers-actions";
 import {
   createArtworkLogoUploadPathAction, createArtworkUploadPathAction, registerArtworkLogoAction, registerArtworkPhotoAction, type ArtworkPhotoState, type BrandingLoadResult
 } from "../app/admin/products/artwork/actions";
@@ -85,4 +86,19 @@ export async function uploadArtworkLogo(file: File, branchId: string | null): Pr
   const { error } = await createClient().storage.from(ARTWORK_BUCKET).upload(target.path, prepared.blob, { contentType: prepared.type, upsert: false });
   if (error) return { kind: "error", message: `No se pudo subir el logo: ${error.message}` };
   return registerArtworkLogoAction(target.path, branchId);
+}
+
+/** Sube el logo de la CARNICERÍA (carteles de ofertas) y lo registra: mismas reglas de formato y peso; el logo de identidad no se toca. */
+export async function uploadButcherLogo(file: File): Promise<{ error?: string }> {
+  let prepared: PreparedPhoto;
+  try {
+    prepared = await preparePhoto(file);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo preparar el logo" };
+  }
+  const target = await createButcherLogoUploadPathAction(prepared.type);
+  if (target.error || !target.path) return { error: target.error ?? "No se pudo preparar la subida" };
+  const { error } = await createClient().storage.from(ARTWORK_BUCKET).upload(target.path, prepared.blob, { contentType: prepared.type, upsert: false });
+  if (error) return { error: `No se pudo subir el logo: ${error.message}` };
+  return registerButcherLogoAction(target.path);
 }

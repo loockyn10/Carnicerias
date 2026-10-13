@@ -1,10 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
+import { removeButcherLogoAction, saveOfferLogoVariantAction } from "../app/admin/products/labels/offers-actions";
+import { uploadButcherLogo } from "../lib/artwork-photo-client";
 import {
-  filterSigns, MAX_OFFER_SIGNS, OFFER_SIGN_FORMATS, paginateSigns, signPageCount, signValidityText, type OfferSign, type OfferSignFormat
+  filterSigns, MAX_OFFER_SIGNS, OFFER_LOGO_VARIANTS, OFFER_SIGN_FORMATS, paginateSigns, signPageCount, signValidityText, type OfferLogoVariant, type OfferSign, type OfferSignFormat
 } from "../lib/offer-sign";
 import { buildSignPage } from "../lib/offer-sign-layout";
 import { OfferSignPagePreview } from "./offer-sign-preview";
@@ -20,8 +22,10 @@ export interface OfferSignListing {
   branchName: string;
   businessName: string;
   signs: OfferSign[];
-  /** Logo ya convertido a blanco y negro (data-URL PNG); null = sin logo. */
-  logoDataUrl: string | null;
+  /** Cada logo ya convertido a blanco y negro (data-URL PNG); null = no hay. Cambiar de logo no vuelve al servidor. */
+  logos: Record<OfferLogoVariant, string | null>;
+  /** Logo guardado como elegido la última vez. */
+  logoVariant: OfferLogoVariant;
 }
 
 const number = (value: number) => value.toLocaleString("es-AR");
@@ -39,7 +43,10 @@ export function OfferSignWorkspace({ branches, listing, error }: { branches: Off
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [format, setFormat] = useState<OfferSignFormat>("STRIP");
+  const [format, setFormat] = useState<OfferSignFormat>("MEDIUM");
+  const [logoVariant, setLogoVariant] = useState<OfferLogoVariant>(listing?.logoVariant ?? "GENERAL");
+  const [logoBusy, setLogoBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -49,7 +56,9 @@ export function OfferSignWorkspace({ branches, listing, error }: { branches: Off
   const shown = useMemo(() => filterSigns(signs, query), [signs, query]);
   // En el orden de la lista (no del clic): así el PDF y el preview siempre coinciden.
   const chosen = useMemo(() => signs.filter((sign) => selected.has(sign.promotionId)), [signs, selected]);
-  const brand = useMemo(() => ({ hasLogo: listing?.logoDataUrl != null, name: listing?.businessName ?? "" }), [listing]);
+  const logoDataUrl = listing?.logos[logoVariant] ?? null;
+  const hasButcherLogo = listing?.logos.BUTCHER != null;
+  const brand = useMemo(() => ({ hasLogo: logoDataUrl !== null, name: listing?.businessName ?? "" }), [logoDataUrl, listing]);
   const pages = useMemo(() => paginateSigns(chosen, format).map((group) => buildSignPage(group, format, brand)), [chosen, format, brand]);
   const pageCount = signPageCount(format, chosen.length);
   const current = Math.min(pageIndex, Math.max(0, pageCount - 1));
@@ -61,6 +70,37 @@ export function OfferSignWorkspace({ branches, listing, error }: { branches: Off
     setNotice(null);
   }
 
+  /** El preview cambia al instante; la elección se guarda para la próxima vez (sólo afecta a estos carteles). */
+  async function chooseLogo(variant: OfferLogoVariant) {
+    setLogoVariant(variant);
+    setNotice(null);
+    const result = await saveOfferLogoVariantAction(variant);
+    setFailure(result.error ?? null);
+  }
+
+  async function onLogoFile(file: File | undefined) {
+    if (!file) return;
+    setLogoBusy(true);
+    setFailure(null);
+    const result = await uploadButcherLogo(file);
+    setLogoBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+    if (result.error) { setFailure(result.error); return; }
+    setLogoVariant("BUTCHER");
+    setNotice("Logo de la carnicería guardado y elegido para los carteles.");
+    router.refresh();
+  }
+
+  async function removeButcherLogo() {
+    if (!window.confirm("¿Quitar el logo de la carnicería? Los carteles vuelven a usar el logo general.")) return;
+    setLogoBusy(true);
+    const result = await removeButcherLogoAction();
+    setLogoBusy(false);
+    if (result.error) { setFailure(result.error); return; }
+    setLogoVariant("GENERAL");
+    router.refresh();
+  }
+
   async function generate() {
     if (!listing) return;
     setFailure(null);
@@ -69,7 +109,7 @@ export function OfferSignWorkspace({ branches, listing, error }: { branches: Off
     try {
       const response = await fetch("/api/labels/offers", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ branchId: listing.branchId, format, promotionIds: chosen.map((sign) => sign.promotionId) })
+        body: JSON.stringify({ branchId: listing.branchId, format, logoVariant, promotionIds: chosen.map((sign) => sign.promotionId) })
       });
       if (!response.ok || !response.headers.get("Content-Type")?.includes("application/pdf")) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -151,9 +191,23 @@ export function OfferSignWorkspace({ branches, listing, error }: { branches: Off
           </div>
         </fieldset>
 
+        <div className="mt-4 grid gap-2" data-testid="offer-sign-logo-picker">
+          <label className="grid gap-1 text-sm font-bold" htmlFor="offer-sign-logo">Logo
+            <select className={`${input} font-normal`} disabled={logoBusy} id="offer-sign-logo" onChange={(event) => { void chooseLogo(event.target.value === "BUTCHER" ? "BUTCHER" : "GENERAL"); }} value={logoVariant}>
+              {OFFER_LOGO_VARIANTS.map((option) => <option disabled={option.id === "BUTCHER" && !hasButcherLogo} key={option.id} value={option.id}>{option.label}{option.id === "BUTCHER" && !hasButcherLogo ? " (sin cargar)" : ""}</option>)}
+            </select>
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input accept="image/png,image/jpeg,image/webp" className="hidden" data-testid="offer-sign-logo-input" onChange={(event) => { void onLogoFile(event.target.files?.[0]); }} ref={fileRef} type="file" />
+            <button className={secondaryButton} disabled={logoBusy || listing === null} onClick={() => { fileRef.current?.click(); }} type="button">{logoBusy ? "Guardando…" : hasButcherLogo ? "Cambiar logo de la carnicería" : "Subir logo de la carnicería"}</button>
+            {hasButcherLogo ? <button className={`${secondaryButton} text-red-700`} disabled={logoBusy} onClick={() => { void removeButcherLogo(); }} type="button">Quitar</button> : null}
+          </div>
+          <p className="text-xs text-stone-500">Sólo cambia estos carteles: el logo general, Instagram, TV y las etiquetas siguen igual.</p>
+        </div>
+
         <h3 className="mt-5 text-lg font-black">Vista previa</h3>
         {pages.length ? <>
-          <div className="mt-2"><OfferSignPagePreview label={`Hoja ${String(current + 1)} de ${String(pageCount)}`} logoDataUrl={listing?.logoDataUrl ?? null} page={pages[current] ?? pages[0] ?? { panels: [], rules: [] }} /></div>
+          <div className="mt-2"><OfferSignPagePreview label={`Hoja ${String(current + 1)} de ${String(pageCount)}`} logoDataUrl={logoDataUrl} page={pages[current] ?? pages[0] ?? { panels: [], rules: [] }} /></div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <button className={secondaryButton} disabled={current === 0} onClick={() => { setPageIndex(current - 1); }} type="button">Anterior</button>
             <span className="text-sm font-bold" data-testid="offer-sign-page-label">Hoja {current + 1} de {pageCount}</span>

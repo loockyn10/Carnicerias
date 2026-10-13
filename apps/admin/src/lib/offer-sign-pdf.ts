@@ -90,11 +90,14 @@ function drawLayout(page: PDFPage, font: OutlineFont, layout: SignLayout, logo: 
     else page.drawRectangle({ ...geometry, borderColor: black, borderWidth: mm(rect.strokeMm) });
   }
   if (logo && layout.logo) {
-    const box = mm(layout.logo.size);
+    // El logo entra entero en su caja sin deformarse (redondo, horizontal o vertical), pegado a la izquierda o centrado.
+    const box = layout.logo;
     const ratio = logo.width / logo.height;
-    const width = ratio >= 1 ? box : box * ratio;
-    const height = ratio >= 1 ? box / ratio : box;
-    page.drawImage(logo, { x: mm(xMm + layout.logo.cx) - width / 2, y: pageHeight - mm(yMm + layout.logo.cy) - height / 2, width, height });
+    const fit = Math.min(box.width, box.height * ratio);
+    const width = mm(fit);
+    const height = mm(fit / ratio);
+    const left = box.align === "middle" ? box.x + (box.width - fit) / 2 : box.x;
+    page.drawImage(logo, { x: mm(xMm + left), y: pageHeight - mm(yMm + box.y + box.height / 2) - height / 2, width, height });
   }
   for (const text of layout.texts) drawGlyphs(page, font, text, xMm, yMm);
 }

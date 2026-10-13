@@ -19,6 +19,11 @@ export function createOfferSignDeps(supabase: SupabaseClient<Database>): OfferSi
       if (error) throw fail(error);
       return data;
     },
+    getSettings: async () => {
+      const { data, error } = await supabase.rpc("get_offer_sign_settings");
+      if (error) throw fail(error);
+      return data;
+    },
     readLogo: async (storagePath) => {
       const { data, error } = await supabase.storage.from(ARTWORK_BUCKET).download(storagePath);
       return error ? null : new Uint8Array(await data.arrayBuffer());

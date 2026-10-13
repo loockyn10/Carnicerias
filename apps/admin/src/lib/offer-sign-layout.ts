@@ -19,6 +19,7 @@ export const ANTON_CAP_EM = 1760 / 2048;
 
 export const OFFER_PANEL_MM: Record<OfferSignFormat, { width: number; height: number }> = {
   STRIP: { width: (OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM - 2 * OFFER_GUTTER_MM) / 3, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM },
+  MEDIUM: { width: (OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM - OFFER_GUTTER_MM) / 2, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM },
   POSTER: { width: OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM }
 };
 
@@ -41,8 +42,11 @@ export interface SignLayout {
   height: number;
   texts: SignText[];
   rects: SignRect[];
-  /** Caja cuadrada del logo (el logo se acomoda adentro sin deformarse); null = sin espacio de logo. */
-  logo: { cx: number; cy: number; size: number } | null;
+  /**
+   * Caja del logo (mm dentro del cartel): el logo se acomoda adentro SIN deformarse (redondo, horizontal o vertical), pegado a la izquierda
+   * o centrado según `align`. null = sin espacio de logo.
+   */
+  logo: { x: number; y: number; width: number; height: number; align: "start" | "middle" } | null;
 }
 
 export interface SignBrand {
@@ -60,7 +64,7 @@ export function antonWidthPt(text: string, sizePt: number): number {
 
 interface Plan {
   padX: number;
-  logo: { size: number; cx: number | "center"; cy: number };
+  logo: { width: number; height: number; cy: number; align: "start" | "middle"; left: number };
   offer: { maxPt: number; baseline: number };
   name: { top: number; bottom: number; maxPt: number; minPt: number; maxLines: number };
   badge: { top: number; height: number; maxPt: number; minPt: number; fullWidth: boolean; padMm: number };
@@ -72,7 +76,7 @@ interface Plan {
 
 const PLANS: Record<OfferSignFormat, Plan> = {
   STRIP: {
-    padX: 6, logo: { size: 25, cx: "center", cy: 18.5 }, offer: { maxPt: 52, baseline: 50 },
+    padX: 6, logo: { width: 70, height: 25, cy: 18.5, align: "middle", left: 0 }, offer: { maxPt: 52, baseline: 50 },
     name: { top: 56, bottom: 104, maxPt: 50, minPt: 22, maxLines: 3 },
     badge: { top: 108, height: 20, maxPt: 34, minPt: 14, fullWidth: true, padMm: 4 },
     price: { baseline: 164, maxPt: 130, maxCapMm: 30 },
@@ -80,8 +84,17 @@ const PLANS: Record<OfferSignFormat, Plan> = {
     normal: { baseline: 189, maxPt: 13, minPt: 7 },
     border: 0.8
   },
+  MEDIUM: {
+    padX: 9, logo: { width: 100, height: 26, cy: 17, align: "middle", left: 0 }, offer: { maxPt: 56, baseline: 50 },
+    name: { top: 54, bottom: 99, maxPt: 66, minPt: 26, maxLines: 3 },
+    badge: { top: 102, height: 22, maxPt: 40, minPt: 16, fullWidth: true, padMm: 5 },
+    price: { baseline: 166, maxPt: 190, maxCapMm: 38 },
+    unit: { baseline: 178, maxPt: 28 },
+    normal: { baseline: 189, maxPt: 16, minPt: 8 },
+    border: 0.6
+  },
   POSTER: {
-    padX: 14, logo: { size: 30, cx: 29, cy: 25 }, offer: { maxPt: 56, baseline: 33 },
+    padX: 14, logo: { width: 90, height: 32, cy: 25, align: "start", left: 12 }, offer: { maxPt: 56, baseline: 33 },
     name: { top: 42, bottom: 78, maxPt: 84, minPt: 30, maxLines: 2 },
     badge: { top: 82, height: 18, maxPt: 42, minPt: 20, fullWidth: false, padMm: 12 },
     price: { baseline: 158, maxPt: 330, maxCapMm: 50 },
@@ -173,10 +186,12 @@ export function buildSignLayout(sign: OfferSign, format: OfferSignFormat, brand:
   }
 
   // 7. Logo (o, sin logo, el nombre del negocio en el mismo lugar).
-  const logoX = plan.logo.cx === "center" ? center : plan.logo.cx;
-  if (brand.hasLogo) return { width, height, texts, rects, logo: { cx: logoX, cy: plan.logo.cy, size: plan.logo.size } };
-  const fallback = oneLine(brand.name, plan.logo.cx === "center" ? inner : plan.logo.size * 2.4, 16, 8);
-  texts.push({ text: fallback.text, x: logoX, y: plan.logo.cy + (ANTON_CAP_EM * fallback.sizePt * MM_PER_PT) / 2, sizePt: fallback.sizePt, anchor: "middle", inverse: false });
+  const box = plan.logo;
+  const boxX = box.align === "middle" ? center - box.width / 2 : box.left;
+  if (brand.hasLogo) return { width, height, texts, rects, logo: { x: boxX, y: box.cy - box.height / 2, width: box.width, height: box.height, align: box.align } };
+  const fallback = oneLine(brand.name, box.align === "middle" ? inner : box.height * 2.4, 16, 8);
+  const fallbackX = box.align === "middle" ? center : boxX + (box.height * 2.4) / 2;
+  texts.push({ text: fallback.text, x: fallbackX, y: box.cy + (ANTON_CAP_EM * fallback.sizePt * MM_PER_PT) / 2, sizePt: fallback.sizePt, anchor: "middle", inverse: false });
   return { width, height, texts, rects, logo: null };
 }
 
@@ -194,11 +209,12 @@ export function buildSignPage(signs: readonly OfferSign[], format: OfferSignForm
     x: OFFER_MARGIN_MM + index * (width + OFFER_GUTTER_MM), y: OFFER_MARGIN_MM, layout: buildSignLayout(sign, format, brand)
   }));
   const rules: SignRule[] = [];
-  if (format === "STRIP") {
-    for (let cut = 1; cut < 3; cut += 1) {
-      const x = OFFER_MARGIN_MM + cut * width + (cut - 0.5) * OFFER_GUTTER_MM;
-      rules.push({ x1: x, y1: 2.5, x2: x, y2: 6, widthMm: 0.2 }, { x1: x, y1: OFFER_PAGE_MM.height - 6, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
-    }
+  const columns = format === "STRIP" ? 3 : format === "MEDIUM" ? 2 : 1;
+  for (let cut = 1; cut < columns; cut += 1) {
+    const x = OFFER_MARGIN_MM + cut * width + (cut - 0.5) * OFFER_GUTTER_MM;
+    // Tira: marcas cortas en los márgenes. Mediano: una línea fina de lado a lado por el medio (se imprime la hoja entera o se corta).
+    if (format === "MEDIUM") rules.push({ x1: x, y1: 2.5, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
+    else rules.push({ x1: x, y1: 2.5, x2: x, y2: 6, widthMm: 0.2 }, { x1: x, y1: OFFER_PAGE_MM.height - 6, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
   }
   return { panels, rules };
 }

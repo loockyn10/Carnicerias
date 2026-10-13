@@ -1776,6 +1776,57 @@ export type Database = {
           },
         ]
       }
+      organization_offer_sign_settings: {
+        Row: {
+          butcher_content_type: string | null
+          butcher_height_px: number | null
+          butcher_size_bytes: number | null
+          butcher_storage_path: string | null
+          butcher_width_px: number | null
+          logo_variant: string
+          organization_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          butcher_content_type?: string | null
+          butcher_height_px?: number | null
+          butcher_size_bytes?: number | null
+          butcher_storage_path?: string | null
+          butcher_width_px?: number | null
+          logo_variant?: string
+          organization_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          butcher_content_type?: string | null
+          butcher_height_px?: number | null
+          butcher_size_bytes?: number | null
+          butcher_storage_path?: string | null
+          butcher_width_px?: number | null
+          logo_variant?: string
+          organization_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_offer_sign_settings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organization_offer_sign_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_pricing_excluded_categories: {
         Row: {
           category_id: string
@@ -5118,6 +5169,7 @@ export type Database = {
         Args: { p_branch_id: string; p_from: string; p_to: string }
         Returns: Json
       }
+      get_offer_sign_settings: { Args: never; Returns: Json }
       get_pos_branch_stock: { Args: { p_branch_id: string }; Returns: Json }
       get_pos_catalog: {
         Args: { p_branch_id: string }
@@ -5552,6 +5604,7 @@ export type Database = {
         Args: { p_branch_id: string; p_device_id: string; p_label?: string }
         Returns: Json
       }
+      remove_offer_sign_butcher_logo: { Args: never; Returns: Json }
       remove_organization_artwork_logo: { Args: never; Returns: Json }
       remove_product_artwork_photo: {
         Args: { p_product_id: string }
@@ -5872,6 +5925,15 @@ export type Database = {
         }
         Returns: string
       }
+      set_offer_sign_butcher_logo: {
+        Args: {
+          p_height_px: number
+          p_storage_path: string
+          p_width_px: number
+        }
+        Returns: Json
+      }
+      set_offer_sign_logo_variant: { Args: { p_variant: string }; Returns: Json }
       set_organization_artwork_logo: {
         Args: {
           p_height_px: number

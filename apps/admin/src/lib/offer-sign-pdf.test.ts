@@ -196,7 +196,7 @@ describe("PDF A4 apaisado", () => {
       fs.writeFileSync(path.join(OUT, `${name}.pdf`), await render(signs, format, brand, logo));
       fs.writeFileSync(path.join(OUT, `${name}-sinimagen.pdf`), await render(signs, format, brand, null));
       const boxes = paginateSigns(signs, format).map((group) => buildSignPage(group, format, brand).panels.flatMap((panel) => (panel.layout.logo
-        ? [{ cx: panel.x + panel.layout.logo.cx, cy: panel.y + panel.layout.logo.cy, size: panel.layout.logo.size }] : [])));
+        ? [{ x: panel.x + panel.layout.logo.x, y: panel.y + panel.layout.logo.y, width: panel.layout.logo.width, height: panel.layout.logo.height, align: panel.layout.logo.align }] : [])));
       fs.writeFileSync(path.join(OUT, `${name}.logo.json`), JSON.stringify(boxes));
     };
     await sample("tira-3-ofertas", [choricito(), pataMuslo(), hamburguesas()].map(sign), "STRIP", WITH_LOGO, mono.png);

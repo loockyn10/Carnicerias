@@ -9,15 +9,26 @@ import { buildOfferSlide, formatMinimumWeight, parsePromotionFact, splitPrice, t
  * y sólo se ofrece una promoción que de verdad baja el precio (si no, no hay oferta que anunciar ni «precio normal» que comparar).
  */
 
-export type OfferSignFormat = "STRIP" | "POSTER";
+export type OfferSignFormat = "STRIP" | "MEDIUM" | "POSTER";
+
+/** Qué logo llevan los carteles: el de identidad de la organización (despensa «Super Ofertas») o el de la carnicería. */
+export type OfferLogoVariant = "GENERAL" | "BUTCHER";
+export const OFFER_LOGO_VARIANTS: readonly { id: OfferLogoVariant; label: string }[] = [
+  { id: "GENERAL", label: "Super Ofertas / Despensa" },
+  { id: "BUTCHER", label: "Carnicería" }
+];
+export function isOfferLogoVariant(value: unknown): value is OfferLogoVariant {
+  return value === "GENERAL" || value === "BUTCHER";
+}
 
 export const OFFER_SIGN_FORMATS: readonly { id: OfferSignFormat; label: string; perPage: number }[] = [
-  { id: "STRIP", label: "Tira · 3 ofertas por hoja", perPage: 3 },
-  { id: "POSTER", label: "Cartel grande · 1 oferta por hoja", perPage: 1 }
+  { id: "POSTER", label: "Cartel grande · 1 oferta por hoja", perPage: 1 },
+  { id: "MEDIUM", label: "Cartel mediano · 2 ofertas por hoja", perPage: 2 },
+  { id: "STRIP", label: "Tira · 3 ofertas por hoja", perPage: 3 }
 ];
 
 export function signsPerPage(format: OfferSignFormat): number {
-  return format === "STRIP" ? 3 : 1;
+  return format === "STRIP" ? 3 : format === "MEDIUM" ? 2 : 1;
 }
 
 export function signPageCount(format: OfferSignFormat, count: number): number {
@@ -157,7 +168,7 @@ export function signValidityText(sign: Pick<OfferSign, "validUntil">): string {
   return sign.validUntil ? `Hasta el ${formatIsoDate(sign.validUntil.slice(0, 10))}` : "Sin fecha de fin";
 }
 
-/** Parte `items` en hojas (3 por hoja en tira, 1 en cartel grande). */
+/** Parte `items` en hojas (3 por hoja en tira, 2 en cartel mediano, 1 en cartel grande). */
 export function paginateSigns<T>(items: readonly T[], format: OfferSignFormat): T[][] {
   const size = signsPerPage(format);
   const pages: T[][] = [];
