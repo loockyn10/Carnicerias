@@ -12,6 +12,8 @@ import { ArtworkPreview } from "./artwork-preview";
 import { OfferArtwork } from "./offer-artwork";
 import { TvOfferSlide } from "./tv-offer";
 
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+
 const render = (node: React.ReactElement) => renderToStaticMarkup(node);
 const textOf = (html: string) => html.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, "|").replace(/\|+/g, "|");
 /** Texto corrido: los renglones del nombre cambian con el ancho de cada disposición. */
@@ -140,12 +142,12 @@ describe("la diapositiva del televisor y la pieza de Piezas son el mismo rendere
   it("una oferta de la presentación (precio/promoción del motor + foto + logo de la base) se convierte al mismo modelo de pieza", () => {
     const view = buildSignageView({
       status: "ACTIVE", slideDurationSeconds: 8, organizationName: "AW Org",
-      logo: { storagePath: "o/branding/aaaa.png", contentType: "image/png", width: 480, height: 120 },
+      logo: { storagePath: "o/branding/aaaa.png", publicPath: "d2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001-tv-v1.webp", contentType: "image/png", width: 480, height: 120 },
       slides: [{
         slideId: "0b1d6c1e-0000-4000-8000-000000000001", name: "Mayonesa", unitType: "UNIT", listPriceCents: "205000", bulkMinimumUnits: 3, bulkDiscountBps: 1500, weightTiers: [],
-        photo: { storagePath: "o/p/bbbb.png", contentType: "image/png" }
+        photo: { storagePath: "o/p/bbbb.png", publicPath: "d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c3000000-0000-4000-8000-000000000001-tv-v1.webp", contentType: "image/png" }
       }]
-    }, signageMediaUrls("/api/tv/tok"));
+    }, signageMediaUrls());
     const slide = view?.slides[0];
     if (!view || !slide) throw new Error("sin vista");
     const model = slideToArtworkModel(view, slide);
@@ -153,11 +155,10 @@ describe("la diapositiva del televisor y la pieza de Piezas son el mismo rendere
     expect(model.items[0]).toMatchObject({ unitType: "UNIT", promotionCondition: "LLEVANDO 3 UNIDADES", productName: "MAYONESA" });
     expect(model.items[0]?.promotionalPrice).toEqual({ whole: "1.742", cents: "50" });
     expect(model.items[0]?.regularPrice).toEqual({ whole: "2.050", cents: null });
-    expect(model.items[0]?.imageUrl).toBe(`/api/tv/tok/media/0b1d6c1e-0000-4000-8000-000000000001?v=bbbb`);
-    expect(model.branding.logo?.imageUrl).toBe("/api/tv/tok/media/logo?v=aaaa");
+    expect(model.items[0]?.imageUrl).toContain("/storage/v1/object/public/signage-tv-media/");
+    expect(model.branding.logo?.imageUrl).toContain("/storage/v1/object/public/signage-tv-media/");
     const html = render(<OfferArtwork format="tv" model={model} slideIndex={1} />);
-    expect(html).toContain('src="/api/tv/tok/media/logo?v=aaaa"');
-    expect(html).toContain('src="/api/tv/tok/media/0b1d6c1e-0000-4000-8000-000000000001?v=bbbb"');
+    expect(html).toContain("signage-tv-media");
   });
 
   it("una oferta sin foto ni promoción conserva el precio vigente y no inventa nada", () => {

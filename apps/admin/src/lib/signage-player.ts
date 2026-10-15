@@ -99,7 +99,7 @@ export function sameView(a: SignageView | null, b: SignageView | null): boolean 
 // Cliente HTTP del televisor
 // ---------------------------------------------------------------------------------------------------------------------
 
-export const SIGNAGE_POLL_MS = 30_000;
+export const SIGNAGE_POLL_MS = 3 * 60_000;
 export const SIGNAGE_RETRY_MS = 10_000;
 export const SIGNAGE_FETCH_TIMEOUT_MS = 10_000;
 /** Recarga completa de la página (toma versiones nuevas del código) cada tanto, sólo si hay conexión. */
@@ -159,9 +159,16 @@ function hasWhole(value: unknown): boolean {
   return typeof asRecord(value)?.whole === "string";
 }
 
-/** Las imágenes sólo se piden a las rutas propias del servidor (`/api/...`): nunca a una URL que venga dentro de un JSON. */
+/** Las imágenes sólo se piden al CDN público de ESTE proyecto Supabase; nunca a un origen arbitrario del JSON. */
 function ownImageUrl(value: unknown): string | null {
-  return typeof value === "string" && value.startsWith("/api/") && !value.startsWith("//") ? value : null;
+  if (typeof value !== "string") return null;
+  const origin = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!origin) return null;
+  try {
+    const expected = new URL(origin).origin;
+    const url = new URL(value);
+    return url.origin === expected && /^\/storage\/v1\/object\/public\/signage-tv-media\/.+\.webp$/i.test(url.pathname) ? value : null;
+  } catch { return null; }
 }
 
 /** Una oferta del JSON del televisor: sólo se aceptan las que traen todo lo que la diapositiva dibuja; la imagen se normaliza. */

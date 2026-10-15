@@ -12,10 +12,10 @@ const TOKEN = "a".repeat(64);
 const SLIDE = "0b1d6c1e-0000-4000-8000-000000000001";
 const payload = {
   status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Super Demo",
-  logo: { storagePath: "org/branding/c2.png", contentType: "image/png", width: 480, height: 120 },
+  logo: { storagePath: "d2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001.png", publicPath: "d2000000-0000-4000-8000-000000000001/branding/c2000000-0000-4000-8000-000000000001-tv-v1.webp", contentType: "image/png", width: 480, height: 120 },
   slides: [{
     slideId: SLIDE, name: "Bondiola de cerdo", unitType: "WEIGHT", listPriceCents: "1065000", bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [],
-    photo: { storagePath: "org/prod/c1.png", contentType: "image/png" }
+    photo: { storagePath: "d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001.png", publicPath: "d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001-tv-v1.webp", contentType: "image/png" }
   }]
 };
 
@@ -43,15 +43,15 @@ describe("loadPublicSignage — la vista pública (sin sesión) con la identidad
     expect(rpc).toHaveBeenCalledExactlyOnceWith("get_signage_display", { p_token: TOKEN });
   });
 
-  it("devuelve la vista con precio del motor, foto y logo servidos por /api/tv/<token>/media (nunca una ruta de Storage)", async () => {
+  it("devuelve la vista con precio del motor y URLs CDN directas, nunca un proxy Vercel", async () => {
     rpc.mockResolvedValue({ data: payload, error: null });
     const result = await loadPublicSignage(TOKEN);
     if (result.kind !== "ok") throw new Error("sin vista");
     const slide = result.view.slides[0];
     expect(slide).toMatchObject({ name: "Bondiola de cerdo", unitType: "WEIGHT", price: { whole: "10.650", cents: null }, priceSuffix: "/ KG", promo: false });
-    expect(slide?.imageUrl).toBe(`/api/tv/${TOKEN}/media/${SLIDE}?v=c1`);
-    expect(result.view.branding.logo?.imageUrl).toBe(`/api/tv/${TOKEN}/media/logo?v=c2`);
-    expect(JSON.stringify(result.view)).not.toContain("org/prod");
+    expect(slide?.imageUrl).toContain("/storage/v1/object/public/signage-tv-media/");
+    expect(result.view.branding.logo?.imageUrl).toContain("/storage/v1/object/public/signage-tv-media/");
+    expect(JSON.stringify(result.view)).not.toContain("/api/tv/");
     expect(JSON.stringify(result.view)).not.toContain("product-artwork");
   });
 
@@ -74,7 +74,7 @@ describe("loadPublicSignageMedia — imágenes de SU pantalla", () => {
     const result = await loadPublicSignageMedia(TOKEN, SLIDE);
     expect(result.kind).toBe("ok");
     expect(rpc).toHaveBeenCalledWith("get_signage_display", { p_token: TOKEN });
-    expect(download).toHaveBeenCalledWith("org/prod/c1.png");
+    expect(download).toHaveBeenCalledWith("d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c1000000-0000-4000-8000-000000000001.png");
   });
 
   it("token inválido, regenerado o id ajeno: 404 y Storage intacto", async () => {

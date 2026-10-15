@@ -11,7 +11,7 @@ import { getSupabasePublicEnv } from "./supabase/env";
  * Lectura PÚBLICA de la cartelería (sin login). Usa la clave pública (anon) y SIN sesión: aunque el navegador del televisor tuviera
  * cookies del Admin, esta ruta nunca las usa. La única puerta es la RPC `get_signage_display(token)`, que valida el token por hash y
  * devuelve exclusivamente los hechos comerciales de SU pantalla; el precio «llevando N» se calcula acá con el motor de pricing.
- * Las imágenes (foto del producto y logo) se sirven por `/api/tv/<token>/media/<id>` (D-076): ver `signage-media.ts`.
+ * Las imágenes son URLs directas al CDN público de Supabase (`signage-tv-media`); Vercel sólo entrega este manifiesto pequeño.
  */
 function publicClient() {
   const { url, publishableKey } = getSupabasePublicEnv();
@@ -34,7 +34,7 @@ export async function loadPublicSignage(token: string): Promise<SignageLoadResul
   try {
     const loaded = await loadPayload(publicClient(), token);
     if (loaded.kind !== "ok") return loaded;
-    const view: SignageView | null = buildSignageView(loaded.payload, signageMediaUrls(`/api/tv/${token}`));
+    const view: SignageView | null = buildSignageView(loaded.payload, signageMediaUrls());
     return view ? { kind: "ok", view } : { kind: "error" };
   } catch {
     return { kind: "error" };

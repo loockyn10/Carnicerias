@@ -3,9 +3,9 @@ import { findSignageMedia, type MediaRef, type SignageMedia } from "./signage";
 import { isUuid } from "./uuid";
 
 /**
- * Imágenes de la cartelería de TV (D-076): la foto comercial de cada diapositiva y el logo viven en el bucket PRIVADO
- * `product-artwork`. El navegador del televisor nunca habla con Storage: pide `/api/tv/<token>/media/<id>` (o, en la vista previa
- * del Admin, `/api/tv-preview/<pantalla>/media/<id>`) y el servidor
+ * Imágenes de la cartelería de TV: la foto comercial original y el logo viven en el bucket PRIVADO `product-artwork`.
+ * La TV sólo recibe el derivado WebP público e inmutable de `signage-tv-media`; nunca bytes a través de Vercel.
+ * `readSignageMedia` queda sólo como compatibilidad temporal del endpoint viejo, fuera del flujo normal.
  *   1. relee la presentación publicada (la RPC valida el token / la sesión),
  *   2. busca en ELLA la ruta de ese `id` (el id de una diapositiva o `logo`): nunca se lee una ruta que venga del navegador,
  *   3. descarga el objeto y comprueba que los bytes REALES sean PNG/JPEG del tipo registrado.
@@ -42,10 +42,15 @@ export function mediaVersion(storagePath: string): string {
 }
 
 /** Resolvedor de imágenes para una superficie: `base` es la ruta del endpoint de esa superficie (sin barra final). */
-export function signageMediaUrls(base: string): SignageMedia {
+export function signageMediaUrls(): SignageMedia {
+  const origin = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
+  const publicUrl = (path: string | null | undefined): string | null =>
+    origin && path && /^[-0-9a-f]{36}\/.+\.webp$/i.test(path)
+      ? `${origin}/storage/v1/object/public/signage-tv-media/${encodeURIComponent(path).replace(/%2F/g, "/")}`
+      : null;
   return {
-    photoUrl: (slideKey, photo) => `${base}/media/${encodeURIComponent(slideKey)}?v=${mediaVersion(photo.storagePath)}`,
-    logoUrl: (logo) => `${base}/media/${SIGNAGE_LOGO_ID}?v=${mediaVersion(logo.storagePath)}`
+    photoUrl: (_slideKey, photo) => publicUrl(photo.publicPath),
+    logoUrl: (logo) => publicUrl(logo.publicPath)
   };
 }
 

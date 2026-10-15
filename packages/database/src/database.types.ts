@@ -5314,6 +5314,7 @@ export type Database = {
         Returns: Json
       }
       get_signage_display: { Args: { p_token: string }; Returns: Json }
+      get_signage_tv_media_backfill_candidates: { Args: never; Returns: Json }
       get_signage_display_admin: {
         Args: { p_display_id: string }
         Returns: Json
@@ -5330,6 +5331,10 @@ export type Database = {
       get_signage_folders: { Args: never; Returns: Json }
       get_signage_promotion_catalog: {
         Args: { p_applicable_only?: boolean; p_branch_id?: string }
+        Returns: Json
+      }
+      register_signage_tv_media: {
+        Args: { p_public_path: string; p_source_path: string }
         Returns: Json
       }
       get_stock_audit_summary: {

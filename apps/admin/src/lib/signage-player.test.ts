@@ -6,6 +6,8 @@ import {
   fetchSignageView, initialPlayerState, nextPollDelay, nextSlideIndex, playerReducer, SIGNAGE_POLL_MS, SIGNAGE_RETRY_MS, visibleSlideCount, type FetchLike
 } from "./signage-player";
 
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+
 const offer = (key: string, whole = "1.000") => slideOffer(key, `Producto ${key}`, whole);
 const view = (keys: string[], overrides: Partial<SignageView> = {}): SignageView => signageView(keys.map((key) => offer(key)), { organizationName: "Despensa", ...overrides });
 
@@ -88,7 +90,7 @@ describe("polling: conserva el último estado válido ante un error", () => {
   it("reintenta antes tras un fallo y con el ritmo normal tras un éxito", () => {
     expect(nextPollDelay("ok")).toBe(SIGNAGE_POLL_MS);
     expect(nextPollDelay("error")).toBe(SIGNAGE_RETRY_MS);
-    expect(SIGNAGE_POLL_MS).toBe(30_000);
+    expect(SIGNAGE_POLL_MS).toBe(180_000);
     expect(SIGNAGE_RETRY_MS).toBeLessThan(SIGNAGE_POLL_MS);
   });
 });
@@ -166,14 +168,14 @@ describe("fetchSignageView (cliente del televisor)", () => {
     }
   });
 
-  it("la identidad y las imágenes del JSON se revalidan: sólo rutas propias (/api/...), colores siempre los de la marca y nunca contacto", async () => {
+  it("la identidad y las imágenes del JSON se revalidan: sólo CDN público propio, colores siempre los de la marca y nunca contacto", async () => {
     const result = await fetchSignageView("/api/tv/x", respond(200, {
-      ...body([full("a", { imageUrl: "https://evil.example/x.png" }), full("b", { imageUrl: "/api/tv/t/media/b?v=1" }), full("c", { imageUrl: "//evil.example/x.png" })]),
-      branding: { businessName: "Super", logo: { imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120 }, contact: { phone: "1" }, colors: { green: "#000", yellow: "#000", red: "#000" } }
+      ...body([full("a", { imageUrl: "https://evil.example/x.png" }), full("b", { imageUrl: "https://project.supabase.co/storage/v1/object/public/signage-tv-media/o/p/b-tv-v1.webp" }), full("c", { imageUrl: "/api/tv/t/media/c?v=1" })]),
+      branding: { businessName: "Super", logo: { imageUrl: "https://project.supabase.co/storage/v1/object/public/signage-tv-media/o/branding/logo-tv-v1.webp", width: 480, height: 120 }, contact: { phone: "1" }, colors: { green: "#000", yellow: "#000", red: "#000" } }
     }));
     if (result.kind !== "ok") throw new Error("sin vista");
-    expect(result.view.slides.map((slide) => slide.imageUrl)).toEqual([null, "/api/tv/t/media/b?v=1", null]);
-    expect(result.view.branding.logo).toEqual({ imageUrl: "/api/tv/t/media/logo?v=1", width: 480, height: 120, scalePercent: 100 });
+    expect(result.view.slides.map((slide) => slide.imageUrl)).toEqual([null, "https://project.supabase.co/storage/v1/object/public/signage-tv-media/o/p/b-tv-v1.webp", null]);
+    expect(result.view.branding.logo).toEqual({ imageUrl: "https://project.supabase.co/storage/v1/object/public/signage-tv-media/o/branding/logo-tv-v1.webp", width: 480, height: 120, scalePercent: 100 });
     expect(result.view.branding.contact).toBeNull();
     expect(result.view.branding.colors.green).toBe("#0B8A2F");
   });

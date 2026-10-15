@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isMediaId, isValidImage, mediaVersion, readSignageMedia, signageMediaUrls } from "./signage-media";
 
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+
 const SLIDE = "0b1d6c1e-0000-4000-8000-000000000001";
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 const JPG = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
@@ -27,11 +29,11 @@ describe("imágenes de la cartelería de TV", () => {
     expect(isValidImage(new Uint8Array(6 * 1024 * 1024).fill(0xff), "image/jpeg")).toBe(false);
   });
 
-  it("las URL llevan la versión del archivo (cambia con cada foto nueva) y apuntan al endpoint de la superficie", () => {
-    const urls = signageMediaUrls("/api/tv/tok");
-    expect(urls.photoUrl(SLIDE, { storagePath: "org/prod/c6000000-0000-4000-8000-000000000001.png", contentType: "image/png" }))
-      .toBe(`/api/tv/tok/media/${SLIDE}?v=c6000000-0000-4000-8000-000000000001`);
-    expect(urls.logoUrl({ storagePath: "org/branding/abc.jpg", contentType: "image/jpeg" })).toBe("/api/tv/tok/media/logo?v=abc");
+  it("usa una URL CDN pública, WebP e inmutable; sin derivado conserva el fallback", () => {
+    const urls = signageMediaUrls();
+    expect(urls.photoUrl(SLIDE, { storagePath: "org/prod/c6000000-0000-4000-8000-000000000001.png", contentType: "image/png", publicPath: "d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c6000000-0000-4000-8000-000000000001-tv-v1.webp" }))
+      .toBe("https://project.supabase.co/storage/v1/object/public/signage-tv-media/d2000000-0000-4000-8000-000000000001/d3000000-0000-4000-8000-000000000001/c6000000-0000-4000-8000-000000000001-tv-v1.webp");
+    expect(urls.logoUrl({ storagePath: "org/branding/abc.jpg", contentType: "image/jpeg" })).toBeNull();
     expect(mediaVersion("a/b/<script>.png")).toMatch(/^[0-9a-f-]*$/);
   });
 

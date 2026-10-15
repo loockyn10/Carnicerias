@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { createSignageDisplayAction, regenerateSignageTokenAction, saveSignageSourceAction } from "../app/admin/products/signage/actions";
+import { createSignageDisplayAction, optimizeSignageTvMediaAction, regenerateSignageTokenAction, saveSignageSourceAction } from "../app/admin/products/signage/actions";
 import type { FolderSummary } from "../lib/artwork-folders";
 import { clampSlideSeconds, MAX_SLIDE_SECONDS, MIN_SLIDE_SECONDS } from "../lib/signage";
 import { displayNotes, playableLabel, sourceLabel, type DisplayOverview } from "../lib/signage-overview";
@@ -190,11 +190,24 @@ export function SignageScreens({ displays, folders, branches }: { displays: Disp
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(displays.length === 0);
   const target = displays.find((display) => display.id === configuring) ?? null;
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimization, setOptimization] = useState<string | null>(null);
+  async function optimize() {
+    setOptimizing(true); setOptimization("Preparando imágenes…");
+    const result = await optimizeSignageTvMediaAction();
+    setOptimizing(false);
+    if (result.error) { setOptimization(result.error); return; }
+    setOptimization(result.total === 0 ? "Las imágenes ya estaban optimizadas para TV." : `${String(result.completed)} / ${String(result.total)} imágenes optimizadas para TV.`);
+  }
   return <div className="mt-5 grid gap-6" data-testid="signage-screens">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm text-stone-600">Un televisor abre su enlace y rota las promociones vigentes con el precio de hoy. Se actualiza solo.</p>
-      {displays.length ? <button className={secondaryButton} onClick={() => { setShowCreate((value) => !value); }} type="button">{showCreate ? "Cerrar" : "+ Nueva pantalla"}</button> : null}
+      <div className="flex flex-wrap gap-2">
+        <button className={secondaryButton} disabled={optimizing} onClick={() => { void optimize(); }} type="button">{optimizing ? "Preparando imágenes…" : "Optimizar imágenes para TV"}</button>
+        {displays.length ? <button className={secondaryButton} onClick={() => { setShowCreate((value) => !value); }} type="button">{showCreate ? "Cerrar" : "+ Nueva pantalla"}</button> : null}
+      </div>
     </div>
+    {optimization ? <p className="text-sm text-stone-600" role="status">{optimization}</p> : null}
     {displays.length ? <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {displays.map((display) => <DisplayCard display={display} key={display.id} onConfigure={() => { setConfiguring(display.id); }} />)}
     </ul> : null}

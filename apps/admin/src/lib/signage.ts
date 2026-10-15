@@ -402,6 +402,8 @@ export function parsePromotionFact(raw: unknown): PromotionFact | null {
 export interface MediaRef {
   storagePath: string;
   contentType: "image/jpeg" | "image/png";
+  /** Copia WebP pública, inmutable y exclusiva para TV. El original permanece privado. */
+  publicPath?: string | null;
   /** PNG con fondo transparente (true), con fondo propio (false) o todavía sin analizar (null). */
   hasAlpha?: boolean | null;
 }
@@ -420,7 +422,11 @@ function parsePhotoRef(raw: unknown): MediaRef | null {
   const storagePath = asString(raw.storagePath);
   const contentType = raw.contentType;
   if (!storagePath || (contentType !== "image/jpeg" && contentType !== "image/png")) return null;
-  return { storagePath, contentType, ...(typeof raw.hasAlpha === "boolean" ? { hasAlpha: raw.hasAlpha } : {}) };
+  return {
+    storagePath, contentType,
+    ...(typeof raw.publicPath === "string" ? { publicPath: raw.publicPath } : {}),
+    ...(typeof raw.hasAlpha === "boolean" ? { hasAlpha: raw.hasAlpha } : {})
+  };
 }
 
 /** La referencia de la imagen `id` (id de una diapositiva, o `logo`) dentro del JSON de la base; null si no existe. Sólo sirve rutas de ESA presentación. */
@@ -428,7 +434,11 @@ export function findSignageMedia(payload: unknown, id: string): MediaRef | null 
   if (!isRecord(payload)) return null;
   if (id === "logo") {
     const facts = parseArtworkBrandingFacts({ organizationName: null, logo: payload.logo, branch: null });
-    return facts?.logo ? { storagePath: facts.logo.storagePath, contentType: facts.logo.contentType } : null;
+    const rawLogo = parsePhotoRef(payload.logo);
+    return facts?.logo ? {
+      storagePath: facts.logo.storagePath, contentType: facts.logo.contentType,
+      ...(rawLogo?.publicPath !== undefined ? { publicPath: rawLogo.publicPath } : {})
+    } : null;
   }
   if (!Array.isArray(payload.slides)) return null;
   for (const raw of payload.slides as unknown[]) {
@@ -455,7 +465,8 @@ export function buildSignageView(payload: unknown, media?: SignageMedia): Signag
     }
   }
   const brandingFacts = parseArtworkBrandingFacts({ organizationName: payload.organizationName, logo: payload.logo, branch: null });
-  const branding = brandingFacts ? buildArtworkBranding(brandingFacts, brandingFacts.logo && media ? media.logoUrl(brandingFacts.logo) : null) : emptyArtworkBranding();
+  const logo = findSignageMedia(payload, "logo");
+  const branding = brandingFacts ? buildArtworkBranding(brandingFacts, logo && media ? media.logoUrl(logo) : null) : emptyArtworkBranding();
   return {
     status,
     slideDurationSeconds: duration === null ? DEFAULT_SLIDE_SECONDS : clampSlideSeconds(duration),

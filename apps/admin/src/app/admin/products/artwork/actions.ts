@@ -12,6 +12,7 @@ import { COLLAGE_MAX_ITEMS, COLLAGE_MIN_ITEMS } from "../../../../lib/artwork-to
 import { recordPhotoAlpha } from "../../../../lib/artwork-photo-alpha";
 import { readImageInfo } from "../../../../lib/image-size";
 import { createClient } from "../../../../lib/supabase/server";
+import { ensureSignageTvDerivative } from "../../../../lib/signage-tv-media";
 import { isUuid } from "../../../../lib/uuid";
 
 function message(error: unknown, fallback: string): string {
@@ -151,6 +152,7 @@ export async function registerArtworkLogoAction(storagePath: string, branchId: s
       return { kind: "error", message: error.message };
     }
     await removeObject(supabase, (data as { previousPath?: string | null } | null)?.previousPath);
+    await ensureSignageTvDerivative(supabase, storagePath);
     revalidatePath("/admin/products/artwork");
     return await readBranding(supabase, branchId);
   } catch (error) {
@@ -280,6 +282,7 @@ export async function registerArtworkPhotoAction(productId: string, storagePath:
     await removeObject(supabase, (data as { previousPath?: string | null } | null)?.previousPath);
     // Un recorte con fondo transparente se aprovecha con una mancha detrás: se analiza una vez, con los bytes reales (mejor esfuerzo).
     await recordPhotoAlpha(supabase, productId, storagePath).catch(() => null);
+    await ensureSignageTvDerivative(supabase, storagePath);
     revalidatePath("/admin/products/artwork");
     return await getArtworkPhotoAction(productId);
   } catch (error) {

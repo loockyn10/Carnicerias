@@ -4,6 +4,8 @@ import { must } from "./test-support/must";
 
 import { buildOfferSlide, buildSignageView, findSignageMedia, parsePromotionFact, parseSlideFacts, type SlideFacts } from "./signage";
 import { signageMediaUrls } from "./signage-media";
+
+process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
 import { filterByStatus, parsePromotionCatalog, statusCounts, validityText } from "./signage-promotions";
 
 // Promociones y grupos en la cartelería de TV (D-084). Dinero en centavos.
@@ -69,7 +71,7 @@ describe("diapositivas de PROMOCIÓN (precio y condición del motor, nunca a man
 });
 
 describe("lo que recibe el televisor", () => {
-  const photo = (id: number) => ({ storagePath: `org/${String(id)}/${UUID(100 + id)}.png`, contentType: "image/png" });
+  const photo = (id: number) => ({ storagePath: `org/${String(id)}/${UUID(100 + id)}.png`, publicPath: `${UUID(900)}/${UUID(id)}/${UUID(100 + id)}-tv-v1.webp`, contentType: "image/png" });
   const slide = (id: string, name: string, extra: Record<string, unknown>) => ({ slideId: id, kind: "PROMOTION", name, unitType: "WEIGHT", listPriceCents: "1000000", bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [], ...extra });
   const payload = {
     status: "ACTIVE", slideDurationSeconds: 8, organizationName: "Org", logo: { storagePath: "org/branding/logo.png", contentType: "image/png", width: 800, height: 600 },
@@ -79,17 +81,17 @@ describe("lo que recibe el televisor", () => {
       slide(MATAMBRE, "Matambre", { promotion: { promotionId: MATAMBRE, mode: "PACK_FIXED_TOTAL", status: "ACTIVE", packQuantityGrams: 3000, packPriceCents: "3000000" }, listPriceCents: "1200000" })
     ]
   };
-  const view = buildSignageView(payload, signageMediaUrls("/api/tv/TOKEN"));
+  const view = buildSignageView(payload, signageMediaUrls());
 
   it("rotan en el orden recibido, con el precio promocional de cada una", () => {
     expect(view?.slides.map((slide) => slide.name)).toEqual(["Pata muslo", "Costilla de cerdo", "Matambre"]);
     expect(view?.slides.map((slide) => `${slide.price.whole}${slide.priceSuffix ?? ""}|${slide.condition}`)).toEqual(["9.000/ KG|DESDE 2 KG", "14.000|POR 2 KG", "30.000|POR 3 KG"]);
   });
 
-  it("la foto se pide por la ruta autorizada del token con el id de la promoción (el bucket sigue privado)", () => {
-    expect(view?.slides[0]?.imageUrl).toBe(`/api/tv/TOKEN/media/${PATA}?v=${UUID(101)}`);
-    expect(view?.slides[1]?.imageUrl).toBe(`/api/tv/TOKEN/media/${COSTILLA}?v=${UUID(102)}`);
-    expect(view?.slides[0]?.imageUrl).not.toContain("org/1/");
+  it("la foto sale directo del CDN público derivado, nunca del proxy de la TV", () => {
+    expect(view?.slides[0]?.imageUrl).toContain("/storage/v1/object/public/signage-tv-media/");
+    expect(view?.slides[1]?.imageUrl).toContain("-tv-v1.webp");
+    expect(view?.slides[0]?.imageUrl).not.toContain("/api/tv/");
   });
 
   it("una promoción sin foto reproduce igual, sin imagen (el renderer dibuja el reemplazo)", () => {
@@ -97,7 +99,7 @@ describe("lo que recibe el televisor", () => {
   });
 
   it("la ruta de la imagen sale de la presentación publicada del token, nunca del pedido", () => {
-    expect(findSignageMedia(payload, PATA)).toEqual({ storagePath: `org/1/${UUID(101)}.png`, contentType: "image/png" });
+    expect(findSignageMedia(payload, PATA)).toMatchObject({ storagePath: `org/1/${UUID(101)}.png`, contentType: "image/png", publicPath: `${UUID(900)}/${UUID(1)}/${UUID(101)}-tv-v1.webp` });
     expect(findSignageMedia(payload, MATAMBRE)).toBeNull();
     expect(findSignageMedia(payload, UUID(99))).toBeNull();
     expect(findSignageMedia({ ...payload, slides: [] }, PATA)).toBeNull();

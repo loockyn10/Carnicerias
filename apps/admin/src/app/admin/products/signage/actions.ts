@@ -9,6 +9,7 @@ import { parsePromotionCatalog, type PromotionCatalog } from "../../../../lib/si
 import { signageMediaUrls } from "../../../../lib/signage-media";
 import type { SignageLoadResult } from "../../../../lib/signage-player";
 import { createClient } from "../../../../lib/supabase/server";
+import { ensureSignageTvDerivative } from "../../../../lib/signage-tv-media";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -118,9 +119,29 @@ export async function loadSignagePreviewAction(displayId: string): Promise<Signa
     const supabase = await createClient();
     const { data, error } = await supabase.rpc("get_signage_display_admin", { p_display_id: displayId });
     if (error) return { kind: "error" };
-    const view = data === null ? null : buildSignageView(data, signageMediaUrls(`/api/tv-preview/${displayId}`));
+    const view = data === null ? null : buildSignageView(data, signageMediaUrls());
     return view ? { kind: "ok", view } : { kind: "not_found" };
   } catch {
     return { kind: "error" };
+  }
+}
+
+/** Backfill explícito: sólo deriva originales que todavía no tienen su WebP público vigente. */
+export async function optimizeSignageTvMediaAction(): Promise<{ error?: string; total?: number; completed?: number; sizes?: number[] }> {
+  try {
+    await requireAdminContext();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("get_signage_tv_media_backfill_candidates");
+    if (error) return { error: error.message };
+    const paths = Array.isArray(data) ? data.flatMap((row) => {
+      const path = typeof row === "object" && row !== null ? (row as { sourcePath?: unknown }).sourcePath : null;
+      return typeof path === "string" ? [path] : [];
+    }) : [];
+    const sizes: number[] = [];
+    for (const path of paths) sizes.push((await ensureSignageTvDerivative(supabase, path)).sizeBytes);
+    revalidatePath("/admin/products/signage");
+    return { total: paths.length, completed: paths.length, sizes };
+  } catch (error) {
+    return { error: message(error, "No se pudieron optimizar las imágenes para TV") };
   }
 }
