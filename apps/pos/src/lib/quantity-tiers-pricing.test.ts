@@ -52,6 +52,12 @@ describe("POS: 2 / 3 / 4 / 5 / 6 / 10 unidades con 3 → 15 % y 5 → 20 %", () 
     expect(unit(10, "CASH", []).branchPromotionId).toBeUndefined();
   });
 
+  it.each([3, 5, 10])("un producto excluido conserva precio normal con %i unidades", (units) => {
+    const line = unit(units, "CASH", TIERS, { globalQuantityDiscountsEnabled: false });
+    expect(line.subtotalCents).toBe(BigInt(units) * 100_000n);
+    expect(line.branchPromotionId).toBeUndefined();
+  });
+
   it("con tarjeta: el recargo del 10 % se suma UNA vez sobre el total ya descontado del escalón", () => {
     expect(unit(5, "DEBIT")).toMatchObject({ subtotalCents: 440_000n, cardSurchargeCents: 40_000n, branchPromotionId: "tier-5" });
     expect(unit(3, "CREDIT")).toMatchObject({ subtotalCents: 280_500n, cardSurchargeCents: 25_500n, branchPromotionId: "tier-3" });

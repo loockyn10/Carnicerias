@@ -375,6 +375,10 @@ export interface RpcNullOverrides {
     Args: { p_pack_discount_bps?: number | null; p_pack_size_units: number | null; p_product_id: string }
     Returns: undefined
   }
+  set_product_global_quantity_discounts_enabled: {
+    Args: { p_enabled: boolean; p_product_id: string }
+    Returns: undefined
+  }
   // p_supplier_id null = "this product has no primary supplier".
   set_product_primary_supplier: {
     Args: { p_product_id: string; p_supplier_id: string | null }

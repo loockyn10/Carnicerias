@@ -190,6 +190,9 @@ export async function manageProductAction(_: ProductManageState, formData: FormD
       p_unit_type: text(formData, "unit_type") as "WEIGHT" | "UNIT",
       p_active: formData.get("active") === "on"
     });
+    await rpcOrThrow("set_product_global_quantity_discounts_enabled", {
+      p_product_id: productId, p_enabled: formData.get("global_quantity_discounts_enabled") === "on"
+    });
     if (wantedPackSize !== null && wantedPackSize !== currentPackSize) {
       await rpcOrThrow("set_product_pack_size", { p_product_id: productId, p_pack_size_units: wantedPackSize });
     }

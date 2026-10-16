@@ -3436,6 +3436,7 @@ export type Database = {
           created_at: string
           id: string
           inventory_role: Database["public"]["Enums"]["product_inventory_role"]
+          global_quantity_discounts_enabled: boolean
           name: string
           organization_id: string
           pack_discount_bps: number | null
@@ -3452,6 +3453,7 @@ export type Database = {
           created_at?: string
           id?: string
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
+          global_quantity_discounts_enabled?: boolean
           name: string
           organization_id: string
           pack_discount_bps?: number | null
@@ -3468,6 +3470,7 @@ export type Database = {
           created_at?: string
           id?: string
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
+          global_quantity_discounts_enabled?: boolean
           name?: string
           organization_id?: string
           pack_discount_bps?: number | null
@@ -6025,6 +6028,10 @@ export type Database = {
           p_pack_size_units: number
           p_product_id: string
         }
+        Returns: undefined
+      }
+      set_product_global_quantity_discounts_enabled: {
+        Args: { p_enabled: boolean; p_product_id: string }
         Returns: undefined
       }
       set_product_price: {

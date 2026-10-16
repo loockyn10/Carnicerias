@@ -27,6 +27,7 @@ interface ProductManageModalProps {
     packSizeUnits: number | null;
     /** Descuento del pack que el producto tiene HOY guardado (basis points; null sii no hay pack). Sólo informativo: el descuento sale de la configuración global. */
     packDiscountBps: number | null;
+    globalQuantityDiscountsEnabled: boolean;
   };
   price: { cents: number } | null;
   promotion: { id: string; label: string } | null;
@@ -107,6 +108,12 @@ export function ProductManageModal({ product, price, promotion, categories, bran
           {product.hasUnitTypeHistory ? <input name="unit_type" type="hidden" value={product.unitType} /> : null}
           <input name="current_pack_size_units" type="hidden" value={product.packSizeUnits ?? ""} />
           {unitType === "UNIT" ? <ProductPackFields currentPackDiscountBps={product.packDiscountBps} globalPackDiscountBps={globalPackDiscountBps} packSizeUnits={product.packSizeUnits} /> : null}
+          <div className="rounded-lg bg-stone-50 p-3">
+            <p className="text-sm font-bold">Descuentos globales por cantidad</p>
+            <label className="mt-2 flex items-center gap-2 text-sm"><input defaultChecked={product.globalQuantityDiscountsEnabled} name="global_quantity_discounts_enabled" type="checkbox" /> Aplicar descuentos globales</label>
+            <p className="mt-1 text-xs text-stone-600">Actualmente: 3u → 15% · 5u → 20%</p>
+            {!product.globalQuantityDiscountsEnabled ? <p className="mt-2 text-xs text-stone-600">Este producto mantiene su precio normal sin importar la cantidad. Las promociones específicas y Packs propios siguen funcionando.</p> : null}
+          </div>
           <ProductMarginField currentCostCents={costCents} currentCustomMarginBps={customMarginBps} excludedCategory={excludedCategoryIds.includes(categoryId)} globalMarginBps={globalMarginBps} mode={marginMode} onModeChange={setMarginMode} onPercentChange={setMarginPercent} percent={marginPercent} unitType={unitType} />
           <ProductPricingFields currentCostCents={costCents} currentPriceCents={price?.cents ?? null} customMargin={marginMode === "custom" && marginPercent.trim() !== ""} excludedCategory={excludedCategoryIds.includes(categoryId)} marginConfigured={marginConfigured} unitType={unitType} />
           <div className="rounded-lg bg-stone-50 p-3">

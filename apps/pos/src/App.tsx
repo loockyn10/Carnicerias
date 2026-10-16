@@ -102,6 +102,7 @@ interface CatalogProduct {
   packConfigId: string | null;
   /** Descuento de esa versión (basis points): el % propio de este producto; sin él no se ofrece Pack. */
   packDiscountBps: number | null;
+  globalQuantityDiscountsEnabled: boolean;
 }
 interface Announcement { id: string; title: string; message: string; type: string; priority: number }
 
@@ -634,7 +635,8 @@ export default function App() {
           barcodes: row.barcodes,
           packSizeUnits: row.packSizeUnits ?? null,
           packConfigId: row.packConfigId ?? null,
-          packDiscountBps: row.packDiscountBps ?? null
+          packDiscountBps: row.packDiscountBps ?? null,
+          globalQuantityDiscountsEnabled: row.globalQuantityDiscountsEnabled !== false
         })));
         setCategoryDirectory(directory);
         return;
@@ -666,7 +668,8 @@ export default function App() {
             // El POS web de desarrollo no ofrece Pack ni promociones de sucursal: sólo el POS de escritorio los recibe y los revalida.
             packSizeUnits: null,
             packConfigId: null,
-            packDiscountBps: null
+            packDiscountBps: null,
+            globalQuantityDiscountsEnabled: true
           }))
         );
         setCategoryDirectory(categoriesData.map((row) => ({ id: row.id, name: row.name, colorHex: row.color_hex, sortOrder: row.sort_order })));
@@ -1118,7 +1121,7 @@ export default function App() {
   // de escritorio), UN chip por escalón con el color de su posición. Mismo helper para la lista de Central y la grilla; el cálculo lo hace
   // el motor de pricing.
   function unitPromotionBadgeChips(product: CatalogProduct) {
-    if (product.unitType !== "UNIT" || isPriceMissing(product)) return [];
+    if (product.unitType !== "UNIT" || isPriceMissing(product) || product.globalQuantityDiscountsEnabled === false) return [];
     return unitPromotionChips(product.pricePerKgCents, unitPromotions, findPackRule(discounts, product.productId, branchId));
   }
 
@@ -1190,7 +1193,7 @@ export default function App() {
   function unitLineRequest(product: CatalogProduct): { units: number; packSale: UnitPackSale | null; lineId: string; mergedLine: TicketLine | undefined } {
     return resolveUnitLineRequest({
       ticket: ticketRef.current, productId: product.productId, packOffer: packOfferOf(product),
-      quantity: quantityInput ?? 0, editingLineId, branchPromotions: unitPromotions
+      quantity: quantityInput ?? 0, editingLineId, branchPromotions: product.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions
     });
   }
 
@@ -1242,7 +1245,7 @@ export default function App() {
         mergedLineId = request.mergedLine?.id ?? null;
         line = buildUnitTicketLine(
           selectedProduct, request.units, request.lineId || crypto.randomUUID(), packRuleForSelectedProduct, method, BigInt(cashDiscountBps),
-          { branchPromotions: unitPromotions, packSale: request.packSale }
+          { branchPromotions: unitPromotions, globalQuantityDiscountsEnabled: selectedProduct.globalQuantityDiscountsEnabled, packSale: request.packSale }
         );
       } else {
         const grams = explicitWeightGrams ?? parseWeightToGrams(weightInput);
@@ -1310,7 +1313,8 @@ export default function App() {
     // Un escaneo agrega UNA unidad a la línea del producto si ya existe (aunque tenga precio manual); el Pack se decide solo por las unidades totales.
     const existing = findUnitLineToMerge(current, product.productId, true);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: unitPromotions, packSale: autoPackSale(quantity, packOfferOf(product), unitPromotions) });
+    const productTiers = product.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions;
+    let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: productTiers, globalQuantityDiscountsEnabled: product.globalQuantityDiscountsEnabled, packSale: autoPackSale(quantity, packOfferOf(product), productTiers) });
     try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
     ticketRef.current = next;
@@ -1340,7 +1344,7 @@ export default function App() {
   }
 
   function toCatalogProduct(row: QuickCatalogRow): CatalogProduct {
-    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents), packSizeUnits: null, packConfigId: null, packDiscountBps: null };
+    return { ...row, pricePerKgCents: BigInt(row.pricePerKgCents), packSizeUnits: null, packConfigId: null, packDiscountBps: null, globalQuantityDiscountsEnabled: true };
   }
 
   // El POS sólo puede vender (confirm_local_sale) productos que ya están en su SQLite: tras el alta se
@@ -2608,7 +2612,7 @@ export default function App() {
                   const pack = offer
                     ? { packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, unitPriceCents: packOfferUnitPriceCents(selectedProduct.pricePerKgCents, offer), applied: request?.packSale != null, lineUnits: unitLineRequest(selectedProduct).units }
                     : null;
-                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} pack={pack} tiers={unitPromotions} />;
+                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} pack={pack} tiers={selectedProduct.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions} />;
                 })()}
               </>
             )}
@@ -2631,7 +2635,7 @@ export default function App() {
                     ? computeWeightLine(selectedProduct.pricePerKgCents, parseWeightToGrams(weightInput), sellAsPack, packRuleForSelectedProduct, discounts, selectedProduct.productId, branchId, paymentMethod, BigInt(cashDiscountBps))
                     : (() => {
                         const request = unitLineRequest(selectedProduct);
-                        return computeUnitLine(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps), { branchPromotions: unitPromotions, packSale: request.packSale });
+                        return computeUnitLine(selectedProduct.pricePerKgCents, request.units, packRuleForSelectedProduct, paymentMethod, BigInt(cashDiscountBps), { branchPromotions: unitPromotions, globalQuantityDiscountsEnabled: selectedProduct.globalQuantityDiscountsEnabled, packSale: request.packSale });
                       })();
                   const preview = computed.pricing;
                   const unitRequest = selectedProduct.unitType === "UNIT" ? unitLineRequest(selectedProduct) : null;

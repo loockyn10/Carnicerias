@@ -30,6 +30,7 @@ const UNIT_PACKS_PROMOTIONS_SCHEMA: &str = include_str!("../migrations/017_unit_
 const PACK_CONFIG_SCHEMA: &str = include_str!("../migrations/018_pack_config_versions.sql");
 const PACK_DISCOUNT_SCHEMA: &str = include_str!("../migrations/019_pack_discount_single_category_threshold_promotions.sql");
 const RECEIPT_SNAPSHOTS_SCHEMA: &str = include_str!("../migrations/020_receipt_snapshots.sql");
+const GLOBAL_QUANTITY_DISCOUNTS_SCHEMA: &str = include_str!("../migrations/021_product_global_quantity_discounts.sql");
 
 /// Un producto sin precio (precio 0, importado desde SimplyGest) nunca se vende: el POS pide el precio antes de agregarlo al ticket.
 const PRICE_REQUIRED: &str = "PRICE_REQUIRED: el producto no tiene precio; fijá el precio antes de venderlo.";
@@ -88,6 +89,7 @@ struct LocalCatalogRow {
     pack_config_id: Option<String>,
     /// Descuento de esa versión del pack, en basis points: el porcentaje propio de este producto (no hay uno global).
     pack_discount_bps: Option<i64>,
+    global_quantity_discounts_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -162,7 +164,11 @@ struct CatalogPullRow {
     /// Descuento (basis points) de la versión del pack. Ausente = un servidor anterior, donde todo pack era 20 %.
     #[serde(default)]
     pack_discount_bps: Option<i64>,
+    #[serde(default = "default_true")]
+    global_quantity_discounts_enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 /// Promoción global de la sucursal del dispositivo ("desde N unidades, X %" sobre TODAS las unidades de la línea de sus productos UNIT).
 #[derive(Debug, Deserialize)]
@@ -644,6 +650,14 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
+    let global_quantity_discounts_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 21)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !global_quantity_discounts_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(GLOBAL_QUANTITY_DISCOUNTS_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (21, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
     let timestamp = now();
     connection
         .execute(
@@ -824,7 +838,7 @@ fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<L
     let mut statement = connection
         .prepare(
             "select p.organization_id, cp.branch_id, c.id, c.name, c.color_hex, c.sort_order,
-                    p.id, p.name, p.sku, p.unit_type, cp.price_per_kg_cents, cp.valid_from
+                    p.id, p.name, p.sku, p.unit_type, cp.price_per_kg_cents, cp.valid_from, p.global_quantity_discounts_enabled
              from catalog_products p
              join catalog_categories c on c.id = p.category_id and c.active = 1
              join catalog_prices cp on cp.product_id = p.id and cp.branch_id = ?1
@@ -862,6 +876,7 @@ fn local_catalog_inner(connection: &Connection, branch_id: &str) -> Result<Vec<L
                 pack_size_units,
                 pack_config_id,
                 pack_discount_bps,
+                global_quantity_discounts_enabled: row.get::<_, i64>(12)? != 0,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -976,12 +991,12 @@ fn apply_catalog_pull_inner(
         let price = parse_i64(&row.price_per_kg_cents, "pricePerKgCents")?;
         transaction
             .execute(
-                "insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at, global_quantity_discounts_enabled)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  on conflict(id) do update set category_id = excluded.category_id, name = excluded.name,
-                   sku = excluded.sku, unit_type = excluded.unit_type, active = excluded.active, updated_at = excluded.updated_at",
+                   sku = excluded.sku, unit_type = excluded.unit_type, active = excluded.active, updated_at = excluded.updated_at, global_quantity_discounts_enabled = excluded.global_quantity_discounts_enabled",
                 params![row.product_id, row.organization_id, row.category_id, row.product_name, row.product_sku,
-                        row.unit_type, if row.product_active { 1_i64 } else { 0_i64 }, timestamp],
+                        row.unit_type, if row.product_active { 1_i64 } else { 0_i64 }, timestamp, if row.global_quantity_discounts_enabled { 1_i64 } else { 0_i64 }],
             )
             .map_err(|error| error.to_string())?;
 
@@ -3133,7 +3148,44 @@ mod tests {
             pack_size_units: None,
             pack_config_id: None,
             pack_discount_bps: None,
+            global_quantity_discounts_enabled: true,
         }
+    }
+
+    /// Exact shape of the catalog row used before SQLite migration 021.  It deliberately has no
+    /// `globalQuantityDiscountsEnabled` member: serde's default (without `deny_unknown_fields`)
+    /// must keep Avenida/Janssen able to consume a newer server payload unchanged.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacyCatalogPullRow {
+        organization_id: String, branch_id: String, branch_name: String,
+        category_id: String, category_name: String, category_color_hex: Option<String>, category_sort_order: i64, category_active: bool,
+        #[serde(default)] category_ids: Vec<String>,
+        product_id: String, product_name: String, product_sku: Option<String>, unit_type: String, product_active: bool,
+        price_per_kg_cents: String, price_valid_from: String,
+        #[serde(default)] barcodes: Vec<String>,
+        #[serde(default)] pack_size_units: Option<i64>, #[serde(default)] pack_config_id: Option<String>, #[serde(default)] pack_discount_bps: Option<i64>,
+    }
+
+    #[test]
+    fn old_pos_catalog_deserializer_ignores_the_new_product_flag() {
+        let row: LegacyCatalogPullRow = serde_json::from_value(serde_json::json!({
+            "organizationId":"org","branchId":"avenida","branchName":"Avenida","categoryId":"cat","categoryName":"Almacén","categoryColorHex":null,"categorySortOrder":0,"categoryActive":true,"categoryIds":["cat"],
+            "productId":"leche","productName":"Leche","productSku":null,"unitType":"UNIT","productActive":true,"pricePerKgCents":"100000","priceValidFrom":"2026-10-16T00:00:00Z","barcodes":[],
+            "packSizeUnits":null,"packConfigId":null,"packDiscountBps":null,"globalQuantityDiscountsEnabled":false
+        })).unwrap();
+        assert_eq!(row.product_id, "leche");
+        assert_eq!(row.branch_id, "avenida");
+    }
+
+    #[test]
+    fn central_catalog_pull_persists_the_product_quantity_discount_flag() {
+        let mut connection = catalog_fixture();
+        let mut excluded = catalog_row("aceite", "Aceite oferta", "UNIT", &[]);
+        excluded.global_quantity_discounts_enabled = false;
+        apply_catalog_pull_inner(&mut connection, &pull(vec![excluded], &[]), "profile", "central@example.test").unwrap();
+        let row = local_catalog_inner(&connection, "central").unwrap().pop().unwrap();
+        assert!(!row.global_quantity_discounts_enabled);
     }
 
     fn pull(catalog: Vec<CatalogPullRow>, removed: &[&str]) -> CatalogPullPayload {

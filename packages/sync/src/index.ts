@@ -186,6 +186,8 @@ export interface CatalogPullRow {
   packConfigId?: string | null;
   /** Descuento de esa versión del pack (basis points, 1..9999): el % propio del producto. Ausente en un servidor anterior (20 %). */
   packDiscountBps?: number | null;
+  /** false = el producto no participa de los descuentos globales por cantidad. */
+  globalQuantityDiscountsEnabled?: boolean;
 }
 
 /** Promoción global de una sucursal para sus productos UNIT ("desde N unidades, X % sobre toda la línea"). Foto completa en cada pull. */

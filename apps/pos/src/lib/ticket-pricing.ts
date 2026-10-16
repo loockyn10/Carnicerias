@@ -57,6 +57,8 @@ export interface ComputedLine {
 export interface UnitLineOptions {
   /** Escalones vigentes del descuento por cantidad de la sucursal del dispositivo (ausente/vacío = ninguno). Se aplica el mayor alcanzado por la línea. */
   branchPromotions?: readonly BranchUnitPromotion[];
+  /** El producto puede excluirse de los escalones globales de la sucursal. */
+  globalQuantityDiscountsEnabled?: boolean;
   /** La línea se cargó explícitamente como Pack: `quantityUnits` ya son las unidades reales (packCount × packSizeUnits). */
   packSale?: UnitPackSale | null;
 }
@@ -113,7 +115,7 @@ export function computeUnitLine(
     });
     return { pricing, discountRuleId: pack.id, discountType: null, discountValue: null, promotionMode: "PACK_FIXED_TOTAL", unitDiscount: null };
   }
-  if (options.branchPromotions?.length) {
+  if (options.globalQuantityDiscountsEnabled !== false && options.branchPromotions?.length) {
     const unitDiscount = calculateQuantityTierLinePricing({ listPriceCents, quantityUnits, tiers: options.branchPromotions, paymentMethod, cashDiscountBps });
     if (unitDiscount) return { pricing: unitDiscount, discountRuleId: null, discountType: null, discountValue: null, promotionMode: null, unitDiscount };
   }

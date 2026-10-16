@@ -63,6 +63,8 @@ export interface LocalCatalogRow {
   packConfigId: string | null;
   /** Descuento de esa versión del pack, en basis points: el % propio de este producto (no hay un porcentaje global). */
   packDiscountBps: number | null;
+  /** false = no participa de los escalones globales «desde N unidades». */
+  globalQuantityDiscountsEnabled: boolean;
 }
 
 /** The POS tab directory row — see get_local_categories / apply_catalog_pull in the Tauri
