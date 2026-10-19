@@ -113,6 +113,12 @@ export function parseLabelGroupFacts(payload: unknown): LabelGroupFacts | null {
   };
 }
 
+/** Hechos de todos los grupos activos de una sucursal, en una única lectura. */
+export function parseLabelBranchGroups(payload: unknown): LabelGroupFacts[] {
+  if (!Array.isArray(payload)) return [];
+  return payload.map(parseLabelGroupFacts).filter((group): group is LabelGroupFacts => group !== null);
+}
+
 /** Entrada del constructor de etiquetas: un producto sin motivo de indisponibilidad usa su precio vigente; si no, sale «SIN PRECIO». */
 export function labelInputOf(item: LabelItemFacts): ProductLabelInput {
   return {

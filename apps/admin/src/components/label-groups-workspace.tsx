@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition, type SyntheticEvent } from "react";
+import { useMemo, useState, useTransition, type Dispatch, type SetStateAction, type SyntheticEvent } from "react";
 
 import { saveLabelGroupAction, searchLabelProductsAction, setLabelGroupProductsAction, type LabelProductOption } from "../app/admin/products/labels/actions";
 import type { LabelGroupItemView, LabelGroupView } from "../lib/label-group";
-import { buildRunSelection, selectAllPrintable, selectNeedingPrint, sheetsFor } from "../lib/label-selection";
+import { buildRunSelection, labelSelectionKey, selectAllPrintable, selectNeedingPrint, sheetsFor } from "../lib/label-selection";
 import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM, LABELS_PER_SHEET, MAX_LABEL_COPIES, MAX_LABELS_PER_RUN } from "../lib/label-spec";
 import { ProductPriceLabel } from "./product-price-label";
 
@@ -161,11 +161,12 @@ function filenameFrom(disposition: string | null): string {
   return match?.[1] ?? "etiquetas.pdf";
 }
 
-function GroupItems({ group }: { group: LabelGroupView }) {
+function GroupItems({ group, branchGroups, selected, setSelected, copies, setCopies }: {
+  group: LabelGroupView; branchGroups: LabelGroupView[]; selected: Set<string>; setSelected: Dispatch<SetStateAction<Set<string>>>;
+  copies: Record<string, string>; setCopies: Dispatch<SetStateAction<Record<string, string>>>;
+}) {
   const router = useRouter();
   const items = group.items;
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [copies, setCopies] = useState<Record<string, string>>({});
   const [previewId, setPreviewId] = useState<string | null>(items[0]?.productId ?? null);
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,16 +175,28 @@ function GroupItems({ group }: { group: LabelGroupView }) {
   const [generating, setGenerating] = useState(false);
 
   // Lo tildado que ya no es del grupo (se quitó) no cuenta.
-  const known = useMemo(() => new Set(items.map((item) => item.productId)), [items]);
-  const active = useMemo(() => new Set([...selected].filter((id) => known.has(id))), [selected, known]);
-  const run = buildRunSelection(items, active, copies);
+  const active = useMemo(() => new Set(items.filter((item) => selected.has(labelSelectionKey(group.groupId, item.productId))).map((item) => item.productId)), [group.groupId, items, selected]);
+  const currentCopies = useMemo(() => Object.fromEntries(items.map((item) => [item.productId, copies[labelSelectionKey(group.groupId, item.productId)] ?? "1"])), [copies, group.groupId, items]);
+  const currentRun = buildRunSelection(items, active, currentCopies);
+  const selectionGroups = branchGroups.length ? branchGroups : [group];
+  const globalRuns = selectionGroups.map((entry) => ({ group: entry, run: buildRunSelection(entry.items, new Set(entry.items.filter((item) => selected.has(labelSelectionKey(entry.groupId, item.productId))).map((item) => item.productId)), Object.fromEntries(entry.items.map((item) => [item.productId, copies[labelSelectionKey(entry.groupId, item.productId)] ?? "1"]))) }));
+  const run = {
+    items: globalRuns.flatMap(({ group: entry, run: groupRun }) => groupRun.items.map((item) => ({ ...item, groupId: entry.groupId }))),
+    labelCount: globalRuns.reduce((total, entry) => total + entry.run.labelCount, 0),
+    invalidCopies: globalRuns.flatMap((entry) => entry.run.invalidCopies),
+    overLimit: globalRuns.some((entry) => entry.run.overLimit) || globalRuns.reduce((total, entry) => total + entry.run.labelCount, 0) > MAX_LABELS_PER_RUN
+  };
   const sheets = sheetsFor(run.labelCount);
   const changedCount = items.filter((item) => item.printable && item.needsPrint).length;
+  const globalChanged = selectionGroups.flatMap((entry) => entry.items.filter((item) => item.printable && item.needsPrint).map((item) => ({ groupId: entry.groupId, productId: item.productId })));
+  const selectedGroupCount = new Set(run.items.map((item) => item.groupId)).size;
+  const shouldUseBranchRun = Boolean(group.branchId && run.items.some((item) => item.groupId !== group.groupId));
   const previewItem = items.find((item) => item.productId === previewId) ?? items[0] ?? null;
   const canGenerate = !generating && run.items.length > 0 && !run.invalidCopies.length && !run.overLimit;
 
   function toggle(productId: string, checked: boolean) {
-    setSelected((current) => { const next = new Set(current); if (checked) next.add(productId); else next.delete(productId); return next; });
+    const key = labelSelectionKey(group.groupId, productId);
+    setSelected((current) => { const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next; });
     setNotice(null);
   }
 
@@ -195,7 +208,7 @@ function GroupItems({ group }: { group: LabelGroupView }) {
     startTransition(async () => {
       const result = await setLabelGroupProductsAction({ groupId: group.groupId, add: [], remove: ids });
       if (result.error) { setError(result.error); return; }
-      setSelected(new Set());
+      setSelected((current) => { const next = new Set(current); ids.forEach((id) => { next.delete(labelSelectionKey(group.groupId, id)); }); return next; });
       setNotice(`Se quitaron ${number(result.removed ?? 0)} productos del grupo.`);
       router.refresh();
     });
@@ -207,7 +220,7 @@ function GroupItems({ group }: { group: LabelGroupView }) {
     setGenerating(true);
     try {
       const response = await fetch("/api/labels/pdf", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: group.groupId, items: run.items })
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(shouldUseBranchRun ? { branchId: group.branchId, items: run.items } : { groupId: group.groupId, items: currentRun.items })
       });
       if (!response.ok || !response.headers.get("Content-Type")?.includes("application/pdf")) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -245,9 +258,10 @@ function GroupItems({ group }: { group: LabelGroupView }) {
       {showAdd ? <AddProducts groupId={group.groupId} onClose={() => { setShowAdd(false); }} /> : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button className={secondaryButton} disabled={!items.length} onClick={() => { setSelected(selectAllPrintable(items)); setNotice(null); }} type="button">Seleccionar todos</button>
-        <button className={secondaryButton} disabled={!changedCount} onClick={() => { setSelected(selectNeedingPrint(items)); setNotice(null); }} type="button" title="Los que cambiaron de precio o promoción desde la última impresión y los que nunca se imprimieron">Seleccionar precios cambiados ({changedCount})</button>
-        <button className={secondaryButton} disabled={!active.size} onClick={() => { setSelected(new Set()); }} type="button">Limpiar</button>
+        <button className={secondaryButton} disabled={!items.length} onClick={() => { setSelected((current) => new Set([...current, ...[...selectAllPrintable(items)].map((id) => labelSelectionKey(group.groupId, id))])); setNotice(null); }} type="button">Seleccionar todos</button>
+        <button className={secondaryButton} disabled={!changedCount} onClick={() => { setSelected((current) => new Set([...current, ...[...selectNeedingPrint(items)].map((id) => labelSelectionKey(group.groupId, id))])); setNotice(null); }} type="button" title="Los que cambiaron de precio o promoción desde la última impresión y los que nunca se imprimieron">Seleccionar precios cambiados ({changedCount})</button>
+        {group.branchId ? <button className={secondaryButton} disabled={!globalChanged.length} onClick={() => { setSelected(new Set(globalChanged.map((item) => labelSelectionKey(item.groupId, item.productId)))); setNotice(null); }} type="button">Seleccionar cambios de todos los grupos ({number(globalChanged.length)})</button> : null}
+        <button className={secondaryButton} disabled={!selected.size} onClick={() => { setSelected(new Set()); }} type="button">Limpiar</button>
         <button className={`${secondaryButton} text-red-700`} disabled={!active.size || pending} onClick={removeSelected} type="button">Quitar del grupo</button>
       </div>
 
@@ -265,8 +279,8 @@ function GroupItems({ group }: { group: LabelGroupView }) {
           <label className="flex items-center gap-1 text-xs font-bold text-stone-600">copias
             <input
               aria-label={`Copias de ${item.name}`} className={`${input} w-16 px-2 py-1 text-center font-normal`} disabled={!item.printable} inputMode="numeric"
-              max={MAX_LABEL_COPIES} min={1} onChange={(event) => { setCopies((current) => ({ ...current, [item.productId]: event.target.value })); setNotice(null); }}
-              type="number" value={copies[item.productId] ?? "1"}
+              max={MAX_LABEL_COPIES} min={1} onChange={(event) => { setCopies((current) => ({ ...current, [labelSelectionKey(group.groupId, item.productId)]: event.target.value })); setNotice(null); }}
+              type="number" value={copies[labelSelectionKey(group.groupId, item.productId)] ?? "1"}
             />
           </label>
         </li>)}
@@ -275,7 +289,7 @@ function GroupItems({ group }: { group: LabelGroupView }) {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-stone-600" data-testid="label-run-summary">
-          <strong>{number(run.labelCount)}</strong> {run.labelCount === 1 ? "etiqueta" : "etiquetas"} · {number(sheets)} {sheets === 1 ? "hoja" : "hojas"} A4 ({LABELS_PER_SHEET} por hoja)
+          <strong>{number(run.labelCount)}</strong> {run.labelCount === 1 ? "etiqueta" : "etiquetas"}{selectedGroupCount > 1 ? <> · {number(selectedGroupCount)} grupos</> : null} · {number(sheets)} {sheets === 1 ? "hoja" : "hojas"} A4 ({LABELS_PER_SHEET} por hoja)
           {run.invalidCopies.length ? <span className="ml-2 font-bold text-amber-700">Revisá las copias: entero de 1 a {MAX_LABEL_COPIES}.</span> : null}
           {run.overLimit ? <span className="ml-2 font-bold text-amber-700">Máximo {number(MAX_LABELS_PER_RUN)} etiquetas por PDF.</span> : null}
         </p>
@@ -328,11 +342,13 @@ function History({ runs, detail }: { runs: LabelRunRow[]; detail: LabelRunDetail
 // Pantalla
 // ---------------------------------------------------------------------------------------------------------------------
 
-export function LabelGroupsWorkspace({ groups, group, branches, runs, runDetail }: {
-  groups: LabelGroupSummary[]; group: LabelGroupView | null; branches: BranchOption[]; runs: LabelRunRow[]; runDetail: LabelRunDetail | null;
+export function LabelGroupsWorkspace({ groups, group, branchGroups, branches, runs, runDetail }: {
+  groups: LabelGroupSummary[]; group: LabelGroupView | null; branchGroups: LabelGroupView[]; branches: BranchOption[]; runs: LabelRunRow[]; runDetail: LabelRunDetail | null;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<"create" | "edit" | null>(groups.length ? null : "create");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [copies, setCopies] = useState<Record<string, string>>({});
 
   return <div className="mt-6 grid gap-6">
     <section className="rounded-xl bg-white p-5 shadow-sm" data-testid="label-group-bar">
@@ -352,7 +368,7 @@ export function LabelGroupsWorkspace({ groups, group, branches, runs, runDetail 
       {!groups.length ? <p className="mt-3 text-sm text-stone-600">Un grupo es el conjunto de productos que tienen etiqueta física en una góndola (por ejemplo «Góndolas Despensa Central»). Se arma una vez y queda guardado.</p> : null}
       {form ? <GroupForm branches={branches} group={form === "edit" ? group : null} key={form === "edit" ? (group?.groupId ?? "edit") : "create"} onClose={() => { setForm(null); }} /> : null}
     </section>
-    {group ? <GroupItems group={group} key={group.groupId} /> : null}
+    {group ? <GroupItems branchGroups={branchGroups} copies={copies} group={group} selected={selected} setCopies={setCopies} setSelected={setSelected} /> : null}
     <History detail={runDetail} runs={runs} />
   </div>;
 }

@@ -36,7 +36,7 @@ const runs: LabelRunRow[] = [
 ];
 const detail: LabelRunDetail = { run: must(runs[0]), items: [{ productName: "MAYONESA HELLMANN'S", copies: 2, text: "$ 1.729,75 (3+ u) · normal $ 2.035", condition: "POR 3 UNIDADES - Descuento 15%" }] };
 
-const html = renderToStaticMarkup(<LabelGroupsWorkspace branches={branches} group={group} groups={groups} runDetail={detail} runs={runs} />);
+const html = renderToStaticMarkup(<LabelGroupsWorkspace branchGroups={[group]} branches={branches} group={group} groups={groups} runDetail={detail} runs={runs} />);
 
 describe("pantalla de etiquetas: grupos, selección y PDF", () => {
   it("muestra el grupo elegido con su sucursal y los botones de grupo", () => {
@@ -59,6 +59,7 @@ describe("pantalla de etiquetas: grupos, selección y PDF", () => {
   it("acciones del grupo: seleccionar todos, seleccionar precios cambiados (con la cantidad), generar PDF y copias por producto", () => {
     expect(html).toContain("Seleccionar todos");
     expect(html).toContain("Seleccionar precios cambiados (1)");
+    expect(html).toContain("Seleccionar cambios de todos los grupos (1)");
     expect(html).toContain("Generar PDF");
     expect(html).toContain('aria-label="Copias de Mayonesa Hellmann&#x27;s"');
     expect(html).toContain('value="1"');
@@ -90,7 +91,7 @@ describe("pantalla de etiquetas: grupos, selección y PDF", () => {
   });
 
   it("sin grupos: invita a crear el primero y no muestra la lista de productos", () => {
-    const empty = renderToStaticMarkup(<LabelGroupsWorkspace branches={branches} group={null} groups={[]} runDetail={null} runs={[]} />);
+    const empty = renderToStaticMarkup(<LabelGroupsWorkspace branchGroups={[]} branches={branches} group={null} groups={[]} runDetail={null} runs={[]} />);
     expect(empty).toContain("Todavía no hay grupos");
     expect(empty).toContain("Nuevo grupo");
     expect(empty).toContain('data-testid="label-group-form"');

@@ -5158,6 +5158,7 @@ export type Database = {
       }
       get_import_batch: { Args: { p_batch_id: string }; Returns: Json }
       get_label_group: { Args: { p_group_id: string }; Returns: Json }
+      get_label_branch_groups: { Args: { p_branch_id: string }; Returns: Json }
       get_mercadopago_branch_pos: {
         Args: never
         Returns: {
@@ -5613,6 +5614,10 @@ export type Database = {
       }
       record_label_print_run: {
         Args: { p_group_id: string; p_items: Json }
+        Returns: Json
+      }
+      record_label_branch_print_runs: {
+        Args: { p_branch_id: string; p_items: Json }
         Returns: Json
       }
       record_shift_heartbeat: {

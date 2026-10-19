@@ -1,7 +1,7 @@
 import type { Json } from "@carnicerias/database";
 
 import { getAdminContext } from "../../../../lib/admin";
-import { executeLabelRun, LabelRunError, parseLabelRunRequest, type LabelRunDeps } from "../../../../lib/label-run";
+import { executeLabelBranchRun, executeLabelRun, LabelRunError, parseLabelBranchRunRequest, parseLabelRunRequest, type LabelBranchRunDeps, type LabelRunDeps } from "../../../../lib/label-run";
 import { createClient } from "../../../../lib/supabase/server";
 import { getCurrentUser } from "../../../../lib/supabase/current-user";
 
@@ -38,8 +38,7 @@ export async function POST(request: Request) {
   } catch {
     return fail(400, "Pedido inválido");
   }
-  const parsed = parseLabelRunRequest(body);
-  if (!parsed.ok) return fail(400, parsed.error);
+  const isBranchRun = typeof body === "object" && body !== null && "branchId" in body;
 
   const deps: LabelRunDeps = {
     getGroup: async (groupId) => {
@@ -54,8 +53,29 @@ export async function POST(request: Request) {
     }
   };
 
+  const branchDeps: LabelBranchRunDeps = {
+    getGroups: async (branchId) => {
+      const { data, error } = await supabase.rpc("get_label_branch_groups", { p_branch_id: branchId });
+      if (error) throw new LabelRunError(error.code === "42501" ? 403 : 500, error.message);
+      return data;
+    },
+    recordRuns: async (branchId, items) => {
+      const { data, error } = await supabase.rpc("record_label_branch_print_runs", { p_branch_id: branchId, p_items: items as Json });
+      if (error) throw new Error(error.message);
+      return data;
+    }
+  };
+
   try {
-    const result = await executeLabelRun(deps, parsed.value, { timeZone: context.timezone });
+    const result = isBranchRun ? await (async () => {
+      const parsed = parseLabelBranchRunRequest(body);
+      if (!parsed.ok) throw new LabelRunError(400, parsed.error);
+      return executeLabelBranchRun(branchDeps, parsed.value, { timeZone: context.timezone });
+    })() : await (async () => {
+      const parsed = parseLabelRunRequest(body);
+      if (!parsed.ok) throw new LabelRunError(400, parsed.error);
+      return executeLabelRun(deps, parsed.value, { timeZone: context.timezone });
+    })();
     return new Response(Buffer.from(result.pdf), {
       status: 200,
       headers: {

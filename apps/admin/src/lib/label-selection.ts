@@ -12,6 +12,11 @@ export interface SelectableItem {
   needsPrint: boolean;
 }
 
+/** La selección es por ubicación física: el mismo producto puede estar en dos grupos. */
+export function labelSelectionKey(groupId: string, productId: string): string {
+  return `${groupId}:${productId}`;
+}
+
 /** Todos los productos que hoy se pueden imprimir (los inactivos / sin precio quedan afuera). */
 export function selectAllPrintable(items: readonly SelectableItem[]): Set<string> {
   return new Set(items.filter((item) => item.printable).map((item) => item.productId));

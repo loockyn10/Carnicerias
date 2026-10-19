@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { executeLabelRun, LabelRunError, parseLabelRunRequest, prepareLabelRun, snapshotItems, type LabelRunDeps } from "./label-run";
+import { executeLabelBranchRun, executeLabelRun, LabelRunError, parseLabelBranchRunRequest, parseLabelRunRequest, prepareLabelRun, snapshotItems, type LabelBranchRunDeps, type LabelRunDeps } from "./label-run";
 import { parseLabelGroupFacts } from "./label-group";
 import { formatRunStamp } from "./label-stamp";
 import { inspectPdf } from "./test-support/pdf-inspect";
@@ -14,6 +14,8 @@ const MOLIDA = "44444444-4444-4444-8444-444444444444";
 const SIN_PRECIO = "55555555-5555-4555-8555-555555555555";
 const AJENO = "66666666-6666-4666-8666-666666666666";
 const RUN = "77777777-7777-4777-8777-777777777777";
+const GROUP_TWO = "88888888-8888-4888-8888-888888888888";
+const BRANCH = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 function payload(overrides: { active?: boolean; mayoPrice?: string } = {}) {
   const item = (productId: string, position: number, name: string, price: string | null, extra: Record<string, unknown> = {}) => ({
@@ -178,6 +180,40 @@ describe("generar: PDF + registro", () => {
     expect(Object.keys(snapshotItems(prepared)[0] ?? {}).sort()).toEqual([
       "conditionText", "copies", "displayedName", "listPriceCents", "productId", "promoDiscountBps", "promoMinimumUnits", "promoPriceCents", "unitType", "variant"
     ]);
+  });
+});
+
+describe("generación global por sucursal", () => {
+  function branchDeps(groups: unknown) {
+    const calls: { branchId: string[]; recorded: Record<string, unknown>[] } = { branchId: [], recorded: [] };
+    const value: LabelBranchRunDeps = {
+      getGroups: (branchId) => { calls.branchId.push(branchId); return Promise.resolve(groups); },
+      recordRuns: (_branchId, items) => { calls.recorded = items; return Promise.resolve({ runs: [{ runId: RUN }] }); }
+    };
+    return { value, calls };
+  }
+
+  it("une grupos en un PDF, conserva producto repetido por grupo y registra cada ubicación", async () => {
+    const second = { ...payload(), groupId: GROUP_TWO, name: "Heladera Central", items: [payload().items[0]] };
+    const { value, calls } = branchDeps([payload(), second]);
+    const parsed = parseLabelBranchRunRequest({ branchId: BRANCH, items: [
+      { groupId: GROUP, productId: MAYO, copies: 2 }, { groupId: GROUP_TWO, productId: MAYO, copies: 2 }
+    ] });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const result = await executeLabelBranchRun(value, parsed.value, context);
+    expect(result).toMatchObject({ labelCount: 4, productCount: 2, pageCount: 1 });
+    expect(calls.branchId).toEqual([BRANCH]);
+    expect(calls.recorded).toHaveLength(2);
+    expect(calls.recorded.map((item) => item.groupId)).toEqual([GROUP, GROUP_TWO]);
+    const [page] = await inspectPdf(result.pdf);
+    expect((page?.texts ?? []).filter((entry) => entry.text === "$ 1.742,50")).toHaveLength(4);
+  });
+
+  it("no permite mezclar grupos de otra sucursal", async () => {
+    const { value } = branchDeps([payload()]);
+    const parsed = parseLabelBranchRunRequest({ branchId: BRANCH, items: [{ groupId: GROUP_TWO, productId: MAYO, copies: 1 }] });
+    if (!parsed.ok) throw new Error(parsed.error);
+    await expect(executeLabelBranchRun(value, parsed.value, context)).rejects.toMatchObject({ status: 422 });
   });
 });
 

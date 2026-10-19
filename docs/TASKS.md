@@ -122,7 +122,7 @@ Implementado 2026-10-08 y 2026-10-09 (D-074, D-075). **Migraciones pendientes: `
 
 ## P0 — Etiquetas en lote: aplicar y probar con papel (acción del usuario)
 
-Implementado 2026-10-07 (D-073). **Migración pendiente: `202610070070_product_label_groups.sql`** (tablas nuevas vacías, sin tocar nada existente; va después de la 069 si ésta tampoco se aplicó).
+Implementado 2026-10-07 (D-073), ampliado 2026-10-19 con selección global de cambios por sucursal. **Migraciones pendientes: `202610070070_product_label_groups.sql` y `202610240090_label_branch_print_runs.sql`** (tablas nuevas vacías, sin tocar nada existente; 090 va después de 070).
 
 1. `supabase db push --dry-run` (debe listar sólo las pendientes: 069 y/o 070) y `supabase db push` antes de desplegar el Admin → `git push` (Vercel). Dependencia nueva: `pdf-lib` (+ `@pdf-lib/standard-fonts`).
 2. Productos → Etiquetas → «Nuevo grupo» (nombre + sucursal) → «+ Agregar productos» (buscar, «Seleccionar todos los resultados», agregar) → «Seleccionar todos» → «Generar PDF».

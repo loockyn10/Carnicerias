@@ -3,7 +3,7 @@ import { renderLabelSheetPdf } from "./label-pdf";
 import { sheetPageCount, expandCopies } from "./label-sheet";
 import { MAX_LABEL_COPIES, MAX_LABELS_PER_RUN, MAX_PRODUCTS_PER_RUN } from "./label-spec";
 import { formatRunStamp } from "./label-stamp";
-import { UNAVAILABLE_TEXT, parseLabelGroupFacts, resolveLabelItem, type LabelGroupFacts } from "./label-group";
+import { UNAVAILABLE_TEXT, parseLabelBranchGroups, parseLabelGroupFacts, resolveLabelItem, type LabelGroupFacts } from "./label-group";
 import { isUuid } from "./uuid";
 import { conditionText, type ProductLabelData } from "./product-label";
 
@@ -29,6 +29,11 @@ export class LabelRunError extends Error {
 export interface LabelRunRequest {
   groupId: string;
   items: { productId: string; copies: number }[];
+}
+
+export interface LabelBranchRunRequest {
+  branchId: string;
+  items: { groupId: string; productId: string; copies: number }[];
 }
 
 /** Cantidad de copias válida: entero entre 1 y 99. */
@@ -59,6 +64,30 @@ export function parseLabelRunRequest(body: unknown): { ok: true; value: LabelRun
   }
   if (labels > MAX_LABELS_PER_RUN) return { ok: false, error: `Hasta ${String(MAX_LABELS_PER_RUN)} etiquetas por generación (son ${String(labels)})` };
   return { ok: true, value: { groupId: record.groupId.toLowerCase(), items } };
+}
+
+/** Pedido global: el par grupo + producto es la identidad de una etiqueta física. */
+export function parseLabelBranchRunRequest(body: unknown): { ok: true; value: LabelBranchRunRequest } | { ok: false; error: string } {
+  if (typeof body !== "object" || body === null) return { ok: false, error: "Pedido inválido" };
+  const record = body as Record<string, unknown>;
+  if (!isUuid(record.branchId)) return { ok: false, error: "Sucursal inválida" };
+  if (!Array.isArray(record.items) || record.items.length === 0) return { ok: false, error: "Seleccioná al menos una etiqueta" };
+  if (record.items.length > MAX_PRODUCTS_PER_RUN) return { ok: false, error: `Hasta ${String(MAX_PRODUCTS_PER_RUN)} productos por generación` };
+  const items: LabelBranchRunRequest["items"] = [];
+  const seen = new Set<string>();
+  let labels = 0;
+  for (const raw of record.items) {
+    if (typeof raw !== "object" || raw === null) return { ok: false, error: "Etiqueta inválida" };
+    const { groupId, productId, copies } = raw as Record<string, unknown>;
+    if (!isUuid(groupId) || !isUuid(productId)) return { ok: false, error: "Etiqueta inválida" };
+    if (!isValidCopies(copies)) return { ok: false, error: `La cantidad de copias tiene que ser un entero entre 1 y ${String(MAX_LABEL_COPIES)}` };
+    const key = `${groupId.toLowerCase()}:${productId.toLowerCase()}`;
+    if (seen.has(key)) return { ok: false, error: "Hay etiquetas repetidas en la selección" };
+    seen.add(key); labels += copies;
+    items.push({ groupId: groupId.toLowerCase(), productId: productId.toLowerCase(), copies });
+  }
+  if (labels > MAX_LABELS_PER_RUN) return { ok: false, error: `Hasta ${String(MAX_LABELS_PER_RUN)} etiquetas por generación (son ${String(labels)})` };
+  return { ok: true, value: { branchId: record.branchId.toLowerCase(), items } };
 }
 
 export interface PreparedLabel {
@@ -117,6 +146,11 @@ export interface LabelRunDeps {
   recordRun: (groupId: string, items: Record<string, unknown>[]) => Promise<unknown>;
 }
 
+export interface LabelBranchRunDeps {
+  getGroups: (branchId: string) => Promise<unknown>;
+  recordRuns: (branchId: string, items: Record<string, unknown>[]) => Promise<unknown>;
+}
+
 export interface LabelRunResult {
   pdf: Uint8Array;
   filename: string;
@@ -155,4 +189,36 @@ export async function executeLabelRun(deps: LabelRunDeps, request: LabelRunReque
     pdf, runId, filename: `etiquetas-${slug(facts.name)}-${stamp.file}.pdf`,
     labelCount: layouts.length, productCount: prepared.length, pageCount: sheetPageCount(layouts.length)
   };
+}
+
+/** Genera un único PDF con grupos de una misma sucursal y registra cada grupo de forma atómica. */
+export async function executeLabelBranchRun(deps: LabelBranchRunDeps, request: LabelBranchRunRequest, context: { timeZone: string; now?: Date }): Promise<LabelRunResult> {
+  const groups = parseLabelBranchGroups(await deps.getGroups(request.branchId));
+  if (!groups.length) throw new LabelRunError(404, "No hay grupos activos para esta sucursal");
+  const byId = new Map(groups.map((group) => [group.groupId.toLowerCase(), group]));
+  const byGroup = new Map<string, { productId: string; copies: number }[]>();
+  for (const item of request.items) {
+    const values = byGroup.get(item.groupId) ?? [];
+    values.push({ productId: item.productId, copies: item.copies });
+    byGroup.set(item.groupId, values);
+  }
+
+  const prepared = [] as (PreparedLabel & { groupId: string })[];
+  for (const [groupId, items] of byGroup) {
+    const group = byId.get(groupId);
+    if (!group) throw new LabelRunError(422, "Hay grupos que no pertenecen a esta sucursal");
+    prepared.push(...prepareLabelRun(group, { groupId: group.groupId, items }).map((entry) => ({ ...entry, groupId: group.groupId })));
+  }
+  const now = context.now ?? new Date();
+  const stamp = formatRunStamp(now, context.timeZone);
+  const layouts = expandCopies(prepared.map((entry) => ({ item: entry.layout, copies: entry.copies })));
+  const pdf = await renderLabelSheetPdf(layouts, { title: "Etiquetas de góndola", header: `Etiquetas de góndola  -  ${stamp.display}`, createdAt: now });
+  let recorded: unknown;
+  try {
+    recorded = await deps.recordRuns(request.branchId, prepared.flatMap((entry) => snapshotItems([entry]).map((item) => ({ groupId: entry.groupId, ...item }))));
+  } catch (error) {
+    throw new LabelRunError(500, `No se pudo registrar la generación: ${error instanceof Error ? error.message : "error desconocido"}`);
+  }
+  if (typeof recorded !== "object" || recorded === null || !Array.isArray((recorded as Record<string, unknown>).runs)) throw new LabelRunError(500, "No se pudo registrar la generación");
+  return { pdf, runId: "multiple", filename: `etiquetas-gondola-${stamp.file}.pdf`, labelCount: layouts.length, productCount: prepared.length, pageCount: sheetPageCount(layouts.length) };
 }

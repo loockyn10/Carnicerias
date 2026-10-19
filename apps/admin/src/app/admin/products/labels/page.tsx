@@ -3,7 +3,7 @@ import { LabelModeTabs } from "../../../../components/label-mode-tabs";
 import { SectionTabs } from "../../../../components/section-tabs";
 import { requireAdminContext } from "../../../../lib/admin";
 import { describeValues } from "../../../../lib/label-changes";
-import { buildLabelGroupView, parseLabelGroupFacts, parseLabelGroupList } from "../../../../lib/label-group";
+import { buildLabelGroupView, parseLabelBranchGroups, parseLabelGroupFacts, parseLabelGroupList } from "../../../../lib/label-group";
 import { formatIsoStamp } from "../../../../lib/label-stamp";
 import { createClient } from "../../../../lib/supabase/server";
 import { isUuid } from "../../../../lib/uuid";
@@ -35,9 +35,14 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
   const groups = allGroups.filter((entry) => entry.active);
   const selected = groups.find((entry) => entry.groupId === requestedGroup) ?? groups[0] ?? null;
 
-  const factsResult = selected ? await supabase.rpc("get_label_group", { p_group_id: selected.groupId }) : null;
-  const facts = factsResult?.data ? parseLabelGroupFacts(factsResult.data) : null;
+  const [factsResult, branchGroupsResult] = await Promise.all([
+    selected && !selected.branchId ? supabase.rpc("get_label_group", { p_group_id: selected.groupId }) : Promise.resolve(null),
+    selected?.branchId ? supabase.rpc("get_label_branch_groups", { p_branch_id: selected.branchId }) : Promise.resolve(null)
+  ]);
+  const branchFacts = branchGroupsResult?.data ? parseLabelBranchGroups(branchGroupsResult.data) : [];
+  const facts = selected?.branchId ? branchFacts.find((entry) => entry.groupId === selected.groupId) ?? null : factsResult?.data ? parseLabelGroupFacts(factsResult.data) : null;
   const group = facts ? buildLabelGroupView(facts, context.timezone) : null;
+  const branchGroups = branchFacts.map((entry) => buildLabelGroupView(entry, context.timezone));
 
   const groupName = (id: string) => allGroups.find((entry) => entry.groupId === id)?.name ?? "Grupo archivado";
   const runs: LabelRunRow[] = (runsResult.data ?? []).map((run) => ({
@@ -73,7 +78,7 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
     }
   }
 
-  const error = [groupsResult.error, branchesResult.error, runsResult.error, factsResult?.error].find(Boolean)?.message ?? detailError;
+  const error = [groupsResult.error, branchesResult.error, runsResult.error, factsResult?.error, branchGroupsResult?.error].find(Boolean)?.message ?? detailError;
   const branches: BranchOption[] = (branchesResult.data ?? []).map((branch) => ({ id: branch.id, name: branch.name, active: branch.active }));
 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
@@ -87,6 +92,7 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error}</p> : null}
     <LabelGroupsWorkspace
       branches={branches}
+      branchGroups={branchGroups}
       group={group}
       groups={groups.map((entry) => ({ groupId: entry.groupId, name: entry.name, branchName: entry.branchName, itemCount: entry.itemCount }))}
       runDetail={runDetail}

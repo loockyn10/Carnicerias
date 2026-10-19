@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRunSelection, parseCopies, selectAllPrintable, selectNeedingPrint, sheetsFor, type SelectableItem } from "./label-selection";
+import { buildRunSelection, labelSelectionKey, parseCopies, selectAllPrintable, selectNeedingPrint, sheetsFor, type SelectableItem } from "./label-selection";
 
 const items: SelectableItem[] = [
   { productId: "a", printable: true, needsPrint: false },
@@ -48,5 +48,9 @@ describe("selección de etiquetas", () => {
 
   it("hojas A4 necesarias (21 por hoja)", () => {
     expect([0, 1, 21, 22, 42, 43].map((count) => sheetsFor(count))).toEqual([0, 1, 1, 2, 2, 3]);
+  });
+
+  it("distingue el mismo producto en dos ubicaciones físicas", () => {
+    expect(labelSelectionKey("gondola", "coca-cola")).not.toBe(labelSelectionKey("heladera", "coca-cola"));
   });
 });
