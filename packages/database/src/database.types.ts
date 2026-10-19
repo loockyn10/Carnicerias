@@ -3434,9 +3434,9 @@ export type Database = {
           approx_weight_grams: number | null
           category_id: string | null
           created_at: string
+          global_quantity_discounts_enabled: boolean
           id: string
           inventory_role: Database["public"]["Enums"]["product_inventory_role"]
-          global_quantity_discounts_enabled: boolean
           name: string
           organization_id: string
           pack_discount_bps: number | null
@@ -3451,9 +3451,9 @@ export type Database = {
           approx_weight_grams?: number | null
           category_id?: string | null
           created_at?: string
+          global_quantity_discounts_enabled?: boolean
           id?: string
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
-          global_quantity_discounts_enabled?: boolean
           name: string
           organization_id: string
           pack_discount_bps?: number | null
@@ -3468,9 +3468,9 @@ export type Database = {
           approx_weight_grams?: number | null
           category_id?: string | null
           created_at?: string
+          global_quantity_discounts_enabled?: boolean
           id?: string
           inventory_role?: Database["public"]["Enums"]["product_inventory_role"]
-          global_quantity_discounts_enabled?: boolean
           name?: string
           organization_id?: string
           pack_discount_bps?: number | null
@@ -4095,6 +4095,38 @@ export type Database = {
           },
           {
             foreignKeyName: "signage_promotion_groups_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      signage_tv_media: {
+        Row: {
+          created_at: string
+          organization_id: string
+          public_path: string
+          size_bytes: number
+          source_path: string
+        }
+        Insert: {
+          created_at?: string
+          organization_id: string
+          public_path: string
+          size_bytes: number
+          source_path: string
+        }
+        Update: {
+          created_at?: string
+          organization_id?: string
+          public_path?: string
+          size_bytes?: number
+          source_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "signage_tv_media_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -5317,7 +5349,6 @@ export type Database = {
         Returns: Json
       }
       get_signage_display: { Args: { p_token: string }; Returns: Json }
-      get_signage_tv_media_backfill_candidates: { Args: never; Returns: Json }
       get_signage_display_admin: {
         Args: { p_display_id: string }
         Returns: Json
@@ -5336,10 +5367,7 @@ export type Database = {
         Args: { p_applicable_only?: boolean; p_branch_id?: string }
         Returns: Json
       }
-      register_signage_tv_media: {
-        Args: { p_public_path: string; p_source_path: string }
-        Returns: Json
-      }
+      get_signage_tv_media_backfill_candidates: { Args: never; Returns: Json }
       get_stock_audit_summary: {
         Args: {
           p_branch_id: string
@@ -5542,6 +5570,10 @@ export type Database = {
         Args: { p_after_sequence?: number; p_device_id: string }
         Returns: Json
       }
+      pull_pos_state_base: {
+        Args: { p_after_sequence?: number; p_device_id: string }
+        Returns: Json
+      }
       purge_import_products: {
         Args: {
           p_candidates: Json
@@ -5610,6 +5642,10 @@ export type Database = {
       }
       register_pos_device: {
         Args: { p_branch_id: string; p_device_id: string; p_label?: string }
+        Returns: Json
+      }
+      register_signage_tv_media: {
+        Args: { p_public_path: string; p_source_path: string }
         Returns: Json
       }
       remove_offer_sign_butcher_logo: { Args: never; Returns: Json }
@@ -6018,6 +6054,10 @@ export type Database = {
         }
         Returns: Json
       }
+      set_product_global_quantity_discounts_enabled: {
+        Args: { p_enabled: boolean; p_product_id: string }
+        Returns: undefined
+      }
       set_product_inventory_role: {
         Args: { p_inventory_role: string; p_product_id: string }
         Returns: undefined
@@ -6028,10 +6068,6 @@ export type Database = {
           p_pack_size_units: number
           p_product_id: string
         }
-        Returns: undefined
-      }
-      set_product_global_quantity_discounts_enabled: {
-        Args: { p_enabled: boolean; p_product_id: string }
         Returns: undefined
       }
       set_product_price: {

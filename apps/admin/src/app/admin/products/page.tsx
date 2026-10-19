@@ -112,7 +112,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
   const costByProduct = new Map((costsResult?.data ?? []).map((row) => [row.product_id, row.cost_cents]));
   const suppliers = suppliersResult.data;
   const supplierNameById = new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
-  const packByProduct = new Map((packConfigsResult?.data ?? []).map((row) => [row.id, { sizeUnits: row.pack_size_units, discountBps: row.pack_discount_bps, globalQuantityDiscountsEnabled: row.global_quantity_discounts_enabled ?? true }]));
+  const packByProduct = new Map((packConfigsResult?.data ?? []).map((row) => [row.id, { sizeUnits: row.pack_size_units, discountBps: row.pack_discount_bps, globalQuantityDiscountsEnabled: row.global_quantity_discounts_enabled }]));
   const primarySupplierByProduct = new Map((primarySuppliersResult?.data ?? []).map((row) => [row.product_id, row.supplier_id]));
   type PriceRow = NonNullable<NonNullable<typeof pricesResult>["data"]>[number];
   const anyPriceByProduct = new Map<string, PriceRow>();

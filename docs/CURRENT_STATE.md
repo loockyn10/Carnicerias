@@ -37,6 +37,10 @@ Estado: **soporte parcial confirmado; no prioritario salvo necesidad comercial**
 
 La tabla de esa pantalla compara `row.stock_status === "CRITICAL" | "LOW"`, pero la vista `branch_stock_status` devuelve `'DISCONTINUED' | 'OUT_OF_STOCK' | 'LOW_STOCK' | 'AVAILABLE'` desde `202609100008_commercial_configuration.sql`. Resultado: la columna "Estado" de esa tabla siempre muestra "NORMAL", incluso sin stock. Es un bug técnico, no una decisión de producto; no se corrigió en este sprint por estar fuera de alcance (la nueva pantalla `/admin/branch-stock` no reutiliza esa comparación, usa `stockPriority` de `lib/multibranch.ts`).
 
+### Rango horario fijo en Historial de ventas
+
+`apps/admin/src/app/admin/sales/page.tsx` construye el rango de `completed_at` con el offset fijo `-03:00`, aunque las reglas de producto exigen días calendario de la zona horaria de la organización. En organizaciones con otra zona horaria, el borde del día puede ser incorrecto. Es un bug preexistente ajeno al sprint de performance; no se modificó para no mezclar una corrección de reglas de negocio con esta optimización.
+
 ## Empleados, operador y sucursal
 
 - Los empleados POS se crean desde Admin como perfiles internos sin cuenta Supabase Auth, con nombre, PIN, tarifa inicial, estado y una o varias sucursales en una transacción.

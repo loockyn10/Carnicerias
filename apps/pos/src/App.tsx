@@ -636,7 +636,7 @@ export default function App() {
           packSizeUnits: row.packSizeUnits ?? null,
           packConfigId: row.packConfigId ?? null,
           packDiscountBps: row.packDiscountBps ?? null,
-          globalQuantityDiscountsEnabled: row.globalQuantityDiscountsEnabled !== false
+          globalQuantityDiscountsEnabled: row.globalQuantityDiscountsEnabled
         })));
         setCategoryDirectory(directory);
         return;
@@ -1121,7 +1121,7 @@ export default function App() {
   // de escritorio), UN chip por escalón con el color de su posición. Mismo helper para la lista de Central y la grilla; el cálculo lo hace
   // el motor de pricing.
   function unitPromotionBadgeChips(product: CatalogProduct) {
-    if (product.unitType !== "UNIT" || isPriceMissing(product) || product.globalQuantityDiscountsEnabled === false) return [];
+    if (product.unitType !== "UNIT" || isPriceMissing(product) || !product.globalQuantityDiscountsEnabled) return [];
     return unitPromotionChips(product.pricePerKgCents, unitPromotions, findPackRule(discounts, product.productId, branchId));
   }
 
@@ -1193,7 +1193,7 @@ export default function App() {
   function unitLineRequest(product: CatalogProduct): { units: number; packSale: UnitPackSale | null; lineId: string; mergedLine: TicketLine | undefined } {
     return resolveUnitLineRequest({
       ticket: ticketRef.current, productId: product.productId, packOffer: packOfferOf(product),
-      quantity: quantityInput ?? 0, editingLineId, branchPromotions: product.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions
+      quantity: quantityInput ?? 0, editingLineId, branchPromotions: !product.globalQuantityDiscountsEnabled ? NO_BRANCH_PROMOTIONS : unitPromotions
     });
   }
 
@@ -1313,7 +1313,7 @@ export default function App() {
     // Un escaneo agrega UNA unidad a la línea del producto si ya existe (aunque tenga precio manual); el Pack se decide solo por las unidades totales.
     const existing = findUnitLineToMerge(current, product.productId, true);
     const quantity = (existing?.quantityUnits ?? 0) + 1;
-    const productTiers = product.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions;
+    const productTiers = !product.globalQuantityDiscountsEnabled ? NO_BRANCH_PROMOTIONS : unitPromotions;
     let line = buildUnitTicketLine(product, quantity, existing?.id ?? crypto.randomUUID(), findPackRule(discounts, product.productId, branchId), paymentMethod ?? "CASH", BigInt(cashDiscountBps), { branchPromotions: productTiers, globalQuantityDiscountsEnabled: product.globalQuantityDiscountsEnabled, packSale: autoPackSale(quantity, packOfferOf(product), productTiers) });
     try { line = carryManualPrice(existing, line); } catch { /* el precio manual no puede dejar la línea en $0: se sigue con el precio normal */ }
     const next = existing ? current.map((candidate) => (candidate.id === existing.id ? line : candidate)) : [...current, line];
@@ -2612,7 +2612,7 @@ export default function App() {
                   const pack = offer
                     ? { packSizeUnits: offer.packSizeUnits, packDiscountBps: offer.packDiscountBps, unitPriceCents: packOfferUnitPriceCents(selectedProduct.pricePerKgCents, offer), applied: request?.packSale != null, lineUnits: unitLineRequest(selectedProduct).units }
                     : null;
-                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} pack={pack} tiers={selectedProduct.globalQuantityDiscountsEnabled === false ? NO_BRANCH_PROMOTIONS : unitPromotions} />;
+                  return <QuantityTierList appliedMinimumUnits={appliedMinimum} listPriceCents={selectedProduct.pricePerKgCents} pack={pack} tiers={!selectedProduct.globalQuantityDiscountsEnabled ? NO_BRANCH_PROMOTIONS : unitPromotions} />;
                 })()}
               </>
             )}
