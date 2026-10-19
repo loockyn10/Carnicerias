@@ -37,7 +37,8 @@ import { DiscountChip } from "./DiscountChip";
 import { QuantityTierList } from "./QuantityTierList";
 import { PACK_PALETTE, tierPalette, tierPositionByMinimumUnits } from "./lib/discount-chips";
 import { ManualPriceModal } from "./ManualPriceModal";
-import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment, type RecentLocalSale } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
+import { mergeRecentSales, readRemoteRecentSales, readRemoteSaleReceipt, RECENT_SALES_LIMIT, type RecentSaleView } from "./lib/remote-recent-sales";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
@@ -399,7 +400,7 @@ export default function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [recentSales, setRecentSales] = useState<RecentLocalSale[]>([]);
+  const [recentSales, setRecentSales] = useState<RecentSaleView[]>([]);
   const [outboxSummary, setOutboxSummary] = useState<OutboxSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [operators, setOperators] = useState<OperatorRosterRow[]>([]);
@@ -423,10 +424,26 @@ export default function App() {
     lastError: null
   });
 
-  const loadRecentSales = useCallback(async () => {
+  const loadRecentSales = useCallback(async (includeRemote = false) => {
     if (!user || !branchId) return;
     if (desktop) {
-      setRecentSales(await localDatabase.recentSales(10));
+      const local = await localDatabase.recentSales(RECENT_SALES_LIMIT);
+      let remote: RecentSaleView[] = [];
+      // The shared branch history is useful only while its panel is visible. A transient network/RPC
+      // failure never hides this computer's offline queue or receipt cache.
+      if (includeRemote && localRuntime?.deviceId && navigator.onLine && !user.offline) {
+        try {
+          const { data, error: remoteError } = await supabase.rpc("get_pos_recent_sales", {
+            p_device_id: localRuntime.deviceId,
+            p_limit: RECENT_SALES_LIMIT
+          });
+          if (remoteError) throw remoteError;
+          remote = readRemoteRecentSales(data);
+        } catch (remoteError) {
+          console.warn("[pos] recent_sales_remote_unavailable", remoteError);
+        }
+      }
+      setRecentSales(mergeRecentSales(local, remote));
       return;
     }
     const { data, error: recentError } = await supabase
@@ -445,9 +462,11 @@ export default function App() {
       completedAt: sale.completed_at ?? "",
       syncedAt: sale.completed_at,
       provider: null,
-      verificationStatus: null
+      verificationStatus: null,
+      origin: "REMOTE" as const,
+      terminalLabel: null
     })));
-  }, [branchId, desktop, user]);
+  }, [branchId, desktop, localRuntime?.deviceId, user]);
 
   const loadOperators = useCallback(async () => {
     if (!desktop || !localRuntime?.branchId) return;
@@ -735,9 +754,14 @@ export default function App() {
   // quedó aplicado antes de que runSync publique el runtime) y tras cada venta (explícito abajo).
   useEffect(() => { void loadBranchStock(); }, [loadBranchStock, localRuntime?.lastSuccessfulSyncAt, localRuntime?.catalogCursor]);
 
+  // No network polling while the panel is closed. When it is open, a short refresh makes another
+  // Central terminal visible without introducing Realtime state or affecting the outbox pipeline.
   useEffect(() => {
-    void loadRecentSales().catch(() => setRecentSales([]));
-  }, [loadRecentSales]);
+    if (!recentSalesOpen) return;
+    void loadRecentSales(true).catch(() => setRecentSales([]));
+    const timer = window.setInterval(() => { void loadRecentSales(true).catch(() => undefined); }, 8_000);
+    return () => window.clearInterval(timer);
+  }, [loadRecentSales, recentSalesOpen]);
 
   useEffect(() => {
     if (!branchId) return;
@@ -1611,17 +1635,33 @@ export default function App() {
   }, [desktop]);
 
   // Todo el camino es local (SQLite -> ESC/POS -> spooler): imprime igual sin Internet. No lanza ni toca la venta.
-  const runPrint = useCallback(async (saleId: string, reprint: boolean) => {
+  // A cached local sale still follows `runPrint(sale.saleId, true)`; a remote row only changes the
+  // immutable receipt source, never the local printer that executes the manual action.
+  const runPrint = useCallback(async (saleId: string, reprint: boolean, origin: RecentSaleView["origin"] = "LOCAL") => {
     if (printInFlight.current) return;
     printInFlight.current = true;
     setPrintJob({ saleId, phase: "printing", message: null });
     try {
-      const outcome = await printSaleReceipt(saleId, { reprint });
+      const outcome = origin === "LOCAL"
+        ? await printSaleReceipt(saleId, { reprint })
+        : await printSaleReceipt(saleId, { reprint }, {
+          loadSource: async () => {
+            if (!localRuntime?.deviceId) return null;
+            const { data, error: receiptError } = await supabase.rpc("get_pos_sale_receipt", {
+              p_device_id: localRuntime.deviceId,
+              p_sale_id: saleId
+            });
+            if (receiptError) throw receiptError;
+            return readRemoteSaleReceipt(data);
+          },
+          getSettings: () => printerApi.getSettings(),
+          print: (document) => printerApi.print(document)
+        });
       setPrintJob({ saleId, phase: outcome.ok ? "done" : "error", message: outcome.ok ? null : outcome.message });
     } finally {
       printInFlight.current = false;
     }
-  }, []);
+  }, [localRuntime?.deviceId]);
 
   // Impresión automática: una sola vez por venta. `postSale` sólo existe para una venta COMPLETED con el cobro confirmado
   // (una venta Mercado Pago recién cuando el backend confirmó el pago), así que nunca imprime un ticket pendiente o anulado.
@@ -2499,7 +2539,7 @@ export default function App() {
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{printerVisible && canPrintReceipt(sale) ? <div className="grid justify-items-end gap-1"><button className="rounded-lg border border-stone-500 px-2 py-1 text-xs font-black text-stone-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!printerReady || printJob?.phase === "printing"} title={printerReady ? undefined : "Configurá la impresora de tickets"} type="button" onClick={() => void runPrint(sale.saleId, true)}>Reimprimir ticket</button>{printJob?.saleId === sale.saleId ? <span className={`max-w-48 text-right text-xs font-bold ${printJob.phase === "error" ? "text-amber-300" : "text-emerald-400"}`} data-testid="reprint-status">{printJob.phase === "printing" ? "Imprimiendo…" : printJob.phase === "error" ? printJob.message : "Ticket enviado a la impresora."}</span> : null}</div> : null}{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en este equipo y sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{sale.terminalLabel ? <p className="text-xs text-stone-500">{sale.terminalLabel}</p> : null}{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{printerVisible && canPrintReceipt(sale) ? <div className="grid justify-items-end gap-1"><button className="rounded-lg border border-stone-500 px-2 py-1 text-xs font-black text-stone-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!printerReady || printJob?.phase === "printing"} title={printerReady ? undefined : "Configurá la impresora de tickets"} type="button" onClick={() => void runPrint(sale.saleId, true, sale.origin)}>Reimprimir ticket</button>{printJob?.saleId === sale.saleId ? <span className={`max-w-48 text-right text-xs font-bold ${printJob.phase === "error" ? "text-amber-300" : "text-emerald-400"}`} data-testid="reprint-status">{printJob.phase === "printing" ? "Imprimiendo…" : printJob.phase === "error" ? printJob.message : "Ticket enviado a la impresora."}</span> : null}</div> : null}{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en esta sucursal.</p> : null}</div>
           </section>
         </div>
       ) : null}

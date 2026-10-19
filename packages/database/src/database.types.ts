@@ -3817,7 +3817,9 @@ export type Database = {
           device_id: string | null
           id: string
           organization_id: string
+          operator_name_snapshot: string | null
           profile_id: string
+          branch_name_snapshot: string | null
           status: Database["public"]["Enums"]["sale_status"]
           sync_event_id: string | null
           ticket_discount_bps: number
@@ -3836,7 +3838,9 @@ export type Database = {
           device_id?: string | null
           id?: string
           organization_id: string
+          operator_name_snapshot?: string | null
           profile_id: string
+          branch_name_snapshot?: string | null
           status?: Database["public"]["Enums"]["sale_status"]
           sync_event_id?: string | null
           ticket_discount_bps?: number
@@ -3855,7 +3859,9 @@ export type Database = {
           device_id?: string | null
           id?: string
           organization_id?: string
+          operator_name_snapshot?: string | null
           profile_id?: string
+          branch_name_snapshot?: string | null
           status?: Database["public"]["Enums"]["sale_status"]
           sync_event_id?: string | null
           ticket_discount_bps?: number
@@ -5242,6 +5248,14 @@ export type Database = {
       }
       get_pos_device_capabilities: {
         Args: { p_device_id: string }
+        Returns: Json
+      }
+      get_pos_recent_sales: {
+        Args: { p_device_id: string; p_limit?: number }
+        Returns: Json
+      }
+      get_pos_sale_receipt: {
+        Args: { p_device_id: string; p_sale_id: string }
         Returns: Json
       }
       get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json }

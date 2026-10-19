@@ -180,6 +180,16 @@ Implementado 2026-10-04 (D-065, `CURRENT_STATE.md`); la salida real nunca se pro
 6. Apagar/desconectar la impresora y vender: la venta queda completada y la barra ofrece «Reintentar impresión». Desinstalar la impresora configurada: el modal avisa y permite elegir otra.
 - Pendiente a futuro (no hecho a propósito): otras sucursales, logo, cajón de dinero, QR, impresora Linux/CUPS (hoy `PRINTER_UNSUPPORTED`).
 
+## P0 — Aplicar y validar Ventas recientes compartidas del POS (acción del usuario)
+
+Implementado localmente 2026-10-19: migración `202610250091_pos_shared_recent_sales.sql`, RPCs de lectura por dispositivo/sucursal y polling visible de 8 s. No se hizo `db push`, commit ni push.
+
+1. Ejecutar `supabase db push --dry-run` y revisar que la migración 091 (y cualquier previa pendiente) sea correcta; luego aplicar el procedimiento remoto aprobado. No actualizar Avenida/Janssen para este cambio: el contrato de sync existente no cambió.
+2. Recompilar e instalar **sólo Central**. Abrir Central en PC A (con térmica) y PC B; vender en B y abrir “Ventas recientes” en A. Debe aparecer en hasta ~8 s, marcada sincronizada, sin aparecer en Avenida/Janssen.
+3. En A, reimprimir la venta de B: debe usar la impresora de A, incluir `*** REIMPRESION ***`, conservar producto/precio/promoción/pago históricos y no imprimir sola al aparecer.
+4. Desconectar B, vender y confirmar que A no la ve todavía; reconectar B y esperar su sync + el refresh de A. Confirmar una sola fila por `sale_id` y que la outbox de B continúa sin cambios.
+5. Con Docker/CI Linux, ejecutar `pnpm db:reset && pnpm db:test` incluyendo `supabase/tests/pos_shared_recent_sales.test.sql`.
+
 ## P0 — Ajuste Pack por producto + categoría única + promoción "desde N": aplicar, instalar y probar (acción del usuario)
 
 Implementado 2026-10-04 (D-064, `CURRENT_STATE.md`), **sin aplicar**. `059`/`060` ya están en producción (Pack al 20 %, promoción 3 / 15 %). Orden obligatorio:
