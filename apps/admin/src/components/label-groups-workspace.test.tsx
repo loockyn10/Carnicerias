@@ -28,7 +28,7 @@ const payload = {
 const facts = parseLabelGroupFacts(payload);
 if (!facts) throw new Error("grupo de prueba inválido");
 const group = buildLabelGroupView(facts, "America/Argentina/Buenos_Aires");
-const groups = [{ groupId: GROUP, name: "Góndolas Despensa Central", branchName: "Central", itemCount: 3 }];
+const groups = [{ groupId: GROUP, name: "Góndolas Despensa Central", branchId: "b1", branchName: "Central", itemCount: 3 }];
 const branches = [{ id: "b1", name: "Central", active: true }];
 const runs: LabelRunRow[] = [
   { id: "run2", groupId: GROUP, groupName: "Góndolas Despensa Central", whenText: "07/10/2026 15:42", labelCount: 18, productCount: 9 },
@@ -36,7 +36,7 @@ const runs: LabelRunRow[] = [
 ];
 const detail: LabelRunDetail = { run: must(runs[0]), items: [{ productName: "MAYONESA HELLMANN'S", copies: 2, text: "$ 1.729,75 (3+ u) · normal $ 2.035", condition: "POR 3 UNIDADES - Descuento 15%" }] };
 
-const html = renderToStaticMarkup(<LabelGroupsWorkspace branchGroups={[group]} branches={branches} group={group} groups={groups} runDetail={detail} runs={runs} />);
+const html = renderToStaticMarkup(<LabelGroupsWorkspace allMode={false} branchGroups={[group]} branchId="b1" branches={branches} group={group} groups={groups} runDetail={detail} runs={runs} />);
 
 describe("pantalla de etiquetas: grupos, selección y PDF", () => {
   it("muestra el grupo elegido con su sucursal y los botones de grupo", () => {
@@ -56,14 +56,23 @@ describe("pantalla de etiquetas: grupos, selección y PDF", () => {
     expect(html).toContain("Hoy: $ 1.912,50 (3+ u) · normal $ 2.250");
   });
 
+  it("Todos conserva cada ubicación física, incluso si el producto se repite, y mantiene las etiquetas actualizadas disponibles", () => {
+    const second = { ...group, groupId: "88888888-8888-4888-8888-888888888888", name: "Heladera", items: group.items.slice(1, 2) };
+    const all = renderToStaticMarkup(<LabelGroupsWorkspace allMode branchGroups={[group, second]} branchId="b1" branches={branches} group={group} groups={[...groups, { groupId: second.groupId, name: second.name, branchId: "b1", branchName: "Central", itemCount: 1 }]} runDetail={null} runs={[]} />);
+    expect(all).toContain("Todos los grupos (4)");
+    expect(all).toContain("Grupo: Góndolas Despensa Central");
+    expect(all).toContain("Grupo: Heladera");
+    expect(all).toMatch(/data-freshness="UPDATED"[^>]*>Actualizada/);
+  });
+
   it("acciones del grupo: seleccionar todos, seleccionar precios cambiados (con la cantidad), generar PDF y copias por producto", () => {
     expect(html).toContain("Seleccionar todos");
     expect(html).toContain("Seleccionar precios cambiados (1)");
     expect(html).toContain("Seleccionar cambios de todos los grupos (1)");
     expect(html).toContain("Generar PDF");
-    expect(html).toContain('aria-label="Copias de Mayonesa Hellmann&#x27;s"');
+    expect(html).toContain('aria-label="Copias de Mayonesa Hellmann&#x27;s de Góndolas Despensa Central"');
     expect(html).toContain('value="1"');
-    expect(html).toMatch(/aria-label="Seleccionar Producto sin precio"[^>]*disabled/);
+    expect(html).toMatch(/aria-label="Seleccionar Producto sin precio de Góndolas Despensa Central"[^>]*disabled/);
     // sin nada tildado: 0 etiquetas y el botón de generar deshabilitado
     expect(html).toMatch(/data-testid="label-generate"[^>]*disabled/);
     expect(html).toContain("<strong>0</strong> etiquetas · 0 hojas A4 (21 por hoja)");
@@ -91,7 +100,7 @@ describe("pantalla de etiquetas: grupos, selección y PDF", () => {
   });
 
   it("sin grupos: invita a crear el primero y no muestra la lista de productos", () => {
-    const empty = renderToStaticMarkup(<LabelGroupsWorkspace branchGroups={[]} branches={branches} group={null} groups={[]} runDetail={null} runs={[]} />);
+    const empty = renderToStaticMarkup(<LabelGroupsWorkspace allMode branchGroups={[]} branchId={null} branches={branches} group={null} groups={[]} runDetail={null} runs={[]} />);
     expect(empty).toContain("Todavía no hay grupos");
     expect(empty).toContain("Nuevo grupo");
     expect(empty).toContain('data-testid="label-group-form"');

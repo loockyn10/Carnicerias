@@ -6,7 +6,8 @@ import { useMemo, useState, useTransition, type Dispatch, type SetStateAction, t
 
 import { saveLabelGroupAction, searchLabelProductsAction, setLabelGroupProductsAction, type LabelProductOption } from "../app/admin/products/labels/actions";
 import type { LabelGroupItemView, LabelGroupView } from "../lib/label-group";
-import { buildRunSelection, labelSelectionKey, selectAllPrintable, selectNeedingPrint, sheetsFor } from "../lib/label-selection";
+import { buildRunSelection, labelSelectionKey, sheetsFor } from "../lib/label-selection";
+import { matchesLabelSearch } from "../lib/label-search";
 import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM, LABELS_PER_SHEET, MAX_LABEL_COPIES, MAX_LABELS_PER_RUN } from "../lib/label-spec";
 import { ProductPriceLabel } from "./product-price-label";
 
@@ -16,7 +17,7 @@ const secondaryButton = "rounded-lg border border-stone-300 bg-white px-3 py-2 t
 const PREVIEW_SCALE = 3.2;
 
 export interface BranchOption { id: string; name: string; active: boolean }
-export interface LabelGroupSummary { groupId: string; name: string; branchName: string | null; itemCount: number }
+export interface LabelGroupSummary { groupId: string; name: string; branchId: string | null; branchName: string | null; itemCount: number }
 export interface LabelRunRow { id: string; groupId: string; groupName: string; whenText: string; labelCount: number; productCount: number }
 export interface LabelRunDetail { run: LabelRunRow; items: { productName: string; copies: number; text: string; condition: string | null }[] }
 
@@ -161,13 +162,20 @@ function filenameFrom(disposition: string | null): string {
   return match?.[1] ?? "etiquetas.pdf";
 }
 
-function GroupItems({ group, branchGroups, selected, setSelected, copies, setCopies }: {
+type WorkspaceItem = LabelGroupItemView & { groupId: string; groupName: string };
+const ITEMS_PER_PAGE = 100;
+
+function GroupItems({ group, branchGroups, branchId, allMode, selected, setSelected, copies, setCopies }: {
   group: LabelGroupView; branchGroups: LabelGroupView[]; selected: Set<string>; setSelected: Dispatch<SetStateAction<Set<string>>>;
   copies: Record<string, string>; setCopies: Dispatch<SetStateAction<Record<string, string>>>;
+  branchId: string | null; allMode: boolean;
 }) {
   const router = useRouter();
-  const items = group.items;
-  const [previewId, setPreviewId] = useState<string | null>(items[0]?.productId ?? null);
+  const sourceGroups = allMode ? branchGroups : [group];
+  const items: WorkspaceItem[] = sourceGroups.flatMap((entry) => entry.items.map((item) => ({ ...item, groupId: entry.groupId, groupName: entry.name })));
+  const [previewId, setPreviewId] = useState<string | null>(items[0] ? labelSelectionKey(items[0].groupId, items[0].productId) : null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -175,10 +183,10 @@ function GroupItems({ group, branchGroups, selected, setSelected, copies, setCop
   const [generating, setGenerating] = useState(false);
 
   // Lo tildado que ya no es del grupo (se quitó) no cuenta.
-  const active = useMemo(() => new Set(items.filter((item) => selected.has(labelSelectionKey(group.groupId, item.productId))).map((item) => item.productId)), [group.groupId, items, selected]);
+  const active = useMemo(() => new Set(group.items.filter((item) => selected.has(labelSelectionKey(group.groupId, item.productId))).map((item) => item.productId)), [group.groupId, group.items, selected]);
   const currentCopies = useMemo(() => Object.fromEntries(items.map((item) => [item.productId, copies[labelSelectionKey(group.groupId, item.productId)] ?? "1"])), [copies, group.groupId, items]);
-  const currentRun = buildRunSelection(items, active, currentCopies);
-  const selectionGroups = branchGroups.length ? branchGroups : [group];
+  const currentRun = buildRunSelection(group.items, active, currentCopies);
+  const selectionGroups = (allMode || group.branchId) && branchGroups.length ? branchGroups : [group];
   const globalRuns = selectionGroups.map((entry) => ({ group: entry, run: buildRunSelection(entry.items, new Set(entry.items.filter((item) => selected.has(labelSelectionKey(entry.groupId, item.productId))).map((item) => item.productId)), Object.fromEntries(entry.items.map((item) => [item.productId, copies[labelSelectionKey(entry.groupId, item.productId)] ?? "1"]))) }));
   const run = {
     items: globalRuns.flatMap(({ group: entry, run: groupRun }) => groupRun.items.map((item) => ({ ...item, groupId: entry.groupId }))),
@@ -187,15 +195,19 @@ function GroupItems({ group, branchGroups, selected, setSelected, copies, setCop
     overLimit: globalRuns.some((entry) => entry.run.overLimit) || globalRuns.reduce((total, entry) => total + entry.run.labelCount, 0) > MAX_LABELS_PER_RUN
   };
   const sheets = sheetsFor(run.labelCount);
-  const changedCount = items.filter((item) => item.printable && item.needsPrint).length;
+  const filteredItems = useMemo(() => items.filter((item) => matchesLabelSearch(item, query)), [items, query]);
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pagedItems = filteredItems.slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE);
+  const changedCount = filteredItems.filter((item) => item.printable && item.needsPrint).length;
   const globalChanged = selectionGroups.flatMap((entry) => entry.items.filter((item) => item.printable && item.needsPrint).map((item) => ({ groupId: entry.groupId, productId: item.productId })));
   const selectedGroupCount = new Set(run.items.map((item) => item.groupId)).size;
-  const shouldUseBranchRun = Boolean(group.branchId && run.items.some((item) => item.groupId !== group.groupId));
-  const previewItem = items.find((item) => item.productId === previewId) ?? items[0] ?? null;
+  const shouldUseBranchRun = Boolean(branchId && (allMode || (group.branchId && run.items.some((item) => item.groupId !== group.groupId))));
+  const previewItem = items.find((item) => labelSelectionKey(item.groupId, item.productId) === previewId) ?? items[0] ?? null;
   const canGenerate = !generating && run.items.length > 0 && !run.invalidCopies.length && !run.overLimit;
 
-  function toggle(productId: string, checked: boolean) {
-    const key = labelSelectionKey(group.groupId, productId);
+  function toggle(groupId: string, productId: string, checked: boolean) {
+    const key = labelSelectionKey(groupId, productId);
     setSelected((current) => { const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next; });
     setNotice(null);
   }
@@ -220,7 +232,7 @@ function GroupItems({ group, branchGroups, selected, setSelected, copies, setCop
     setGenerating(true);
     try {
       const response = await fetch("/api/labels/pdf", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(shouldUseBranchRun ? { branchId: group.branchId, items: run.items } : { groupId: group.groupId, items: currentRun.items })
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(shouldUseBranchRun ? { branchId, items: run.items } : { groupId: group.groupId, items: currentRun.items })
       });
       if (!response.ok || !response.headers.get("Content-Type")?.includes("application/pdf")) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -238,6 +250,7 @@ function GroupItems({ group, branchGroups, selected, setSelected, copies, setCop
       window.setTimeout(() => { URL.revokeObjectURL(url); }, 10_000);
       const pages = Number(response.headers.get("X-Label-Pages") ?? sheets);
       setNotice(`PDF generado: ${number(run.labelCount)} ${run.labelCount === 1 ? "etiqueta" : "etiquetas"} en ${number(pages)} ${pages === 1 ? "hoja" : "hojas"} A4. Imprimilo al 100 % (tamaño real) y cortá por las guías.`);
+      setSelected(new Set());
       router.refresh();
     } catch {
       setError("No se pudo generar el PDF. Revisá la conexión y reintentá.");
@@ -250,42 +263,48 @@ function GroupItems({ group, branchGroups, selected, setSelected, copies, setCop
     <section className="min-w-0 rounded-xl bg-white p-5 shadow-sm" data-testid="label-group-items">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-black">Productos del grupo ({items.length})</h2>
-          <p className="mt-1 text-sm text-stone-600">{group.branchName ? `Precios y promoción de ${group.branchName}.` : "Precios globales de la organización."} El estado compara con la última etiqueta impresa de cada producto en este grupo.</p>
+          <h2 className="text-lg font-black">{allMode ? `Todos los grupos (${number(items.length)})` : `Productos del grupo (${number(items.length)})`}</h2>
+          <p className="mt-1 text-sm text-stone-600">{allMode ? "Mostrando las etiquetas físicas de todos los grupos de esta sucursal." : group.branchName ? `Precios y promoción de ${group.branchName}.` : "Precios globales de la organización."} El estado compara con la última etiqueta impresa de cada producto en su grupo.</p>
         </div>
-        <button className={secondaryButton} onClick={() => { setShowAdd((open) => !open); }} type="button">+ Agregar productos</button>
+        {!allMode ? <button className={secondaryButton} onClick={() => { setShowAdd((open) => !open); }} type="button">+ Agregar productos</button> : null}
       </div>
-      {showAdd ? <AddProducts groupId={group.groupId} onClose={() => { setShowAdd(false); }} /> : null}
+      {showAdd && !allMode ? <AddProducts groupId={group.groupId} onClose={() => { setShowAdd(false); }} /> : null}
+
+      <label className="mt-4 grid gap-1 text-sm font-bold" htmlFor="label-product-search">Buscar producto
+        <input aria-label="Buscar producto" className={`${input} font-normal`} id="label-product-search" onChange={(event) => { setQuery(event.target.value); setPage(0); }} placeholder="Buscar producto…" value={query} />
+      </label>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button className={secondaryButton} disabled={!items.length} onClick={() => { setSelected((current) => new Set([...current, ...[...selectAllPrintable(items)].map((id) => labelSelectionKey(group.groupId, id))])); setNotice(null); }} type="button">Seleccionar todos</button>
-        <button className={secondaryButton} disabled={!changedCount} onClick={() => { setSelected((current) => new Set([...current, ...[...selectNeedingPrint(items)].map((id) => labelSelectionKey(group.groupId, id))])); setNotice(null); }} type="button" title="Los que cambiaron de precio o promoción desde la última impresión y los que nunca se imprimieron">Seleccionar precios cambiados ({changedCount})</button>
-        {group.branchId ? <button className={secondaryButton} disabled={!globalChanged.length} onClick={() => { setSelected(new Set(globalChanged.map((item) => labelSelectionKey(item.groupId, item.productId)))); setNotice(null); }} type="button">Seleccionar cambios de todos los grupos ({number(globalChanged.length)})</button> : null}
+        <button className={secondaryButton} disabled={!filteredItems.length} onClick={() => { setSelected((current) => new Set([...current, ...filteredItems.filter((item) => item.printable).map((item) => labelSelectionKey(item.groupId, item.productId))])); setNotice(null); }} type="button">Seleccionar todos</button>
+        <button className={secondaryButton} disabled={!changedCount} onClick={() => { setSelected((current) => new Set([...current, ...filteredItems.filter((item) => item.printable && item.needsPrint).map((item) => labelSelectionKey(item.groupId, item.productId))])); setNotice(null); }} type="button" title="Los que cambiaron de precio o promoción desde la última impresión y los que nunca se imprimieron">Seleccionar precios cambiados ({changedCount})</button>
+        {!allMode && group.branchId ? <button className={secondaryButton} disabled={!globalChanged.length} onClick={() => { setSelected(new Set(globalChanged.map((item) => labelSelectionKey(item.groupId, item.productId)))); setNotice(null); }} type="button">Seleccionar cambios de todos los grupos ({number(globalChanged.length)})</button> : null}
         <button className={secondaryButton} disabled={!selected.size} onClick={() => { setSelected(new Set()); }} type="button">Limpiar</button>
-        <button className={`${secondaryButton} text-red-700`} disabled={!active.size || pending} onClick={removeSelected} type="button">Quitar del grupo</button>
+        {!allMode ? <button className={`${secondaryButton} text-red-700`} disabled={!active.size || pending} onClick={removeSelected} type="button">Quitar del grupo</button> : null}
       </div>
 
       <ul className="mt-3 divide-y divide-stone-100 rounded-lg border border-stone-200" data-testid="label-items">
-        {items.map((item) => <li className={`flex flex-wrap items-center gap-3 px-3 py-2 ${item.productId === previewItem?.productId ? "bg-rose-50" : ""}`} data-printable={item.printable} key={item.productId}>
-          <input aria-label={`Seleccionar ${item.name}`} checked={active.has(item.productId)} disabled={!item.printable} onChange={(event) => { toggle(item.productId, event.target.checked); }} type="checkbox" />
-          <button className="min-w-0 flex-1 text-left" onClick={() => { setPreviewId(item.productId); }} type="button">
+        {pagedItems.map((item) => <li className={`flex flex-wrap items-center gap-3 px-3 py-2 ${labelSelectionKey(item.groupId, item.productId) === labelSelectionKey(previewItem?.groupId ?? "", previewItem?.productId ?? "") ? "bg-rose-50" : ""}`} data-printable={item.printable} key={labelSelectionKey(item.groupId, item.productId)}>
+          <input aria-label={`Seleccionar ${item.name} de ${item.groupName}`} checked={selected.has(labelSelectionKey(item.groupId, item.productId))} disabled={!item.printable} onChange={(event) => { toggle(item.groupId, item.productId, event.target.checked); }} type="checkbox" />
+          <button className="min-w-0 flex-1 text-left" onClick={() => { setPreviewId(labelSelectionKey(item.groupId, item.productId)); }} type="button">
             <span className="block truncate text-sm font-bold">{item.name}{item.sku ? <span className="ml-2 text-xs font-normal text-stone-500">{item.sku}</span> : null}<span className="ml-2 text-xs font-normal text-stone-500">{item.unitType === "WEIGHT" ? "por kg" : "por unidad"}</span></span>
             <span className="block text-xs text-stone-500">
               {item.printable ? <>Hoy: {item.currentText}</> : item.unavailableText}
               {item.lastPrintedText ? <> · Impresa: {item.lastPrintedText}{item.lastPrintedAtText ? ` (${item.lastPrintedAtText})` : ""}</> : null}
+              {allMode ? <> · Grupo: {item.groupName}</> : null}
             </span>
           </button>
           <StatusChip item={item} />
           <label className="flex items-center gap-1 text-xs font-bold text-stone-600">copias
             <input
-              aria-label={`Copias de ${item.name}`} className={`${input} w-16 px-2 py-1 text-center font-normal`} disabled={!item.printable} inputMode="numeric"
-              max={MAX_LABEL_COPIES} min={1} onChange={(event) => { setCopies((current) => ({ ...current, [labelSelectionKey(group.groupId, item.productId)]: event.target.value })); setNotice(null); }}
-              type="number" value={copies[labelSelectionKey(group.groupId, item.productId)] ?? "1"}
+              aria-label={`Copias de ${item.name} de ${item.groupName}`} className={`${input} w-16 px-2 py-1 text-center font-normal`} disabled={!item.printable} inputMode="numeric"
+              max={MAX_LABEL_COPIES} min={1} onChange={(event) => { setCopies((current) => ({ ...current, [labelSelectionKey(item.groupId, item.productId)]: event.target.value })); setNotice(null); }}
+              type="number" value={copies[labelSelectionKey(item.groupId, item.productId)] ?? "1"}
             />
           </label>
         </li>)}
-        {!items.length ? <li className="px-3 py-4 text-sm text-stone-500">El grupo todavía no tiene productos. Usá «+ Agregar productos» (se pueden sumar muchos de una vez).</li> : null}
+        {!filteredItems.length ? <li className="px-3 py-4 text-sm text-stone-500">No hay etiquetas para esta búsqueda.</li> : null}
       </ul>
+      {filteredItems.length > ITEMS_PER_PAGE ? <div className="mt-3 flex items-center justify-between text-sm"><span>{number(currentPage * ITEMS_PER_PAGE + 1)}–{number(Math.min((currentPage + 1) * ITEMS_PER_PAGE, filteredItems.length))} de {number(filteredItems.length)}</span><span className="flex gap-2"><button className={secondaryButton} disabled={currentPage === 0} onClick={() => { setPage((value) => Math.max(0, value - 1)); }} type="button">Anterior</button><button className={secondaryButton} disabled={currentPage >= pageCount - 1} onClick={() => { setPage((value) => Math.min(pageCount - 1, value + 1)); }} type="button">Siguiente</button></span></div> : null}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-stone-600" data-testid="label-run-summary">
@@ -342,8 +361,8 @@ function History({ runs, detail }: { runs: LabelRunRow[]; detail: LabelRunDetail
 // Pantalla
 // ---------------------------------------------------------------------------------------------------------------------
 
-export function LabelGroupsWorkspace({ groups, group, branchGroups, branches, runs, runDetail }: {
-  groups: LabelGroupSummary[]; group: LabelGroupView | null; branchGroups: LabelGroupView[]; branches: BranchOption[]; runs: LabelRunRow[]; runDetail: LabelRunDetail | null;
+export function LabelGroupsWorkspace({ groups, group, branchGroups, branchId, allMode, branches, runs, runDetail }: {
+  groups: LabelGroupSummary[]; group: LabelGroupView | null; branchGroups: LabelGroupView[]; branchId: string | null; allMode: boolean; branches: BranchOption[]; runs: LabelRunRow[]; runDetail: LabelRunDetail | null;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<"create" | "edit" | null>(groups.length ? null : "create");
@@ -353,22 +372,29 @@ export function LabelGroupsWorkspace({ groups, group, branchGroups, branches, ru
   return <div className="mt-6 grid gap-6">
     <section className="rounded-xl bg-white p-5 shadow-sm" data-testid="label-group-bar">
       <div className="flex flex-wrap items-end gap-3">
+        <label className="grid gap-1 text-sm font-bold" htmlFor="label-branch-select">Sucursal
+          <select className={`${input} min-w-52 font-normal`} id="label-branch-select" onChange={(event) => { router.push(`/admin/products/labels?group=all&branch=${event.target.value}`); }} value={branchId ?? ""}>
+            {!branches.length ? <option value="">Todavía no hay sucursales</option> : null}
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}{branch.active ? "" : " (inactiva)"}</option>)}
+          </select>
+        </label>
         <label className="grid gap-1 text-sm font-bold" htmlFor="label-group-select">Grupo
           <select
-            className={`${input} min-w-64 font-normal`} disabled={!groups.length} id="label-group-select" onChange={(event) => { router.push(`/admin/products/labels?group=${event.target.value}`); }}
-            value={group?.groupId ?? ""}
+            className={`${input} min-w-64 font-normal`} disabled={!groups.length} id="label-group-select" onChange={(event) => { router.push(event.target.value === "all" ? `/admin/products/labels?group=all&branch=${branchId ?? ""}` : `/admin/products/labels?group=${event.target.value}`); }}
+            value={allMode ? "all" : group?.groupId ?? ""}
           >
             {!groups.length ? <option value="">Todavía no hay grupos</option> : null}
-            {groups.map((summary) => <option key={summary.groupId} value={summary.groupId}>{summary.name}{summary.branchName ? ` · ${summary.branchName}` : ""} ({summary.itemCount})</option>)}
+            {branchId ? <option value="all">TODOS</option> : null}
+            {groups.map((summary) => <option key={summary.groupId} value={summary.groupId}>{summary.name}{summary.branchName ? ` · ${summary.branchName}` : " · Precio global"} ({summary.itemCount})</option>)}
           </select>
         </label>
         <button className={secondaryButton} onClick={() => { setForm("create"); }} type="button">Nuevo grupo</button>
-        <button className={secondaryButton} disabled={!group} onClick={() => { setForm("edit"); }} type="button">Editar grupo</button>
+        <button className={secondaryButton} disabled={!group || allMode} onClick={() => { setForm("edit"); }} type="button">Editar grupo</button>
       </div>
       {!groups.length ? <p className="mt-3 text-sm text-stone-600">Un grupo es el conjunto de productos que tienen etiqueta física en una góndola (por ejemplo «Góndolas Despensa Central»). Se arma una vez y queda guardado.</p> : null}
       {form ? <GroupForm branches={branches} group={form === "edit" ? group : null} key={form === "edit" ? (group?.groupId ?? "edit") : "create"} onClose={() => { setForm(null); }} /> : null}
     </section>
-    {group ? <GroupItems branchGroups={branchGroups} copies={copies} group={group} selected={selected} setCopies={setCopies} setSelected={setSelected} /> : null}
+    {group ? <GroupItems allMode={allMode} branchGroups={branchGroups} branchId={branchId} copies={copies} group={group} selected={selected} setCopies={setCopies} setSelected={setSelected} /> : null}
     <History detail={runDetail} runs={runs} />
   </div>;
 }

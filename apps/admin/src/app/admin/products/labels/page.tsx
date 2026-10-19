@@ -23,6 +23,7 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
     </main>;
   }
   const requestedGroup = value("group");
+  const requestedBranch = value("branch");
   const requestedRun = value("run");
   const supabase = await createClient();
 
@@ -33,16 +34,22 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
   ]);
   const allGroups = parseLabelGroupList(groupsResult.data);
   const groups = allGroups.filter((entry) => entry.active);
-  const selected = groups.find((entry) => entry.groupId === requestedGroup) ?? groups[0] ?? null;
+  const explicitlySelected = requestedGroup && requestedGroup !== "all" ? groups.find((entry) => entry.groupId === requestedGroup) ?? null : null;
+  const selectedBranchId = branchesResult.data?.some((branch) => branch.id === requestedBranch)
+    ? requestedBranch
+    : explicitlySelected?.branchId ?? groups.find((entry) => entry.branchId)?.branchId ?? branchesResult.data?.[0]?.id ?? null;
+  const allMode = requestedGroup === "all" || !explicitlySelected;
+  const selected = allMode ? null : explicitlySelected;
 
   const [factsResult, branchGroupsResult] = await Promise.all([
     selected && !selected.branchId ? supabase.rpc("get_label_group", { p_group_id: selected.groupId }) : Promise.resolve(null),
-    selected?.branchId ? supabase.rpc("get_label_branch_groups", { p_branch_id: selected.branchId }) : Promise.resolve(null)
+    selectedBranchId ? supabase.rpc("get_label_branch_groups", { p_branch_id: selectedBranchId }) : Promise.resolve(null)
   ]);
   const branchFacts = branchGroupsResult?.data ? parseLabelBranchGroups(branchGroupsResult.data) : [];
   const facts = selected?.branchId ? branchFacts.find((entry) => entry.groupId === selected.groupId) ?? null : factsResult?.data ? parseLabelGroupFacts(factsResult.data) : null;
   const group = facts ? buildLabelGroupView(facts, context.timezone) : null;
   const branchGroups = branchFacts.map((entry) => buildLabelGroupView(entry, context.timezone));
+  const displayGroup = group ?? branchGroups[0] ?? null;
 
   const groupName = (id: string) => allGroups.find((entry) => entry.groupId === id)?.name ?? "Grupo archivado";
   const runs: LabelRunRow[] = (runsResult.data ?? []).map((run) => ({
@@ -93,8 +100,10 @@ export default async function ProductLabelsPage({ searchParams }: { searchParams
     <LabelGroupsWorkspace
       branches={branches}
       branchGroups={branchGroups}
-      group={group}
-      groups={groups.map((entry) => ({ groupId: entry.groupId, name: entry.name, branchName: entry.branchName, itemCount: entry.itemCount }))}
+      branchId={selectedBranchId}
+      allMode={allMode}
+      group={displayGroup}
+      groups={groups.map((entry) => ({ groupId: entry.groupId, name: entry.name, branchId: entry.branchId, branchName: entry.branchName, itemCount: entry.itemCount }))}
       runDetail={runDetail}
       runs={runs}
     />

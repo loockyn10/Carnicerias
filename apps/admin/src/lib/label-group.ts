@@ -30,6 +30,8 @@ export interface LabelItemFacts {
   position: number;
   name: string;
   sku: string | null;
+  /** Códigos de barras normalizados del producto, sólo para buscar la etiqueta. */
+  barcodes: string[];
   unitType: "UNIT" | "WEIGHT";
   unavailableReason: LabelUnavailableReason | null;
   /** Precio de lista vigente (de la sucursal del grupo, o el global); null = sin precio. */
@@ -66,6 +68,9 @@ function asCents(value: unknown): bigint | null {
 function isReason(value: unknown): value is LabelUnavailableReason {
   return value === "INACTIVE" || value === "NOT_IN_BRANCH" || value === "NO_PRICE";
 }
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
 
 function parseLast(raw: unknown): LastPrintFacts | null {
   if (!isRecord(raw)) return null;
@@ -99,7 +104,7 @@ export function parseLabelGroupFacts(payload: unknown): LabelGroupFacts | null {
       const minimum = asInteger(raw.bulkMinimumUnits);
       const bps = asInteger(raw.bulkDiscountBps);
       items.push({
-        productId, position, name: productName, sku: asString(raw.sku), unitType,
+        productId, position, name: productName, sku: asString(raw.sku), barcodes: asStringArray(raw.barcodes), unitType,
         unavailableReason: isReason(raw.unavailableReason) ? raw.unavailableReason : null,
         listPriceCents: raw.listPriceCents === null || raw.listPriceCents === undefined ? null : asCents(raw.listPriceCents),
         bulk: minimum !== null && bps !== null && bps > 0 ? { minimumUnits: minimum, discountBps: bps } : null,
@@ -133,6 +138,7 @@ export interface LabelGroupItemView {
   productId: string;
   name: string;
   sku: string | null;
+  barcodes: string[];
   unitType: "UNIT" | "WEIGHT";
   /** false = no se puede imprimir hoy (inactivo, fuera de la sucursal o sin precio). */
   printable: boolean;
@@ -184,7 +190,7 @@ export function buildLabelGroupView(facts: LabelGroupFacts, timeZone: string): L
     items: facts.items.map((item) => {
       const { label, printable, freshness } = resolveLabelItem(item);
       return {
-        productId: item.productId, name: item.name, sku: item.sku, unitType: item.unitType, printable, unavailableReason: item.unavailableReason,
+        productId: item.productId, name: item.name, sku: item.sku, barcodes: item.barcodes, unitType: item.unitType, printable, unavailableReason: item.unavailableReason,
         unavailableText: item.unavailableReason ? UNAVAILABLE_TEXT[item.unavailableReason] : printable ? null : UNAVAILABLE_TEXT.NO_PRICE,
         freshness: freshness?.status ?? null, reasons: freshness?.reasons ?? [],
         freshnessText: freshness ? freshnessText(freshness) : null,
