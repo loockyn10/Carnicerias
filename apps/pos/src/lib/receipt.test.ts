@@ -79,4 +79,21 @@ describe("buildSaleReceipt — snapshot de la venta", () => {
     const fixed = buildSaleReceipt(receiptSource([weightItem({ promotionDiscountCents: "150000", discountType: "FIXED_PRICE_PER_KG", discountValue: 1_080_000 })])).lines[0];
     expect(fixed?.promotion).toEqual({ kind: "FIXED_PRICE_PER_KG", pricePerKgCents: 1_080_000n });
   });
+
+  it("keeps historical item names, prices, UNIT/WEIGHT quantities, Pack discounts, payment and status together for inspection", () => {
+    const historical = receiptSource([
+      unitItem({ productName: "Fideos históricos", quantityUnits: 3, originalPriceCents: "100000", chargedPriceCents: "85000", subtotalCents: "255000", promotionDiscountCents: "45000", discountType: "PERCENTAGE", discountValue: 1500 }),
+      weightItem({ productName: "Asado histórico", weightGrams: 1340, chargedPriceCents: "1250000", originalPriceCents: "1200000", subtotalCents: "1675000" }),
+      packItem(2000)
+    ], { totalCents: "2015000", payment: { method: "TRANSFER", provider: "MERCADOPAGO", verificationStatus: "CONFIRMED" } });
+
+    const detail = buildSaleReceipt(historical);
+    expect(detail).toMatchObject({ status: "COMPLETED", total: 2_015_000n, paymentMethod: "TRANSFER", paymentProvider: "MERCADOPAGO", paymentVerificationStatus: "CONFIRMED" });
+    expect(detail.lines).toMatchObject([
+      { productName: "Fideos históricos", unitType: "UNIT", quantityUnits: 3, originalUnitPrice: 100_000n, chargedUnitPrice: 85_000n, promotionDiscount: 45_000n },
+      { productName: "Asado histórico", unitType: "WEIGHT", weightGrams: 1340, originalUnitPrice: 1_200_000n, chargedUnitPrice: 1_250_000n },
+      { productName: "Leche Entera", packSizeUnitsSnapshot: 8, packDiscountBps: 2000, promotion: { kind: "PACK", discountBps: 2000 } }
+    ]);
+    expect(detail.lines[0]?.productName).not.toBe("Fideos actuales");
+  });
 });

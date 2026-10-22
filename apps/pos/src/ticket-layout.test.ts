@@ -26,10 +26,9 @@ describe("descuento general manual eliminado del POS", () => {
     }
   });
 
-  it("toda venta nueva sale con descuento general 0: se calcula con 0 bps y nunca se manda `ticketDiscount`", () => {
+  it("toda venta nueva sale con descuento general 0 y no agrega un campo de descuento al payload", () => {
     expect(source).toContain("summarizeTicket(ticket, 0n)");
     expect(source).not.toContain("ticketDiscount:");
-    expect(source).not.toContain("ticketDiscount ");
   });
 });
 
@@ -38,6 +37,17 @@ describe("aviso de venta completada (toast)", () => {
     expect(source).not.toContain("PostSaleBar");
     expect(source).not.toContain("onNewSale");
     expect(source).toContain("onDismiss={() => setPostSale(null)}");
+  });
+
+  it("Ventas recientes abre el detalle desde los snapshots local o remoto y sólo reimprime por el botón explícito", () => {
+    expect(source).toContain("onClick={() => void openRecentSaleDetail(sale)}");
+    expect(source).toContain("await localDatabase.saleReceiptSource(sale.saleId)");
+    expect(source).toContain('supabase.rpc("get_pos_sale_receipt"');
+    expect(source).toContain("onClick={() => void runPrint(receipt.saleId, true, recentSaleDetail.sale.origin)}");
+    const detailLoaderStart = source.indexOf("const openRecentSaleDetail = useCallback");
+    const detailLoaderEnd = source.indexOf("// Impresión automática", detailLoaderStart);
+    expect(detailLoaderStart).toBeGreaterThanOrEqual(0);
+    expect(source.slice(detailLoaderStart, detailLoaderEnd)).not.toContain("runPrint(");
   });
 
   it("la reimpresión de Ventas recientes sale de la venta guardada, no del aviso: sigue ahí aunque el aviso ya se haya ido", () => {

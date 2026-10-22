@@ -45,6 +45,7 @@ export interface ReceiptLine {
 
 export interface SaleReceipt {
   saleId: string;
+  status: string;
   /** ISO-8601 del momento de la venta. */
   soldAt: string;
   branchName: string | null;
@@ -53,6 +54,7 @@ export interface SaleReceipt {
   paymentMethod: string;
   /** "MERCADOPAGO" o null (medio manual). */
   paymentProvider: string | null;
+  paymentVerificationStatus: string | null;
   lines: ReceiptLine[];
   /** Suma de las líneas, antes del descuento general. */
   subtotal: bigint;
@@ -153,11 +155,13 @@ export function buildSaleReceipt(source: LocalSaleReceiptSource): SaleReceipt {
   const ticketDiscount = BigInt(source.ticketDiscountCents);
   return {
     saleId: source.saleId,
+    status: source.status,
     soldAt: source.completedAt,
     branchName: source.branchName,
     operatorName: source.operatorName,
     paymentMethod: source.payment?.method ?? "OTHER",
     paymentProvider: source.payment?.provider ?? null,
+    paymentVerificationStatus: source.payment?.verificationStatus ?? null,
     lines: source.items.map(lineOf),
     subtotal: total + ticketDiscount,
     ticketDiscountBps: source.ticketDiscountBps,

@@ -184,6 +184,8 @@ Implementado 2026-10-04 (D-065, `CURRENT_STATE.md`); la salida real nunca se pro
 
 Implementado localmente 2026-10-19: migración `202610250091_pos_shared_recent_sales.sql`, RPCs de lectura por dispositivo/sucursal y polling visible de 8 s. No se hizo `db push`, commit ni push.
 
+UX adicional implementada localmente 2026-10-22: click en venta abre detalle histórico (local o remoto) bajo demanda; inspección y reimpresión usan la misma fuente snapshot; sólo el botón explícito imprime en la impresora local. Validado con `pnpm check` y `cargo check`.
+
 1. Ejecutar `supabase db push --dry-run` y revisar que la migración 091 (y cualquier previa pendiente) sea correcta; luego aplicar el procedimiento remoto aprobado. No actualizar Avenida/Janssen para este cambio: el contrato de sync existente no cambió.
 2. Recompilar e instalar **sólo Central**. Abrir Central en PC A (con térmica) y PC B; vender en B y abrir “Ventas recientes” en A. Debe aparecer en hasta ~8 s, marcada sincronizada, sin aparecer en Avenida/Janssen.
 3. En A, reimprimir la venta de B: debe usar la impresora de A, incluir `*** REIMPRESION ***`, conservar producto/precio/promoción/pago históricos y no imprimir sola al aparecer.

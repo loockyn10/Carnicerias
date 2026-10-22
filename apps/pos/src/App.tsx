@@ -57,7 +57,7 @@ import { describeLocalPayment } from "./lib/mercadopago-state";
 import { PostSaleToast, type PostSalePrintView } from "./PostSaleToast";
 import { PrinterSettingsModal } from "./PrinterSettingsModal";
 import { isPrinterReady, printerApi, printSaleReceipt, shouldAutoPrint, type PrinterSettings } from "./lib/printer";
-import { canPrintReceipt } from "./lib/receipt";
+import { buildSaleReceipt, canPrintReceipt, type SaleReceipt } from "./lib/receipt";
 import { WhatsAppQrModal } from "./WhatsAppQrModal";
 import { requestWhatsAppClaim } from "./lib/whatsapp-claim";
 import { canOfferTicket, resolveWhatsAppAvailability } from "./lib/whatsapp-ticket-state";
@@ -401,6 +401,7 @@ export default function App() {
   const [recentSalesOpen, setRecentSalesOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [recentSales, setRecentSales] = useState<RecentSaleView[]>([]);
+  const [recentSaleDetail, setRecentSaleDetail] = useState<{ sale: RecentSaleView; receipt: SaleReceipt | null; loading: boolean; error: string | null } | null>(null);
   const [outboxSummary, setOutboxSummary] = useState<OutboxSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [operators, setOperators] = useState<OperatorRosterRow[]>([]);
@@ -1663,6 +1664,27 @@ export default function App() {
     }
   }, [localRuntime?.deviceId]);
 
+  const openRecentSaleDetail = useCallback(async (sale: RecentSaleView) => {
+    setRecentSaleDetail({ sale, receipt: null, loading: true, error: null });
+    try {
+      const source = sale.origin === "LOCAL"
+        ? await localDatabase.saleReceiptSource(sale.saleId)
+        : await (async () => {
+          if (!localRuntime?.deviceId || !navigator.onLine || user?.offline) throw new Error("Conectate a Internet para consultar el detalle de esta venta.");
+          const { data, error: receiptError } = await supabase.rpc("get_pos_sale_receipt", {
+            p_device_id: localRuntime.deviceId,
+            p_sale_id: sale.saleId
+          });
+          if (receiptError) throw receiptError;
+          return readRemoteSaleReceipt(data);
+        })();
+      if (!source) throw new Error("No se encontró el detalle histórico de esta venta.");
+      setRecentSaleDetail({ sale, receipt: buildSaleReceipt(source), loading: false, error: null });
+    } catch (detailError) {
+      setRecentSaleDetail({ sale, receipt: null, loading: false, error: detailError instanceof Error ? detailError.message : "No se pudo cargar el detalle de la venta." });
+    }
+  }, [localRuntime?.deviceId, user?.offline]);
+
   // Impresión automática: una sola vez por venta. `postSale` sólo existe para una venta COMPLETED con el cobro confirmado
   // (una venta Mercado Pago recién cuando el backend confirmó el pago), así que nunca imprime un ticket pendiente o anulado.
   useEffect(() => {
@@ -2539,7 +2561,36 @@ export default function App() {
         <div className="pos-modal-backdrop fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true">
           <section className="pos-modal-panel flex w-full max-w-xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-rose-400">Comprobantes</p><h2 className="mt-1 text-3xl font-black">Ventas recientes</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSalesOpen(false)}>Cerrar</button></div>
-            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4" key={sale.saleId}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{sale.terminalLabel ? <p className="text-xs text-stone-500">{sale.terminalLabel}</p> : null}{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong>{printerVisible && canPrintReceipt(sale) ? <div className="grid justify-items-end gap-1"><button className="rounded-lg border border-stone-500 px-2 py-1 text-xs font-black text-stone-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!printerReady || printJob?.phase === "printing"} title={printerReady ? undefined : "Configurá la impresora de tickets"} type="button" onClick={() => void runPrint(sale.saleId, true, sale.origin)}>Reimprimir ticket</button>{printJob?.saleId === sale.saleId ? <span className={`max-w-48 text-right text-xs font-bold ${printJob.phase === "error" ? "text-amber-300" : "text-emerald-400"}`} data-testid="reprint-status">{printJob.phase === "printing" ? "Imprimiendo…" : printJob.phase === "error" ? printJob.message : "Ticket enviado a la impresora."}</span> : null}</div> : null}{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={() => setWhatsappSaleId(sale.saleId)}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en esta sucursal.</p> : null}</div>
+            <div className="mt-5 min-h-0 space-y-3 overflow-y-auto">{recentSales.map((sale) => <article className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-stone-700 bg-stone-950 p-4 hover:border-stone-500" key={sale.saleId} role="button" tabIndex={0} aria-label={`Ver detalle de la venta ${sale.saleId.slice(0, 8)}`} onClick={() => void openRecentSaleDetail(sale)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openRecentSaleDetail(sale); } }}><div><strong>#{sale.saleId.slice(0, 8)}</strong><p className="text-sm text-stone-400">{new Date(sale.completedAt).toLocaleString("es-AR")} · {formatWeight(Number(sale.totalWeightGrams))}</p><p className={`text-xs font-bold ${sale.syncedAt ? "text-emerald-400" : "text-amber-300"}`}>{sale.syncedAt ? "Sincronizada" : "Pendiente de sincronización"}</p>{sale.terminalLabel ? <p className="text-xs text-stone-500">{sale.terminalLabel}</p> : null}{(() => { const payment = describeLocalPayment(sale.provider, sale.verificationStatus); return payment ? <p className={`text-xs font-bold ${payment.tone === "ok" ? "text-emerald-400" : payment.tone === "bad" ? "text-red-400" : "text-sky-300"}`}>{payment.label}</p> : null; })()}</div><div className="grid justify-items-end gap-2"><strong className="text-xl text-rose-400">{formatCurrency(BigInt(sale.totalCents))}</strong><span className="text-xs font-bold text-stone-400">Ver detalle</span>{whatsappAvailability.visible && canOfferTicket(sale) ? <button className="rounded-lg border border-emerald-600 px-2 py-1 text-xs font-black text-emerald-200 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!whatsappAvailability.usable} title={whatsappAvailability.usable ? undefined : whatsappAvailability.message} type="button" onClick={(event) => { event.stopPropagation(); setWhatsappSaleId(sale.saleId); }}>Ticket por WhatsApp</button> : null}</div></article>)}{!recentSales.length ? <p className="text-stone-400">Todavía no hay ventas en esta sucursal.</p> : null}</div>
+          </section>
+        </div>
+      ) : null}
+
+      {recentSaleDetail ? (
+        <div className="pos-modal-backdrop fixed inset-0 z-[60] grid place-items-center bg-black/80 p-3 sm:p-5" role="dialog" aria-modal="true" aria-labelledby="recent-sale-detail-title">
+          <section className="pos-modal-panel flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-3xl border border-stone-700 bg-stone-900 p-4 shadow-2xl sm:p-6">
+            <div className="flex shrink-0 items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-rose-400">Detalle de venta</p><h2 id="recent-sale-detail-title" className="mt-1 text-2xl font-black">Venta #{recentSaleDetail.sale.saleId.slice(0, 8)}</h2></div><button className="rounded-lg border border-stone-600 px-3 py-2" onClick={() => setRecentSaleDetail(null)}>Cerrar</button></div>
+            {recentSaleDetail.loading ? <p className="py-8 text-center text-stone-300">Cargando detalle histórico…</p> : recentSaleDetail.error ? <p className="my-6 rounded-xl border border-amber-700 bg-amber-950/40 p-4 text-amber-200">{recentSaleDetail.error}</p> : recentSaleDetail.receipt ? (() => {
+              const receipt = recentSaleDetail.receipt;
+              const payment = describeLocalPayment(receipt.paymentProvider, receipt.paymentVerificationStatus);
+              const statusLabel = receipt.status === "COMPLETED" ? "Completada" : receipt.status === "PENDING_PAYMENT" ? "Pago pendiente" : receipt.status === "CANCELLED" ? "Cancelada" : receipt.status;
+              return <>
+                <div className="mt-3 grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 text-sm text-stone-300"><p>{new Date(receipt.soldAt).toLocaleDateString("es-AR")} · {new Date(receipt.soldAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}</p><p className="text-right">{receipt.branchName ?? "Sucursal"}</p>{receipt.operatorName ? <p>{receipt.operatorName}</p> : null}{recentSaleDetail.sale.terminalLabel ? <p>{recentSaleDetail.sale.terminalLabel}</p> : null}<p className="text-right">{statusLabel}</p></div>
+                <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">{receipt.lines.map((line, index) => {
+                  const quantity = line.unitType === "WEIGHT" ? `${formatWeight(line.weightGrams ?? 0)} ` : `${String(line.quantityUnits ?? 0)} x `;
+                  const unitPrice = line.manualPrice && line.manualUnitPrice !== null ? line.manualUnitPrice : line.chargedUnitPrice;
+                  const unitLabel = line.unitType === "WEIGHT" ? "/kg" : "c/u";
+                  const promotionLabel = line.promotion?.kind === "PACK" ? `Pack · ${String(line.packSizeUnitsSnapshot ?? "")} u · ${formatBasisPointsPercent(line.packDiscountBps ?? 0)} dto.`
+                    : line.promotion?.kind === "BRANCH" ? `${formatBasisPointsPercent(line.branchPromotionDiscountBps ?? 0)} dto. desde ${String(line.branchPromotionMinimumUnits ?? 0)} u`
+                    : line.promotion?.kind === "PACK_FIXED_TOTAL" ? "Pack precio fijo"
+                    : line.promotion?.kind === "PERCENTAGE" ? `${formatBasisPointsPercent(line.promotion.discountBps)} dto.`
+                    : line.promotion?.kind === "FIXED_PRICE_PER_KG" ? "Precio promocional por kg" : null;
+                  return <article className="rounded-xl border border-stone-700 bg-stone-950 px-3 py-3" key={`${line.productName}-${String(index)}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-bold text-white">{quantity}{line.productName}</p><p className="mt-1 text-sm text-stone-300">{formatCurrency(unitPrice)}{unitLabel}</p>{promotionLabel ? <p className="text-xs font-bold text-emerald-300">{promotionLabel}</p> : null}{line.promotionDiscount > 0n ? <p className="text-xs text-emerald-200">Descuento: −{formatCurrency(line.promotionDiscount)}</p> : null}</div><strong className="shrink-0 text-lg">{formatCurrency(line.lineSubtotal)}</strong></div></article>;
+                })}</div>
+                <div className="mt-3 shrink-0 border-t border-stone-700 pt-3 text-sm"><div className="flex justify-between text-stone-300"><span>Subtotal</span><span>{formatCurrency(receipt.subtotal)}</span></div>{receipt.ticketDiscount > 0n ? <div className="flex justify-between text-emerald-300"><span>Descuento general</span><span>−{formatCurrency(receipt.ticketDiscount)}</span></div> : null}<div className="mt-2 flex justify-between text-2xl font-black"><span>Total</span><span className="text-rose-400">{formatCurrency(receipt.total)}</span></div><div className="mt-2 flex flex-wrap justify-between gap-2 text-stone-300"><span>Pago: {receipt.paymentMethod === "CASH" ? "Efectivo" : receipt.paymentMethod === "TRANSFER" ? "Transferencia" : receipt.paymentMethod === "DEBIT" || receipt.paymentMethod === "CREDIT" ? "Tarjeta" : receipt.paymentMethod}</span>{payment ? <span className={payment.tone === "ok" ? "text-emerald-300" : payment.tone === "bad" ? "text-red-300" : "text-sky-300"}>{payment.label}</span> : null}</div>{receipt.paymentProvider === "MERCADOPAGO" ? <p className="mt-1 text-xs text-stone-400">Mercado Pago · {receipt.paymentVerificationStatus}</p> : null}</div>
+                <div className="mt-4 flex shrink-0 justify-end gap-3"><button className="rounded-xl border border-stone-600 px-5 py-3 font-bold" onClick={() => setRecentSaleDetail(null)}>Cerrar</button><button className="rounded-xl bg-rose-600 px-5 py-3 font-black disabled:cursor-not-allowed disabled:opacity-40" disabled={!printerVisible || !canPrintReceipt({ status: receipt.status, provider: receipt.paymentProvider, verificationStatus: receipt.paymentVerificationStatus ?? null }) || !printerReady || printJob?.phase === "printing"} title={!printerReady ? "Configurá la impresora de tickets" : undefined} onClick={() => void runPrint(receipt.saleId, true, recentSaleDetail.sale.origin)}>Reimprimir ticket</button></div>
+              </>;
+            })() : null}
           </section>
         </div>
       ) : null}
