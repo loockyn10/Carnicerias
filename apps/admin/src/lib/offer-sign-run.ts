@@ -1,7 +1,7 @@
 import { buildArtworkBranding, parseArtworkBrandingFacts } from "./artwork-branding";
 import { localDateString } from "./date-range";
 import {
-  isOfferLogoVariant, MAX_OFFER_SIGNS, offerSignFilename, paginateSigns, parseOfferSignCatalog, signPageCount, type OfferLogoVariant, type OfferSign, type OfferSignFormat
+  isOfferLogoVariant, isOfferSignFormat, MAX_OFFER_SIGNS, offerSignFilename, paginateSigns, parseOfferSignCatalog, signPageCount, type OfferLogoVariant, type OfferSign, type OfferSignFormat
 } from "./offer-sign";
 import { buildSignPage, type SignBrand } from "./offer-sign-layout";
 import { toMonochromeLogo } from "./offer-sign-logo";
@@ -39,7 +39,7 @@ export function parseOfferSignRequest(body: unknown): { ok: true; value: OfferSi
   if (typeof body !== "object" || body === null) return { ok: false, error: "Pedido inválido" };
   const record = body as Record<string, unknown>;
   if (!isUuid(record.branchId)) return { ok: false, error: "Sucursal inválida" };
-  if (record.format !== "STRIP" && record.format !== "MEDIUM" && record.format !== "POSTER") return { ok: false, error: "Formato inválido" };
+  if (!isOfferSignFormat(record.format)) return { ok: false, error: "Formato inválido" };
   if (record.logoVariant !== undefined && record.logoVariant !== null && !isOfferLogoVariant(record.logoVariant)) return { ok: false, error: "Logo inválido" };
   if (!Array.isArray(record.promotionIds) || record.promotionIds.length === 0) return { ok: false, error: "Elegí al menos una promoción" };
   if (record.promotionIds.length > MAX_OFFER_SIGNS) return { ok: false, error: `Hasta ${String(MAX_OFFER_SIGNS)} carteles por PDF` };

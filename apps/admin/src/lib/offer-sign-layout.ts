@@ -17,10 +17,36 @@ export const MM_PER_PT = 25.4 / 72;
 /** Altura de las mayúsculas de Anton en «em» (1760 / 2048; la prueba la verifica contra la fuente). */
 export const ANTON_CAP_EM = 1760 / 2048;
 
-export const OFFER_PANEL_MM: Record<OfferSignFormat, { width: number; height: number }> = {
+type BaseOfferSignFormat = "STRIP" | "MEDIUM" | "POSTER";
+
+const BASE_PANEL_MM: Record<BaseOfferSignFormat, { width: number; height: number }> = {
   STRIP: { width: (OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM - 2 * OFFER_GUTTER_MM) / 3, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM },
   MEDIUM: { width: (OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM - OFFER_GUTTER_MM) / 2, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM },
   POSTER: { width: OFFER_PAGE_MM.width - 2 * OFFER_MARGIN_MM, height: OFFER_PAGE_MM.height - 2 * OFFER_MARGIN_MM }
+};
+
+/** Formatos «a la mitad»: el cartel base partido horizontalmente en dos filas (mismo ancho, media altura menos media separación). */
+const HALF_BASE: Partial<Record<OfferSignFormat, BaseOfferSignFormat>> = { MEDIUM_HALF: "MEDIUM", STRIP_HALF: "STRIP" };
+
+/** Columnas por hoja de cada formato y filas (2 en los formatos a la mitad). */
+export function offerSheetGrid(format: OfferSignFormat): { columns: number; rows: number } {
+  const base = HALF_BASE[format];
+  const baseFormat = base ?? (format as BaseOfferSignFormat);
+  return { columns: baseFormat === "STRIP" ? 3 : baseFormat === "MEDIUM" ? 2 : 1, rows: base ? 2 : 1 };
+}
+
+function panelSize(format: OfferSignFormat): { width: number; height: number } {
+  const base = HALF_BASE[format];
+  if (base) {
+    const { width, height } = BASE_PANEL_MM[base];
+    return { width, height: (height - OFFER_GUTTER_MM) / 2 };
+  }
+  return BASE_PANEL_MM[format as BaseOfferSignFormat];
+}
+
+export const OFFER_PANEL_MM: Record<OfferSignFormat, { width: number; height: number }> = {
+  STRIP: panelSize("STRIP"), MEDIUM: panelSize("MEDIUM"), POSTER: panelSize("POSTER"),
+  MEDIUM_HALF: panelSize("MEDIUM_HALF"), STRIP_HALF: panelSize("STRIP_HALF")
 };
 
 export interface SignText {
@@ -64,7 +90,8 @@ export function antonWidthPt(text: string, sizePt: number): number {
 
 interface Plan {
   padX: number;
-  logo: { width: number; height: number; cy: number; align: "start" | "middle"; left: number };
+  /** null = formato compacto: sin logo ni nombre del negocio (se gasta la altura en precio y producto). */
+  logo: { width: number; height: number; cy: number; align: "start" | "middle"; left: number } | null;
   offer: { maxPt: number; baseline: number };
   name: { top: number; bottom: number; maxPt: number; minPt: number; maxLines: number };
   badge: { top: number; height: number; maxPt: number; minPt: number; fullWidth: boolean; padMm: number };
@@ -101,6 +128,25 @@ const PLANS: Record<OfferSignFormat, Plan> = {
     unit: { baseline: 173, maxPt: 34 },
     normal: { baseline: 188, maxPt: 24, minPt: 9 },
     border: 1
+  },
+  // Compactos (media altura, ~94,5 mm): mismo orden y mismo estilo que MEDIUM / STRIP, sin logo; el precio sigue siendo lo más grande.
+  MEDIUM_HALF: {
+    padX: 9, logo: null, offer: { maxPt: 30, baseline: 12.5 },
+    name: { top: 16, bottom: 39, maxPt: 44, minPt: 20, maxLines: 2 },
+    badge: { top: 41, height: 11, maxPt: 24, minPt: 12, fullWidth: true, padMm: 5 },
+    price: { baseline: 76, maxPt: 120, maxCapMm: 22 },
+    unit: { baseline: 83.5, maxPt: 18 },
+    normal: { baseline: 90, maxPt: 12, minPt: 7 },
+    border: 0.6
+  },
+  STRIP_HALF: {
+    padX: 5, logo: null, offer: { maxPt: 26, baseline: 11 },
+    name: { top: 14, bottom: 35, maxPt: 30, minPt: 14, maxLines: 2 },
+    badge: { top: 37, height: 10, maxPt: 20, minPt: 10, fullWidth: true, padMm: 3 },
+    price: { baseline: 73, maxPt: 120, maxCapMm: 24 },
+    unit: { baseline: 81, maxPt: 14 },
+    normal: { baseline: 88.5, maxPt: 10, minPt: 6 },
+    border: 0.8
   }
 };
 
@@ -187,6 +233,7 @@ export function buildSignLayout(sign: OfferSign, format: OfferSignFormat, brand:
 
   // 7. Logo (o, sin logo, el nombre del negocio en el mismo lugar).
   const box = plan.logo;
+  if (!box) return { width, height, texts, rects, logo: null };
   const boxX = box.align === "middle" ? center - box.width / 2 : box.left;
   if (brand.hasLogo) return { width, height, texts, rects, logo: { x: boxX, y: box.cy - box.height / 2, width: box.width, height: box.height, align: box.align } };
   const fallback = oneLine(brand.name, box.align === "middle" ? inner : box.height * 2.4, 16, 8);
@@ -202,19 +249,28 @@ export interface SignPage {
   rules: SignRule[];
 }
 
-/** Una hoja A4 apaisada: 3 carteles lado a lado (tira) o 1 cartel grande, con las marcas de corte. */
+/** Una hoja A4 apaisada con 1, 2, 3 carteles en una fila (o 4 y 6 en dos filas), con las marcas de corte. */
 export function buildSignPage(signs: readonly OfferSign[], format: OfferSignFormat, brand: SignBrand): SignPage {
-  const { width } = OFFER_PANEL_MM[format];
+  const { width, height } = OFFER_PANEL_MM[format];
+  const { columns, rows } = offerSheetGrid(format);
   const panels = signs.map((sign, index) => ({
-    x: OFFER_MARGIN_MM + index * (width + OFFER_GUTTER_MM), y: OFFER_MARGIN_MM, layout: buildSignLayout(sign, format, brand)
+    x: OFFER_MARGIN_MM + (index % columns) * (width + OFFER_GUTTER_MM),
+    y: OFFER_MARGIN_MM + Math.floor(index / columns) * (height + OFFER_GUTTER_MM),
+    layout: buildSignLayout(sign, format, brand)
   }));
   const rules: SignRule[] = [];
-  const columns = format === "STRIP" ? 3 : format === "MEDIUM" ? 2 : 1;
+  // Tira (3 / 6): marcas cortas en los márgenes. Mediano (2 / 4): una línea fina de lado a lado por el medio (se imprime la hoja entera o se corta).
+  const fullLines = format === "MEDIUM" || format === "MEDIUM_HALF";
   for (let cut = 1; cut < columns; cut += 1) {
     const x = OFFER_MARGIN_MM + cut * width + (cut - 0.5) * OFFER_GUTTER_MM;
-    // Tira: marcas cortas en los márgenes. Mediano: una línea fina de lado a lado por el medio (se imprime la hoja entera o se corta).
-    if (format === "MEDIUM") rules.push({ x1: x, y1: 2.5, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
+    if (fullLines) rules.push({ x1: x, y1: 2.5, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
     else rules.push({ x1: x, y1: 2.5, x2: x, y2: 6, widthMm: 0.2 }, { x1: x, y1: OFFER_PAGE_MM.height - 6, x2: x, y2: OFFER_PAGE_MM.height - 2.5, widthMm: 0.2 });
+  }
+  // Formatos a la mitad: un corte horizontal central en la separación entre las dos filas, del mismo estilo que los verticales.
+  for (let cut = 1; cut < rows; cut += 1) {
+    const y = OFFER_MARGIN_MM + cut * height + (cut - 0.5) * OFFER_GUTTER_MM;
+    if (fullLines) rules.push({ x1: 2.5, y1: y, x2: OFFER_PAGE_MM.width - 2.5, y2: y, widthMm: 0.2 });
+    else rules.push({ x1: 2.5, y1: y, x2: 6, y2: y, widthMm: 0.2 }, { x1: OFFER_PAGE_MM.width - 6, y1: y, x2: OFFER_PAGE_MM.width - 2.5, y2: y, widthMm: 0.2 });
   }
   return { panels, rules };
 }

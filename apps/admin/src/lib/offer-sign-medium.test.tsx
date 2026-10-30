@@ -34,7 +34,7 @@ const sizeOf = (layout: SignLayout, text: string) => must(layout.texts.find((ent
 
 describe("formato mediano: 2 ofertas por hoja", () => {
   it("aparece entre el grande y la tira, con nombres claros", () => {
-    expect(OFFER_SIGN_FORMATS.map((format) => format.label)).toEqual([
+    expect(OFFER_SIGN_FORMATS.map((format) => format.label).slice(0, 3)).toEqual([
       "Cartel grande · 1 oferta por hoja", "Cartel mediano · 2 ofertas por hoja", "Tira · 3 ofertas por hoja"
     ]);
     expect(signsPerPage("MEDIUM")).toBe(2);

@@ -9,7 +9,11 @@ import { buildOfferSlide, formatMinimumWeight, parsePromotionFact, splitPrice, t
  * y sólo se ofrece una promoción que de verdad baja el precio (si no, no hay oferta que anunciar ni «precio normal» que comparar).
  */
 
-export type OfferSignFormat = "STRIP" | "MEDIUM" | "POSTER";
+/**
+ * POSTER = 1 por hoja, MEDIUM = 2, STRIP = 3. `MEDIUM_HALF` (4 por hoja) y `STRIP_HALF` (6 por hoja) son MEDIUM y STRIP partidos por la mitad
+ * en altura (mismo ancho, dos filas).
+ */
+export type OfferSignFormat = "STRIP" | "MEDIUM" | "POSTER" | "MEDIUM_HALF" | "STRIP_HALF";
 
 /** Qué logo llevan los carteles: el de identidad de la organización (despensa «Super Ofertas») o el de la carnicería. */
 export type OfferLogoVariant = "GENERAL" | "BUTCHER";
@@ -24,11 +28,17 @@ export function isOfferLogoVariant(value: unknown): value is OfferLogoVariant {
 export const OFFER_SIGN_FORMATS: readonly { id: OfferSignFormat; label: string; perPage: number }[] = [
   { id: "POSTER", label: "Cartel grande · 1 oferta por hoja", perPage: 1 },
   { id: "MEDIUM", label: "Cartel mediano · 2 ofertas por hoja", perPage: 2 },
-  { id: "STRIP", label: "Tira · 3 ofertas por hoja", perPage: 3 }
+  { id: "STRIP", label: "Tira · 3 ofertas por hoja", perPage: 3 },
+  { id: "MEDIUM_HALF", label: "Cartel chico · 4 ofertas por hoja", perPage: 4 },
+  { id: "STRIP_HALF", label: "Tira chica · 6 ofertas por hoja", perPage: 6 }
 ];
 
+export function isOfferSignFormat(value: unknown): value is OfferSignFormat {
+  return OFFER_SIGN_FORMATS.some((option) => option.id === value);
+}
+
 export function signsPerPage(format: OfferSignFormat): number {
-  return format === "STRIP" ? 3 : format === "MEDIUM" ? 2 : 1;
+  return OFFER_SIGN_FORMATS.find((option) => option.id === format)?.perPage ?? 1;
 }
 
 export function signPageCount(format: OfferSignFormat, count: number): number {
@@ -168,7 +178,7 @@ export function signValidityText(sign: Pick<OfferSign, "validUntil">): string {
   return sign.validUntil ? `Hasta el ${formatIsoDate(sign.validUntil.slice(0, 10))}` : "Sin fecha de fin";
 }
 
-/** Parte `items` en hojas (3 por hoja en tira, 2 en cartel mediano, 1 en cartel grande). */
+/** Parte `items` en hojas (6, 4, 3, 2 o 1 por hoja según el formato). */
 export function paginateSigns<T>(items: readonly T[], format: OfferSignFormat): T[][] {
   const size = signsPerPage(format);
   const pages: T[][] = [];
