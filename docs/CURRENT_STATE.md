@@ -656,6 +656,10 @@ Decisión en `DECISIONS.md` D-065 y arquitectura en `ARCHITECTURE.md` («Ticket 
 
 **Migración pendiente: `202610070067_product_custom_margin.sql`** (incremental sobre 066; no recalcula nada: la tabla nace vacía). Reemplaza `apply_product_cost`, `bulk_set_product_costs` (sólo el flag `marginConfigured`), `recalculate_prices_from_margin` e `import_apply_product`. `database.types.ts` se completó a mano en el formato del generador (tabla + RPC): correr `pnpm db:types` tras aplicar debería dar el mismo contenido; el override `p_margin_bps: number | null` vive en `database.rpc-null-overrides.ts`.
 
+## Pollos y Envasados — implementados 2026-11-01 (D-089, D-090; migraciones `202611010092` y `202611010093` **sin aplicar**)
+
+**Pollos** (`/admin/poultry`: Resumen, Precios, Clientes, Pedidos, Rentabilidad): tablas `poultry_*`, costos/precios versionados, listas de precios, precio por cliente, pedidos con snapshot de precio (al crear) y de costo (al entregar), 18 RPC `poultry.read/write`. Agregaciones y paginación en el servidor. **Envasados** (`/admin/vacuum`: Nuevo paquete, Envasados recientes, Configuración): configuración por producto/organización, `vacuum_packages` inmutable, 10 RPC `vacuum.*`, PDF térmico en `/api/vacuum/labels`. Validado con pgTAP sobre PGlite (`poultry_module.test.sql` 123/123, `vacuum_packaging.test.sql` 129/129; sin Docker, no corrido contra Supabase real), tests unitarios del Admin y un recorrido en el navegador contra un backend falso con las migraciones reales. **No verificado:** impresión física en la térmica (58 × 40 mm es un valor por defecto), lectura del EAN por la caja del supermercado (depende del esquema que usen), migraciones contra Supabase real y `pnpm db:types` (los tipos de las RPC se agregaron a mano; las tablas nuevas no figuran en `database.types.ts` porque el Admin sólo usa RPC).
+
 ## Migraciones locales confirmadas
 
 ### Supabase/PostgreSQL

@@ -2,6 +2,17 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Pollos y Envasados: aplicar y probar (acción del usuario)
+
+Implementado 2026-11-01 (D-089, D-090). **Migraciones pendientes, en este orden: `202611010092_poultry_module.sql` y `202611010093_vacuum_packaging.sql`** (tablas nuevas `poultry_*` y `*_vacuum_*`, permisos `poultry.*` y `vacuum.*` para el rol de administración, RPC; no modifican datos existentes ni el POS). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+1. Pollos → Precios: crear «Cajón pollo entero» (por cajón), cargar costo `$42.000`, precio General `$48.000` y una lista «Mayorista» `$46.000`; cambiar el costo a `$45.000` y ver ambos en Historial.
+2. Pollos → Clientes: crear un cliente con la lista Mayorista y otro con precio especial; Pedidos → Nuevo pedido: el precio de cada línea debe ser el del cliente. Entregar un pedido (con peso real si es por kg) y comprobar que cambiar después el costo/precio NO altera su ganancia (Rentabilidad).
+3. Envasados → Configuración: cargar el esquema EAN-13 **que use la caja del supermercado** (prefijo, dígitos de PLU y valor, precio o peso), habilitar cortes con vida útil y PLU, y los textos del establecimiento.
+4. Envasados → Nuevo paquete con la térmica real conectada: imprimir ambas, una sola, y reimprimir desde «Envasados recientes»; confirmar las medidas (58 × 40 mm por defecto: ajustarlas en Configuración) y que la caja del supermercado lee el código.
+5. Confirmar las decisiones no pedidas: PLU numérico único por organización, lote único por organización (`SUCURSAL-AAMMDD-0001`), fecha de elaboración sólo dentro de ±366 días de hoy, entregar un pedido exige costo vigente y peso real de las líneas por kg.
+6. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre por primera vez `poultry_module.test.sql` y `vacuum_packaging.test.sql` contra Supabase real.
+
 ## P0 — Costos operativos y Resultado operativo: aplicar y probar (acción del usuario)
 
 Implementado 2026-10-10 (D-082). **Migración pendiente: `202610170080_branch_operating_costs.sql`** (3 tablas nuevas, permiso `operating_costs.write` para el rol de administración y 6 RPC; no toca datos; **requiere la `202610130076`**). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push` (Vercel). Sin la migración el Resumen y el Inicio siguen funcionando sin la tarjeta (la RPC falla y se omite).

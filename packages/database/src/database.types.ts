@@ -5012,6 +5012,18 @@ export type Database = {
       }
       deactivate_products: { Args: { p_product_ids: string[] }; Returns: Json }
       delete_branch: { Args: { p_branch_id: string }; Returns: undefined }
+      create_vacuum_package: {
+        Args: {
+          p_branch_id: string
+          p_expires_on?: string
+          p_lot?: string
+          p_packed_on: string
+          p_product_id: string
+          p_request_key?: string
+          p_weight_grams: number
+        }
+        Returns: Json
+      }
       delete_production_batch: {
         Args: { p_batch_id: string }
         Returns: undefined
@@ -5259,6 +5271,47 @@ export type Database = {
         Returns: Json
       }
       get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json }
+      get_poultry_customer_detail: {
+        Args: {
+          p_customer_id: string
+        }
+        Returns: Json
+      }
+      get_poultry_order_detail: {
+        Args: {
+          p_order_id: string
+        }
+        Returns: Json
+      }
+      get_poultry_price_board: {
+        Args: never
+        Returns: Json
+      }
+      get_poultry_price_history: {
+        Args: {
+          p_product_id: string
+        }
+        Returns: Json
+      }
+      get_poultry_profitability: {
+        Args: {
+          p_customer_id?: string
+          p_from: string
+          p_group_by?: string
+          p_limit?: number
+          p_offset?: number
+          p_product_id?: string
+          p_to: string
+        }
+        Returns: Json
+      }
+      get_poultry_summary: {
+        Args: {
+          p_from: string
+          p_to: string
+        }
+        Returns: Json
+      }
       get_product_artwork: {
         Args: { p_branch_id?: string; p_product_id: string }
         Returns: Json
@@ -5402,6 +5455,16 @@ export type Database = {
         }
         Returns: Json
       }
+      get_vacuum_package: {
+        Args: {
+          p_package_id: string
+        }
+        Returns: Json
+      }
+      get_vacuum_settings: {
+        Args: never
+        Returns: Json
+      }
       list_import_batch_suppliers: {
         Args: { p_batch_id: string }
         Returns: Json
@@ -5424,6 +5487,27 @@ export type Database = {
           role_key: string
           status: Database["public"]["Enums"]["membership_status"]
         }[]
+      }
+      list_poultry_customers_page: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_search?: string
+          p_status?: string
+        }
+        Returns: Json
+      }
+      list_poultry_orders_page: {
+        Args: {
+          p_customer_id?: string
+          p_from?: string
+          p_limit?: number
+          p_offset?: number
+          p_search?: string
+          p_status?: string
+          p_to?: string
+        }
+        Returns: Json
       }
       list_pricing_rows: {
         Args: {
@@ -5497,6 +5581,27 @@ export type Database = {
           tax_id: string
           total_count: number
         }[]
+      }
+      list_vacuum_config_products_page: {
+        Args: {
+          p_filter?: string
+          p_limit?: number
+          p_offset?: number
+          p_search?: string
+        }
+        Returns: Json
+      }
+      list_vacuum_packages_page: {
+        Args: {
+          p_branch_id?: string
+          p_from?: string
+          p_limit?: number
+          p_offset?: number
+          p_product_id?: string
+          p_search?: string
+          p_to?: string
+        }
+        Returns: Json
       }
       manage_existing_member: {
         Args: {
@@ -5626,12 +5731,12 @@ export type Database = {
         }
         Returns: Json
       }
-      record_label_print_run: {
-        Args: { p_group_id: string; p_items: Json }
-        Returns: Json
-      }
       record_label_branch_print_runs: {
         Args: { p_branch_id: string; p_items: Json }
+        Returns: Json
+      }
+      record_label_print_run: {
+        Args: { p_group_id: string; p_items: Json }
         Returns: Json
       }
       record_shift_heartbeat: {
@@ -5654,6 +5759,13 @@ export type Database = {
           p_waste_reason?: string
         }
         Returns: string
+      }
+      record_vacuum_print: {
+        Args: {
+          p_kind: string
+          p_package_id: string
+        }
+        Returns: Json
       }
       regenerate_signage_token: {
         Args: { p_display_id: string }
@@ -5683,6 +5795,13 @@ export type Database = {
           p_device_id: string
           p_operator_profile_id: string
           p_operator_token: string
+        }
+        Returns: Json
+      }
+      resolve_poultry_prices: {
+        Args: {
+          p_customer_id?: string
+          p_product_ids?: string[]
         }
         Returns: Json
       }
@@ -5786,6 +5905,53 @@ export type Database = {
           p_name: string
         }
         Returns: Json
+      }
+      save_poultry_customer: {
+        Args: {
+          p_active?: boolean
+          p_address?: string
+          p_customer_id?: string
+          p_name: string
+          p_notes?: string
+          p_phone?: string
+          p_price_list_id?: string
+          p_tax_id?: string
+        }
+        Returns: string
+      }
+      save_poultry_order: {
+        Args: {
+          p_branch_id: string
+          p_customer_id: string
+          p_delivery_on?: string
+          p_items: Json
+          p_notes?: string
+          p_order_id?: string
+          p_ordered_on: string
+          p_payment_method?: Database["public"]["Enums"]["payment_method"]
+          p_request_key?: string
+        }
+        Returns: Json
+      }
+      save_poultry_price_list: {
+        Args: {
+          p_active?: boolean
+          p_name: string
+          p_notes?: string
+          p_price_list_id?: string
+        }
+        Returns: string
+      }
+      save_poultry_product: {
+        Args: {
+          p_active?: boolean
+          p_name: string
+          p_product_id?: string
+          p_reference_weight_grams?: number
+          p_requires_weight?: boolean
+          p_sale_unit: Database["public"]["Enums"]["unit_type"]
+        }
+        Returns: string
       }
       save_pricing_config: {
         Args: {
@@ -5914,6 +6080,39 @@ export type Database = {
             }
             Returns: string
           }
+      save_vacuum_ean_scheme: {
+        Args: {
+          p_plu_digits?: number
+          p_prefix?: string
+          p_scheme?: string
+          p_value_digits?: number
+          p_value_step?: number
+        }
+        Returns: undefined
+      }
+      save_vacuum_product_config: {
+        Args: {
+          p_conservation_text?: string
+          p_enabled: boolean
+          p_plu?: string
+          p_product_id: string
+          p_shelf_life_days?: number
+        }
+        Returns: undefined
+      }
+      save_vacuum_settings: {
+        Args: {
+          p_address?: string
+          p_business_name?: string
+          p_default_conservation_text?: string
+          p_establishment_info?: string
+          p_extra_text?: string
+          p_info_height_mm?: number
+          p_label_width_mm?: number
+          p_price_height_mm?: number
+        }
+        Returns: undefined
+      }
       search_products: {
         Args: {
           p_active_only?: boolean
@@ -5929,6 +6128,14 @@ export type Database = {
           sku: string
           unit_type: Database["public"]["Enums"]["unit_type"]
         }[]
+      }
+      search_vacuum_products: {
+        Args: {
+          p_branch_id: string
+          p_limit?: number
+          p_search?: string
+        }
+        Returns: Json
       }
       set_branch_active: {
         Args: { p_active: boolean; p_branch_id: string }
@@ -6028,6 +6235,46 @@ export type Database = {
           p_product_id: string
         }
         Returns: Json
+      }
+      set_poultry_customer_price: {
+        Args: {
+          p_customer_id: string
+          p_effective_at?: string
+          p_price_cents?: number
+          p_product_id: string
+        }
+        Returns: string
+      }
+      set_poultry_list_price: {
+        Args: {
+          p_effective_at?: string
+          p_price_cents: number
+          p_price_list_id: string
+          p_product_id: string
+        }
+        Returns: string
+      }
+      set_poultry_order_status: {
+        Args: {
+          p_order_id: string
+          p_status: Database["public"]["Enums"]["poultry_order_status"]
+        }
+        Returns: Json
+      }
+      set_poultry_order_weights: {
+        Args: {
+          p_order_id: string
+          p_weights: Json
+        }
+        Returns: Json
+      }
+      set_poultry_product_cost: {
+        Args: {
+          p_cost_cents: number
+          p_effective_at?: string
+          p_product_id: string
+        }
+        Returns: string
       }
       set_product_artwork_photo: {
         Args: { p_product_id: string; p_storage_path: string }
@@ -6256,6 +6503,7 @@ export type Database = {
       membership_status: "INVITED" | "ACTIVE" | "DISABLED"
       payment_method: "CASH" | "TRANSFER" | "DEBIT" | "CREDIT" | "OTHER"
       pos_device_status: "ACTIVE" | "DISABLED"
+      poultry_order_status: "PENDING" | "PREPARING" | "READY" | "DELIVERED" | "CANCELLED"
       product_inventory_role: "RAW_MATERIAL" | "SELLABLE" | "BOTH"
       production_batch_status: "DRAFT" | "COMPLETED" | "CANCELLED"
       promotion_mode: "THRESHOLD" | "PACK_FIXED_TOTAL"
@@ -6425,6 +6673,7 @@ export const Constants = {
       membership_status: ["INVITED", "ACTIVE", "DISABLED"],
       payment_method: ["CASH", "TRANSFER", "DEBIT", "CREDIT", "OTHER"],
       pos_device_status: ["ACTIVE", "DISABLED"],
+      poultry_order_status: ["PENDING", "PREPARING", "READY", "DELIVERED", "CANCELLED"],
       product_inventory_role: ["RAW_MATERIAL", "SELLABLE", "BOTH"],
       production_batch_status: ["DRAFT", "COMPLETED", "CANCELLED"],
       promotion_mode: ["THRESHOLD", "PACK_FIXED_TOTAL"],

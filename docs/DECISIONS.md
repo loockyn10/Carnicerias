@@ -1213,3 +1213,23 @@ Los originales de fotos de producto y logo permanecen privados en `product-artwo
 TV pública y preview reciben la URL directa de Storage/CDN dentro del manifiesto. No pueden recurrir a `/api/tv/.../media/...` ni a `/api/tv-preview/.../media/...`: si falta el derivado usan el fallback visual hasta que la carga/reemplazo o el backfill explícito lo genere.
 
 **Motivo:** evitar que Vercel retransmita bytes de imagen y agote Fast Origin Transfer.
+
+## D-089 — Módulo Pollos: catálogo propio, costos/precios versionados y pedidos con snapshots
+
+**Status:** Active — implementado 2026-11-01; migración `202611010092` **sin aplicar**. No toca `products`, el POS, pricing/margen global, descuentos, packs, stock ni sync offline.
+
+Los cajones de pollo viven en tablas propias (`poultry_*`), **no** en `products`: todo producto activo viaja al POS y a etiquetas/cartelería/reposición, y `set_product_cost` recalcularía su precio con el margen global. Se replica el patrón de `product_costs`/`product_prices` (vigencias con exclusión GiST, historia inmutable; sólo se cierra `valid_to`). Unidad de venta con el enum existente `unit_type`: `UNIT` = precio y costo por cajón, `WEIGHT` = por kg (exige peso real para valorizar). Listas de precios extensibles (`poultry_price_lists`, una lista **General** por organización como respaldo), precio específico por cliente y clientes propios (`poultry_customers`: no existe un modelo general de clientes). Resolución del precio de un pedido: precio del cliente → lista del cliente → General. Permisos `poultry.read`/`poultry.write` (administración); lectura por RLS y escritura sólo por RPC; los pedidos se aíslan por sucursal (`branches.read_all` o miembro).
+
+Pedido: el **precio** se congela al crear (y se conserva al editar una línea sin cambiarla); el **costo** vigente se congela al pasar a ENTREGADO (si falta un costo o el peso real de una línea por kg, la entrega se rechaza). Facturación, costo, ganancia y margen sólo cuentan pedidos entregados y usan esos snapshots: cambiar costos o precios después no altera la historia. Estados `PENDING → PREPARING → READY → DELIVERED`, o `CANCELLED`; los finales no se reabren. Sin saldos ni cuenta corriente (no hay estructura segura para eso).
+
+**Motivo:** controlar costos, listas y rentabilidad real de cajones sin contaminar el catálogo minorista ni el POS en producción.
+
+## D-090 — Módulo Envasados: paquetes al vacío con dos etiquetas térmicas y EAN-13 configurable
+
+**Status:** Active — implementado 2026-11-01; migración `202611010093` **sin aplicar** (requiere la 092 por los helpers de sucursal). No toca `products`, el POS, pricing ni etiquetas de góndola.
+
+Los cortes son los `products` existentes (sólo `WEIGHT`, activos); la configuración de envasado va en `product_vacuum_settings` (un producto sin fila **no** está disponible: default seguro) y la de la organización en `organization_vacuum_settings`. Nada es regla del código: **días de vida útil** (por producto), textos de conservación, datos del establecimiento y **esquema del EAN-13** (prefijo + PLU + valor embebido = 12 dígitos, el 13.º es el verificador; valor = precio en centavos o peso en gramos ÷ divisor) son configuración; sin esquema no se pueden registrar paquetes y la pantalla lo dice (jamás se inventa un formato). Corregir un vencimiento distinto de la vida útil requiere `vacuum.override_expiry`. El importe usa el mismo redondeo que el POS (`priceForWeight`, half-up en centavos) sobre el precio/kg vigente de `product_prices` (sucursal > global).
+
+Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe, fechas, lote único `SUCURSAL-AAMMDD-0001`, EAN-13, textos y esquema usados, medidas de etiqueta) con historial de impresiones; las etiquetas —incluida la reimpresión— se arman SIEMPRE desde ese snapshot. Las dos etiquetas (informativa y de precio) salen de un layout en milímetros compartido por el preview SVG y el PDF (una página por etiqueta, tamaño exacto del papel, medidas por defecto 58 × 40 mm centralizadas en `vacuum-label-spec.ts` y sobrescribibles por organización). Se imprime desde el navegador de la computadora de la impresora térmica: no hay impresión remota ni RAW. El EAN-13 se dibuja con un codificador propio de ~60 líneas (sin dependencia ni servicio web) y el armado se replica en SQL y TS con los mismos vectores de prueba.
+
+**Motivo:** velocidad y trazabilidad al envasar muchos paquetes seguidos, sin asumir reglas sanitarias ni el formato de la caja del supermercado.

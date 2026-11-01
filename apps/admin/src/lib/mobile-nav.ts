@@ -41,6 +41,8 @@ export const MOBILE_MORE_LINKS = [
   { label: "Productos y precios", description: "Catálogo completo", href: "/admin/products" },
   { label: "Desposte", description: "Transformar y registrar rendimiento", href: "/admin/production" },
   { label: "Distribución", description: "Mover stock entre sucursales", href: "/admin/transfers" },
+  { label: "Pollos", description: "Pedidos de cajones y precios", href: "/admin/poultry" },
+  { label: "Envasados", description: "Paquetes al vacío y etiquetas", href: "/admin/vacuum" },
   { label: "Empleados y horas", description: "Accesos y fichajes", href: "/admin/employees" },
   { label: "Configuración", description: "Dispositivos, avisos, proveedores", href: "/admin/settings" }
 ] as const;

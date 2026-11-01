@@ -15,7 +15,9 @@ export const adminNavGroups: AdminNavGroup[] = [
     { icon: "↗", label: "Ventas", href: "/admin/sales", match: ["/admin/sales", "/admin/settlements", "/admin/analytics"] },
     { icon: "□", label: "Stock", href: "/admin/stock", match: ["/admin/stock", "/admin/branch-stock", "/admin/replenishment"] },
     { icon: "✂", label: "Desposte", href: "/admin/production", match: ["/admin/production"] },
-    { icon: "⇄", label: "Distribución", href: "/admin/transfers", match: ["/admin/transfers"] }
+    { icon: "⇄", label: "Distribución", href: "/admin/transfers", match: ["/admin/transfers"] },
+    { icon: "🐔", label: "Pollos", href: "/admin/poultry", match: ["/admin/poultry"] },
+    { icon: "▣", label: "Envasados", href: "/admin/vacuum", match: ["/admin/vacuum"] }
   ] },
   { label: "Gestión", links: [
     { icon: "◇", label: "Productos", href: "/admin/products", match: ["/admin/products", "/admin/promotions"] },
