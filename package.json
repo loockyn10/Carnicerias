@@ -21,7 +21,7 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
     "db:test": "supabase test db",
-    "db:types": "supabase gen types typescript --local > packages/database/src/database.types.ts"
+    "db:types": "node scripts/generate-db-types.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
