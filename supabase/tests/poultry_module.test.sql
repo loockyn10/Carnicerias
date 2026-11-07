@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(123);
+select plan(160);
 
 -- Cubre 202611010092 (módulo Pollos): catálogo, costos versionados, listas de precios, precio por cliente, clientes, pedidos,
 -- snapshots de precio (al crear) y de costo (al entregar), facturación / ganancia / margen y aislamiento por organización y sucursal.
@@ -56,6 +56,18 @@ insert into public.organization_members (organization_id, profile_id, role_id, s
 insert into public.branch_members (organization_id, branch_id, profile_id) values
   ('c2000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000003');
 
+insert into public.products (id, organization_id, name, slug, sku, unit_type, active) values
+  ('c5000000-0000-4000-8000-000000000001', 'c2000000-0000-4000-8000-000000000001', 'Cajón pollo entero', 'cajon-pollo-entero', 'CAJ-ENT', 'UNIT', true),
+  ('c5000000-0000-4000-8000-000000000002', 'c2000000-0000-4000-8000-000000000001', 'Pata muslo por kg', 'pata-muslo', 'PAT', 'WEIGHT', true),
+  ('c5000000-0000-4000-8000-000000000003', 'c2000000-0000-4000-8000-000000000001', 'Menudos por kg', 'menudos', 'MEN', 'WEIGHT', true),
+  ('c5000000-0000-4000-8000-000000000004', 'c2000000-0000-4000-8000-000000000001', 'Pechuga', 'pechuga', 'PECH', 'WEIGHT', true),
+  ('c5000000-0000-4000-8000-000000000005', 'c2000000-0000-4000-8000-000000000001', 'Producto discontinuado', 'discontinuado', 'DISC', 'UNIT', false),
+  ('c5000000-0000-4000-8000-000000000006', 'c2000000-0000-4000-8000-000000000001', 'Cajón especial', 'cajon-especial', 'CAJESP', 'UNIT', true),
+  ('c5000000-0000-4000-8000-000000000009', 'c2000000-0000-4000-8000-000000000002', 'Cajón de B', 'cajon-b', 'CAJB', 'UNIT', true);
+insert into public.product_barcodes (organization_id, product_id, barcode) values ('c2000000-0000-4000-8000-000000000001', 'c5000000-0000-4000-8000-000000000006', '7791234567890');
+create function public.t_rename_product(p_id uuid, p_name text) returns void language sql security definer set search_path = '' as $$ update public.products set name = p_name where id = p_id $$;
+grant execute on function public.t_rename_product(uuid, text) to authenticated;
+
 select ok((select count(*) from public.poultry_price_lists where organization_id = 'c2000000-0000-4000-8000-000000000001' and is_default and name = 'General') = 1, 'a new organization gets its General price list');
 
 create function public.t_poultry_price(p_customer uuid, p_product uuid) returns text language sql security definer set search_path = '' as $$
@@ -73,13 +85,18 @@ select set_config('request.jwt.claims', '{"sub":"c1000000-0000-4000-8000-0000000
 -- ---------------------------------------------------------------------------------------------
 -- Productos, listas y clientes
 -- ---------------------------------------------------------------------------------------------
-select set_config('test.p1', public.save_poultry_product('Cajón pollo entero', 'UNIT', false, 20000)::text, true);
-select set_config('test.p2', public.save_poultry_product('Pata muslo por kg', 'WEIGHT')::text, true);
-select set_config('test.p3', public.save_poultry_product('Menudos por kg', 'WEIGHT')::text, true);
+select set_config('test.p1', public.add_poultry_product('c5000000-0000-4000-8000-000000000001', 'UNIT', false, 20000)::text, true);
+select set_config('test.p2', public.add_poultry_product('c5000000-0000-4000-8000-000000000002', 'WEIGHT')::text, true);
+select set_config('test.p3', public.add_poultry_product('c5000000-0000-4000-8000-000000000003', 'WEIGHT')::text, true);
 select ok(current_setting('test.p1') <> '' and current_setting('test.p2') <> '', 'two poultry products are created without hardcoded names');
 select is((select requires_weight from public.poultry_products where id = current_setting('test.p2')::uuid), true, 'a per-kg product always requires the real weight');
-select throws_ok($$select public.save_poultry_product('cajon POLLO entero', 'UNIT')$$, '23505', null, 'the same name (case/accents) is a duplicate');
-select throws_ok($$select public.save_poultry_product('', 'UNIT')$$, '22023', null, 'a blank product name is rejected');
+select is((select product_id from public.poultry_products where id = current_setting('test.p1')::uuid), 'c5000000-0000-4000-8000-000000000001'::uuid, 'a Pollos product is a link to the general catalog (no parallel catalog)');
+select is((select name from public.poultry_products where id = current_setting('test.p1')::uuid), 'Cajón pollo entero', 'the name comes from the catalog product');
+select throws_ok($$select public.add_poultry_product('c5000000-0000-4000-8000-000000000001', 'UNIT')$$, '23505', null, 'a product already in Pollos is not added twice');
+select is((select count(*) from public.poultry_products where product_id = 'c5000000-0000-4000-8000-000000000001'), 1::bigint, 'there is still a single Pollos row for the product');
+select throws_ok($$select public.add_poultry_product('c5000000-0000-4000-8000-000000000009', 'UNIT')$$, '42501', null, 'a product of another organization cannot be associated');
+select throws_ok($$select public.add_poultry_product('c5000000-0000-4000-8000-000000000005', 'UNIT')$$, '22023', null, 'an inactive catalog product cannot be associated');
+select throws_ok($$select public.add_poultry_product(gen_random_uuid(), 'UNIT')$$, '42501', null, 'an unknown product cannot be associated');
 
 select set_config('test.list_may', public.save_poultry_price_list('Mayorista')::text, true);
 select set_config('test.list_gen', (select id::text from public.poultry_price_lists where is_default), true);
@@ -284,6 +301,55 @@ select throws_ok(format($f$select public.set_poultry_order_status(%L, 'CANCELLED
 select throws_ok(format($f$select public.save_poultry_order('c3000000-0000-4000-8000-000000000009', %L, date '2026-11-01', jsonb_build_array(jsonb_build_object('productId', %L, 'boxes', 1)))$f$, current_setting('test.c1'), current_setting('test.p1')), '42501', null, 'org B cannot order for a customer of org A');
 select throws_ok(format($f$select public.save_poultry_order('c3000000-0000-4000-8000-000000000001', %L, date '2026-11-01', jsonb_build_array(jsonb_build_object('productId', %L, 'boxes', 1)))$f$, gen_random_uuid(), gen_random_uuid()), '42501', null, 'org B cannot order in a branch of org A');
 select is((public.get_poultry_summary(current_date - 30, current_date + 30) -> 'sold' ->> 'orders')::int, 0, 'org B summary is empty');
+
+-- ---------------------------------------------------------------------------------------------
+-- Flujo «Agregar producto»: búsqueda en el catálogo, modalidad, nombre sincronizado y desactivación
+-- ---------------------------------------------------------------------------------------------
+select set_config('request.jwt.claim.sub', 'c1000000-0000-4000-8000-000000000001', true);
+select set_config('request.jwt.claims', '{"sub":"c1000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+
+select is(jsonb_array_length(public.search_poultry_candidate_products('cajon')), 2, 'the search finds catalog products by name (accent-insensitive) and never other organizations');
+select is(public.search_poultry_candidate_products('entero') -> 0 ->> 'alreadyAdded', 'true', 'a product already in Pollos is flagged as added');
+select is(public.search_poultry_candidate_products('especial') -> 0 ->> 'alreadyAdded', 'false', 'a product not in Pollos is flagged as available');
+select is(public.search_poultry_candidate_products('CAJESP') -> 0 ->> 'name', 'Cajón especial', 'the search finds products by SKU');
+select is(public.search_poultry_candidate_products('7791234') -> 0 ->> 'name', 'Cajón especial', 'the search finds products by barcode');
+select is(jsonb_array_length(public.search_poultry_candidate_products('discontinuado')), 0, 'inactive catalog products are not offered');
+select is(jsonb_array_length(public.search_poultry_candidate_products(null, 2)), 2, 'the search is limited server-side');
+
+select set_config('test.p4', public.add_poultry_product('c5000000-0000-4000-8000-000000000004', 'UNIT', false, 18000)::text, true);
+select is((select sale_unit::text || '/' || coalesce(requires_weight::text, '') from public.poultry_products where id = current_setting('test.p4')::uuid), 'UNIT/false', 'a product can be added by box');
+select lives_ok(format($f$select public.save_poultry_product_settings(%L, 'WEIGHT')$f$, current_setting('test.p4')), 'the sale mode can be changed to per kg while it has no history');
+select is((select sale_unit::text || '/' || requires_weight::text from public.poultry_products where id = current_setting('test.p4')::uuid), 'WEIGHT/true', 'a per-kg product requires the real weight');
+select lives_ok(format($f$select public.save_poultry_product_settings(%L, 'UNIT', false, 18000)$f$, current_setting('test.p4')), 'and back to per box');
+select lives_ok($$select public.t_rename_product('c5000000-0000-4000-8000-000000000004', 'Pechuga sin hueso')$$, 'the product is renamed in the general catalog');
+select is((select name from public.poultry_products where id = current_setting('test.p4')::uuid), 'Pechuga sin hueso', 'the Pollos name follows the catalog');
+select is(public.get_poultry_price_board() -> 'products' -> 3 ->> 'sku', 'PECH', 'the price board exposes the catalog SKU');
+
+select lives_ok(format($f$select public.set_poultry_product_cost(%L, 800000)$f$, current_setting('test.p4')), 'cost for the new product');
+select lives_ok(format($f$select public.set_poultry_list_price(%L, %L, 1000000)$f$, current_setting('test.list_gen'), current_setting('test.p4')), 'price for the new product');
+select throws_ok(format($f$select public.save_poultry_product_settings(%L, 'WEIGHT')$f$, current_setting('test.p4')), '22023', null, 'the sale mode is locked once the product has costs or prices');
+select set_config('test.o_p4', (public.save_poultry_order('c3000000-0000-4000-8000-000000000001', current_setting('test.c2')::uuid, current_date,
+  jsonb_build_array(jsonb_build_object('productId', current_setting('test.p4'), 'boxes', 2))) ->> 'orderId'), true);
+select lives_ok(format($f$select public.set_poultry_order_status(%L, 'DELIVERED')$f$, current_setting('test.o_p4')), 'an order of the product is delivered');
+select set_config('test.profit', public.get_poultry_profitability(current_date - 30, current_date + 30, 'product') -> 'totals' ->> 'profitCents', true);
+
+select lives_ok(format($f$select public.save_poultry_product_settings(%L, 'UNIT', false, 18000, false)$f$, current_setting('test.p4')), 'a product can be removed from Pollos (deactivated)');
+select is((select active from public.poultry_products where id = current_setting('test.p4')::uuid), false, 'it is inactive, not deleted');
+select is((select count(*) from public.poultry_order_items where product_id = current_setting('test.p4')::uuid), 1::bigint, 'its historical order lines are preserved');
+select is(public.get_poultry_profitability(current_date - 30, current_date + 30, 'product') -> 'totals' ->> 'profitCents', current_setting('test.profit'), 'profitability is unchanged by the deactivation');
+select throws_ok(format($f$select public.save_poultry_order('c3000000-0000-4000-8000-000000000001', %L, current_date, jsonb_build_array(jsonb_build_object('productId', %L, 'boxes', 1)))$f$, current_setting('test.c2'), current_setting('test.p4')), '22023', null, 'an inactive product cannot be ordered');
+select is((select count(*) from jsonb_array_elements(public.resolve_poultry_prices(current_setting('test.c2')::uuid)) e where e ->> 'productId' = current_setting('test.p4')), 0::bigint, 'an inactive product is not offered for new orders');
+select is((select count(*) from jsonb_array_elements(public.get_poultry_price_board() -> 'products') e where e ->> 'id' = current_setting('test.p4') and (e ->> 'active')::boolean = false), 1::bigint, 'the price board still lists it as inactive');
+select is(public.search_poultry_candidate_products('pechuga') -> 0 ->> 'removedFromPoultry', 'true', 'the search marks a removed product so it can be re-added');
+select is(public.add_poultry_product('c5000000-0000-4000-8000-000000000004', 'UNIT', false, 18000)::text, current_setting('test.p4'), 're-adding a removed product reactivates the same row (history kept)');
+select is((select active from public.poultry_products where id = current_setting('test.p4')::uuid), true, 'it is active again');
+
+select set_config('request.jwt.claim.sub', 'c1000000-0000-4000-8000-000000000009', true);
+select set_config('request.jwt.claims', '{"sub":"c1000000-0000-4000-8000-000000000009","role":"authenticated"}', true);
+select is(jsonb_array_length(public.search_poultry_candidate_products('cajon')), 1, 'org B only searches its own catalog');
+select is(public.search_poultry_candidate_products('cajon') -> 0 ->> 'name', 'Cajón de B', 'and never sees products of org A');
+select throws_ok($$select public.add_poultry_product('c5000000-0000-4000-8000-000000000006', 'UNIT')$$, '42501', null, 'org B cannot associate a product of org A');
+select throws_ok(format($f$select public.save_poultry_product_settings(%L, 'UNIT')$f$, current_setting('test.p4')), '42501', null, 'org B cannot edit the Pollos settings of org A');
 
 select * from finish();
 rollback;

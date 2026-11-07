@@ -265,7 +265,7 @@ export async function deactivateProductsAction(productIds: string[]): Promise<Bu
   }
 }
 
-export interface ProductModalState { error?: string; success?: boolean }
+export interface ProductModalState { error?: string; success?: boolean; /** Id del producto creado (lo usa Pollos para asociarlo enseguida). */ productId?: string }
 
 export async function createProductModalAction(_: ProductModalState, formData: FormData): Promise<ProductModalState> {
   try {
@@ -301,7 +301,7 @@ export async function createProductModalAction(_: ProductModalState, formData: F
     revalidatePath("/admin/catalog");
     revalidatePath("/admin/promotions");
     revalidatePath("/admin/suppliers");
-    return { success: true };
+    return { success: true, productId };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "No se pudo crear el producto" };
   }

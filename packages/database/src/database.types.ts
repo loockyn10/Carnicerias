@@ -5942,16 +5942,28 @@ export type Database = {
         }
         Returns: string
       }
-      save_poultry_product: {
+      save_poultry_product_settings: {
         Args: {
           p_active?: boolean
-          p_name: string
-          p_product_id?: string
+          p_poultry_product_id: string
           p_reference_weight_grams?: number
           p_requires_weight?: boolean
           p_sale_unit: Database["public"]["Enums"]["unit_type"]
         }
         Returns: string
+      }
+      add_poultry_product: {
+        Args: {
+          p_product_id: string
+          p_reference_weight_grams?: number
+          p_requires_weight?: boolean
+          p_sale_unit: Database["public"]["Enums"]["unit_type"]
+        }
+        Returns: string
+      }
+      search_poultry_candidate_products: {
+        Args: { p_limit?: number; p_search?: string }
+        Returns: Json
       }
       save_pricing_config: {
         Args: {

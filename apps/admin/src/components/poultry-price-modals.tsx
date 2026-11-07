@@ -4,33 +4,9 @@ import { useState } from "react";
 
 import { formatCurrency } from "@carnicerias/business-logic";
 
-import { getPoultryPriceHistoryAction, savePoultryPriceListAction, savePoultryPricesAction, savePoultryProductAction } from "../app/admin/poultry/actions";
-import { formatKg, parsePriceHistory, pesosInput, POULTRY_SALE_UNIT_LABELS, type PoultryPriceHistory, type PoultryPriceList, type PoultryProductRow } from "../lib/poultry";
+import { getPoultryPriceHistoryAction, savePoultryPriceListAction, savePoultryPricesAction } from "../app/admin/poultry/actions";
+import { formatKg, parsePriceHistory, pesosInput, type PoultryPriceHistory, type PoultryPriceList, type PoultryProductRow } from "../lib/poultry";
 import { fieldInput, fieldLabel, FormModal, optionalHint } from "./form-modal";
-
-/** Alta / edición de un producto de pollos. No hay nombres fijos: «Cajón pollo entero», «Pata muslo»… son datos. */
-export function PoultryProductModal({ product }: { product?: PoultryProductRow }) {
-  return <FormModal
-    action={savePoultryProductAction}
-    description="Por cajón: precio y costo por cajón. Por kg: precio y costo por kilo (hace falta el peso real para valorizar)."
-    submitLabel={product ? "Guardar cambios" : "Crear producto"}
-    title={product ? `Editar producto — ${product.name}` : "Nuevo producto de pollos"}
-    triggerClassName={product ? "rounded-lg border px-3 py-2 text-sm font-bold" : "rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900"}
-    triggerLabel={product ? "Producto" : "+ Nuevo producto"}
-  >
-    {product ? <input name="product_id" type="hidden" value={product.id} /> : null}
-    <label className={fieldLabel}>Nombre<input autoFocus className={fieldInput} defaultValue={product?.name ?? ""} maxLength={120} name="name" placeholder="Cajón pollo entero" required /></label>
-    <label className={fieldLabel}>Se vende
-      <select className={fieldInput} defaultValue={product?.saleUnit ?? "UNIT"} name="sale_unit">
-        <option value="UNIT">{POULTRY_SALE_UNIT_LABELS.UNIT}</option><option value="WEIGHT">{POULTRY_SALE_UNIT_LABELS.WEIGHT}</option>
-      </select>
-      <span className={optionalHint}>No se puede cambiar cuando ya tiene costos, precios o pedidos.</span>
-    </label>
-    <label className={fieldLabel}>Peso de referencia del cajón (kg) <span className={optionalHint}>opcional</span><input className={fieldInput} defaultValue={product?.referenceWeightGrams ? String(product.referenceWeightGrams / 1000).replace(".", ",") : ""} inputMode="decimal" name="reference_weight_kg" placeholder="20" /></label>
-    <label className="flex items-center gap-2 text-sm"><input defaultChecked={product?.requiresWeight ?? false} name="requires_weight" type="checkbox" /> Hay que pesar el cajón antes de entregar <span className={optionalHint}>(siempre en los productos por kg)</span></label>
-    <label className="flex items-center gap-2 text-sm"><input defaultChecked={product?.active ?? true} name="active" type="checkbox" /> Producto activo</label>
-  </FormModal>;
-}
 
 /** Costo y precios de un producto (uno por lista) con vigencia opcional. Cada valor que cambia abre una versión nueva: la historia no se pisa. */
 export function PoultryPricesModal({ product, lists }: { product: PoultryProductRow; lists: PoultryPriceList[] }) {

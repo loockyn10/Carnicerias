@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { createProductModalAction, type ProductModalState } from "../app/admin/actions";
 import { defaultNewProductBranchIds } from "../lib/new-product-branches";
 import { ProductBranchChecklist } from "./product-branch-checklist";
@@ -10,7 +10,7 @@ import { SupplierSelect, type SupplierOption } from "./supplier-select";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2";
 
-export function ProductCreateModal({ categories, branches, suppliers, marginBps, excludedCategoryIds = [], productionBranchId = null }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null; /** Categorías excluidas del margen automático (D-069): el precio de sus productos es manual. */ excludedCategoryIds?: string[]; /** Sucursal productiva (organizations.production_branch_id): la única que arranca marcada en «Se vende en». */ productionBranchId?: string | null }) {
+export function ProductCreateModal({ categories, branches, suppliers, marginBps, excludedCategoryIds = [], productionBranchId = null, triggerLabel = "+ Nuevo producto", triggerClassName = "rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900", onCreated }: { categories: { id: string; name: string }[]; branches: { id: string; name: string }[]; suppliers: SupplierOption[]; /** Margen global en basis points (null = sin configurar). */ marginBps: number | null; /** Categorías excluidas del margen automático (D-069): el precio de sus productos es manual. */ excludedCategoryIds?: string[]; /** Sucursal productiva (organizations.production_branch_id): la única que arranca marcada en «Se vende en». */ productionBranchId?: string | null; triggerLabel?: string; triggerClassName?: string; /** Se llama con el producto recién creado (Pollos lo asocia a su módulo). */ onCreated?: (product: { id: string; name: string }) => void }) {
   const [open, setOpen] = useState(false);
   const [categoryId, setCategoryId] = useState("");
   const [unitType, setUnitType] = useState<"WEIGHT" | "UNIT">("WEIGHT");
@@ -20,12 +20,13 @@ export function ProductCreateModal({ categories, branches, suppliers, marginBps,
   const requiresPricing = isSellable || !isRawMaterial;
   // Alta de un producto NUEVO: sólo la sucursal productiva marcada; las demás destildadas (se habilitan a propósito).
   const defaultSellingBranchIds = defaultNewProductBranchIds(branches, productionBranchId);
-  useEffect(() => { if (state.success) setOpen(false); }, [state.success]);
+  useEffect(() => { if (state.success) { setOpen(false); if (state.productId && onCreated) onCreated({ id: state.productId, name: createdName.current }); } }, [state]);
+  const createdName = useRef("");
   return <>
-    <button className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" onClick={() => setOpen(true)} type="button">+ Nuevo producto</button>
+    <button className={triggerClassName} onClick={() => setOpen(true)} type="button">{triggerLabel}</button>
     {open ? <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 p-4"><div aria-modal="true" className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl" role="dialog">
       <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-black">Nuevo producto</h2><p className="mt-1 text-sm text-stone-600">Cargá el precio de venta, o un costo: con el margen configurado el precio se calcula solo.</p></div><button className="text-stone-500 hover:text-stone-900" onClick={() => setOpen(false)} type="button">Cerrar</button></div>
-      <form action={action} className="mt-5 grid gap-3">
+      <form action={(formData) => { const typedName = formData.get("name"); createdName.current = typeof typedName === "string" ? typedName : ""; action(formData); }} className="mt-5 grid gap-3">
         <label className="grid gap-1 text-sm font-medium">Nombre<input className={input} name="name" required /></label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm font-medium">SKU<input className={input} name="sku" /></label>

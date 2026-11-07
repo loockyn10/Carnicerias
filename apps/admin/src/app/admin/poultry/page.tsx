@@ -2,12 +2,13 @@ import { formatCurrency } from "@carnicerias/business-logic";
 import Link from "next/link";
 
 import { MetricCard } from "../../../components/admin-ui";
+import { PoultryEmptyState } from "../../../components/poultry-empty-state";
 import { SalesRangeFilter } from "../../../components/sales-range-filter";
 import { SectionTabs } from "../../../components/section-tabs";
 import { requireAdminContext } from "../../../lib/admin";
 import { periodLabel, resolveSalesRange } from "../../../lib/date-range";
 import { createPerfLogger } from "../../../lib/perf";
-import { formatKg, formatMargin, parseSummary } from "../../../lib/poultry";
+import { formatKg, formatMargin, hasActivePoultryProducts, parsePriceBoard, parseSummary } from "../../../lib/poultry";
 import { POULTRY_TABS } from "../../../lib/poultry-tabs";
 import { createClient } from "../../../lib/supabase/server";
 
@@ -24,7 +25,11 @@ export default async function PoultryHomePage({ searchParams }: { searchParams: 
   const range = resolveSalesRange({ preset: value("preset") || (hasDates ? undefined : "30d"), from: value("from"), to: value("to") }, context.timezone);
 
   const supabase = await createClient();
-  const { data, error } = await perf.measure("summary", supabase.rpc("get_poultry_summary", { p_from: range.from, p_to: range.to }));
+  const [{ data, error }, boardResult] = await Promise.all([
+    perf.measure("summary", supabase.rpc("get_poultry_summary", { p_from: range.from, p_to: range.to })),
+    perf.measure("products", supabase.rpc("get_poultry_price_board"))
+  ]);
+  const noProducts = !boardResult.error && !hasActivePoultryProducts(parsePriceBoard(boardResult.data).products);
   perf.flush();
   const summary = parseSummary(data);
   const sold = summary.sold;
@@ -37,6 +42,7 @@ export default async function PoultryHomePage({ searchParams }: { searchParams: 
     <SectionTabs tabs={POULTRY_TABS} />
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
 
+    {noProducts ? <PoultryEmptyState /> : null}
     <h2 className="mt-6 text-xl font-black">Para preparar y entregar</h2>
     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="poultry-open-metrics">
       <MetricCard detail={`${String(summary.open.pending)} pendientes · ${String(summary.open.preparing)} preparando · ${String(summary.open.ready)} listos`} label="Pedidos abiertos" value={String(summary.open.open)} />

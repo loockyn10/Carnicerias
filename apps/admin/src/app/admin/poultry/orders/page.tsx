@@ -2,6 +2,7 @@ import { formatCurrency } from "@carnicerias/business-logic";
 import Link from "next/link";
 
 import { StatusBadge } from "../../../../components/admin-ui";
+import { PoultryNoProductsNotice } from "../../../../components/poultry-empty-state";
 import { PoultryOrderForm } from "../../../../components/poultry-order-form";
 import { PoultryOrderPanel } from "../../../../components/poultry-order-panel";
 import { SectionTabs } from "../../../../components/section-tabs";
@@ -66,7 +67,7 @@ export default async function PoultryOrdersPage({ searchParams }: { searchParams
       </div>
       <SectionTabs tabs={POULTRY_TABS} />
       {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}
-      {editId && !order ? <p className="mt-5 rounded-lg bg-amber-50 p-4 text-amber-800">No se encontró el pedido.</p> : <div className="mt-6">
+      {editId && !order ? <p className="mt-5 rounded-lg bg-amber-50 p-4 text-amber-800">No se encontró el pedido.</p> : !order && parseResolvedPrices(pricesResult.data).length === 0 ? <PoultryNoProductsNotice /> : <div className="mt-6">
         <PoultryOrderForm branches={branches} customers={customers} defaultBranchId={defaultBranchId} initialCustomerId={order ? "" : presetCustomer} initialPrices={parseResolvedPrices(pricesResult.data)} key={order?.id ?? `new-${presetCustomer}`} order={order} today={today} />
       </div>}
     </main>;

@@ -1222,6 +1222,8 @@ Los cajones de pollo viven en tablas propias (`poultry_*`), **no** en `products`
 
 Pedido: el **precio** se congela al crear (y se conserva al editar una línea sin cambiarla); el **costo** vigente se congela al pasar a ENTREGADO (si falta un costo o el peso real de una línea por kg, la entrega se rechaza). Facturación, costo, ganancia y margen sólo cuentan pedidos entregados y usan esos snapshots: cambiar costos o precios después no altera la historia. Estados `PENDING → PREPARING → READY → DELIVERED`, o `CANCELLED`; los finales no se reabren. Sin saldos ni cuenta corriente (no hay estructura segura para eso).
 
+**Ajuste 2026-11-06 (migración `202611060094`, sin aplicar):** Pollos **no** es un catálogo paralelo: `poultry_products` es sólo la configuración de Pollos (modalidad por cajón / por kg, peso de referencia, activo) de un `products` existente (`product_id`, único; `name` queda como espejo de sólo lectura sincronizado por trigger). «+ Agregar producto» busca en el catálogo general (server-side) y asocia; «Crear producto nuevo» reutiliza el alta de Productos. «Quitar de Pollos» desactiva (no borra): pedidos, costos y precios se conservan y el producto deja de ofrecerse en Nuevo pedido. `save_poultry_product` se reemplaza por `add_poultry_product`, `save_poultry_product_settings` y `search_poultry_candidate_products`.
+
 **Motivo:** controlar costos, listas y rentabilidad real de cajones sin contaminar el catálogo minorista ni el POS en producción.
 
 ## D-090 — Módulo Envasados: paquetes al vacío con dos etiquetas térmicas y EAN-13 configurable

@@ -47,16 +47,36 @@ function money(raw: string, label: string): number {
 
 // ---- Productos, costos y listas -------------------------------------------------------------------------------------
 
-export async function savePoultryProductAction(_: PoultryFormState, formData: FormData): Promise<PoultryFormState> {
+function saleSettings(formData: FormData) {
+  const saleUnit = text(formData, "sale_unit") === "WEIGHT" ? "WEIGHT" as const : "UNIT" as const;
+  const reference = text(formData, "reference_weight_kg");
+  return { p_sale_unit: saleUnit, p_requires_weight: formData.get("requires_weight") === "on", ...(reference ? { p_reference_weight_grams: kilogramsToGrams(reference) } : {}) };
+}
+
+/** Busca en el catálogo general (server-side: nombre, SKU o código de barras) los productos que se pueden asociar a Pollos. */
+export async function searchPoultryCandidatesAction(search: string): Promise<{ data: Json } | { error: string }> {
   try {
-    const saleUnit = text(formData, "sale_unit") === "WEIGHT" ? "WEIGHT" : "UNIT";
-    const reference = text(formData, "reference_weight_kg");
-    const productId = optionalId(formData, "product_id");
-    await rpc("save_poultry_product", {
-      p_name: text(formData, "name"), p_sale_unit: saleUnit, p_requires_weight: formData.get("requires_weight") === "on",
-      ...(reference ? { p_reference_weight_grams: kilogramsToGrams(reference) } : {}), p_active: formData.get("active") === "on",
-      ...(productId ? { p_product_id: productId } : {})
-    });
+    const { data } = await rpc("search_poultry_candidate_products", { ...(search.trim() ? { p_search: search.trim().slice(0, 80) } : {}), p_limit: 20 });
+    return { data };
+  } catch (error) { return { error: error instanceof Error ? error.message : "No se pudo buscar" }; }
+}
+
+/** Asocia un producto del catálogo general a Pollos (no crea ni copia el producto). */
+export async function addPoultryProductAction(_: PoultryFormState, formData: FormData): Promise<PoultryFormState> {
+  try {
+    const productId = text(formData, "product_id");
+    if (!isUuid(productId)) throw new Error("Elegí un producto del catálogo");
+    await rpc("add_poultry_product", { p_product_id: productId, ...saleSettings(formData) });
+    return done();
+  } catch (error) { return failure(error, "No se pudo agregar el producto"); }
+}
+
+/** Modalidad, peso de referencia y activo/inactivo de un producto ya asociado. Quitarlo de Pollos lo desactiva: no borra historia. */
+export async function savePoultryProductSettingsAction(_: PoultryFormState, formData: FormData): Promise<PoultryFormState> {
+  try {
+    const id = text(formData, "poultry_product_id");
+    if (!isUuid(id)) throw new Error("Producto inválido");
+    await rpc("save_poultry_product_settings", { p_poultry_product_id: id, ...saleSettings(formData), p_active: formData.get("active") === "on" });
     return done();
   } catch (error) { return failure(error, "No se pudo guardar el producto"); }
 }

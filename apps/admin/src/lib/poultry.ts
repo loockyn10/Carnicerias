@@ -111,6 +111,9 @@ export interface PoultryPriceList { id: string; name: string; notes: string | nu
 
 export interface PoultryProductRow {
   id: string;
+  /** Producto del catálogo general al que está asociado (null sólo en filas anteriores al vínculo). */
+  catalogProductId: string | null;
+  sku: string | null;
   name: string;
   saleUnit: PoultrySaleUnit;
   requiresWeight: boolean;
@@ -139,7 +142,7 @@ export function parsePriceBoard(value: unknown): PoultryPriceBoard {
         prices[listId] = { cents: cents(parsed.cents), since: str(parsed.since) };
       }
       return {
-        id: str(row.id), name: str(row.name), saleUnit: saleUnit(row.saleUnit), requiresWeight: bool(row.requiresWeight),
+        id: str(row.id), catalogProductId: strOrNull(row.catalogProductId), sku: strOrNull(row.sku), name: str(row.name), saleUnit: saleUnit(row.saleUnit), requiresWeight: bool(row.requiresWeight),
         referenceWeightGrams: intOrNull(row.referenceWeightGrams), active: bool(row.active), costCents: centsOrNull(row.costCents),
         costSince: strOrNull(row.costSince), prices
       };
@@ -541,4 +544,26 @@ export function parseKgInput(input: string): number | null {
   if (!match) return null;
   const grams = Number(BigInt(match[1] ?? "0") * 1000n + BigInt((match[2] ?? "").padEnd(3, "0")));
   return grams > 0 && Number.isSafeInteger(grams) ? grams : null;
+}
+
+/** Producto del catálogo general que se puede asociar a Pollos. */
+export interface PoultryCandidate {
+  productId: string;
+  name: string;
+  sku: string | null;
+  unitType: PoultrySaleUnit;
+  alreadyAdded: boolean;
+  removedFromPoultry: boolean;
+}
+
+export function parseCandidates(value: unknown): PoultryCandidate[] {
+  return asArray(value).map((entry) => {
+    const row = asRecord(entry);
+    return { productId: str(row.productId), name: str(row.name), sku: strOrNull(row.sku), unitType: saleUnit(row.unitType), alreadyAdded: bool(row.alreadyAdded), removedFromPoultry: bool(row.removedFromPoultry) };
+  }).filter((candidate) => candidate.productId !== "");
+}
+
+/** ¿Hay al menos un producto de Pollos activo? Sin ninguno no se puede cargar un pedido. */
+export function hasActivePoultryProducts(products: readonly Pick<PoultryProductRow, "active">[]): boolean {
+  return products.some((product) => product.active);
 }
