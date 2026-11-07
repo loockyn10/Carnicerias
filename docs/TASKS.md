@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Estación de producción de Envasados: aplicar y probar con hardware (acción del usuario)
+
+Implementada 2026-11-07 (D-092, `docs/VACUUM_STATION.md`). **Migraciones pendientes: `202611070095` y `202611070096`** (verificado con `supabase migration list --linked` y `db push --dry-run`: ninguna aplicada). Orden: `supabase db push --dry-run` → `supabase db push` → desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+1. Estación en la PC de producción con Chrome/Edge por https: «Conectar balanza», elegir el COM; confirmar que llegan lecturas reales de la KRETZ (¿informa estabilidad? el frame documentado no la trae) y que el peso estable se detecta con paquetes reales (ajustar tiempo/tolerancia si hace falta).
+2. Impresora: driver, papel exacto, sensor de etiquetas calibrado; **Imprimir etiqueta de prueba** y revisar borde, flecha ARRIBA, regla y avance. Si sale girada, cambiar el giro. Confirmar si el avance de ~1 m desaparece con el nuevo camino de impresión o era el sensor/papel del driver.
+3. Acceso directo con `--kiosk-printing`: verificar que no aparece el diálogo y que la estación no muestra el aviso de diálogo. Aprobar la prueba y activar la impresión automática.
+4. Escanear la etiqueta impresa con el lector (sigue pendiente de D-091) y vender el paquete en una caja.
+5. Probar: cambio de corte con un paquete encima, paquete apoyado varios minutos, desenchufar el cable USB, cortar Internet, quitar el papel.
+
 ## P0 — Envasados vendidos desde el POS: aplicar y probar (acción del usuario)
 
 Implementado 2026-11-07 (D-091). **Migración pendiente: `202611070095_vacuum_pos_sales.sql`** (verificado 2026-11-07 con `supabase migration list --linked`: es la única que falta). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin y de instalar el POS nuevo (`022_vacuum_packages.sql` de SQLite se aplica solo al abrir la app) → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).

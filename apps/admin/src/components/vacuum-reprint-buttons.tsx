@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { VACUUM_PRINT_KIND_LABELS, type VacuumPrintKind } from "../lib/vacuum";
-import { openPdfBlob, printPdfBlob, requestVacuumPdf } from "../lib/vacuum-print-client";
+import { openPdfBlob, printPackageLabels, printPdfBlob, requestVacuumPdf } from "../lib/vacuum-print-client";
 
 /**
  * Botones para imprimir / reimprimir las etiquetas de un paquete ya registrado: «Ambas», sólo la informativa o sólo la de precio (sirve cuando una
@@ -19,6 +19,14 @@ export function VacuumReprintButtons({ packageId, compact = false }: { packageId
 
   async function print(kind: VacuumPrintKind) {
     setBusy(kind); setError(null); setFallback(null); setNotice(null);
+    // Primero la impresión con el tamaño exacto del papel (la que usa la estación); si falla, el PDF de siempre.
+    const exact = await printPackageLabels(packageId, kind);
+    if (exact.ok) {
+      setNotice(`Etiqueta ${VACUUM_PRINT_KIND_LABELS[kind].toLowerCase()} enviada a imprimir.`);
+      setBusy(null);
+      router.refresh();
+      return;
+    }
     const result = await requestVacuumPdf(packageId, kind);
     if (!result.ok) { setError(result.error); setBusy(null); return; }
     const printed = await printPdfBlob(result.blob);

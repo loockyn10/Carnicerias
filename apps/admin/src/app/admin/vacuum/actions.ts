@@ -8,7 +8,7 @@ import { friendlyDbError } from "../../../lib/db-errors";
 import { decimal, text } from "../../../lib/form-parsing";
 import { createClient } from "../../../lib/supabase/server";
 import { isUuid } from "../../../lib/uuid";
-import { parseCreatePackageInput } from "../../../lib/vacuum";
+import { isVacuumPrintKind, parseCreatePackageInput } from "../../../lib/vacuum";
 import { isEanScheme, validateEanSchemeConfig } from "../../../lib/vacuum-ean";
 
 export interface VacuumFormState { error?: string; successToken?: string }
@@ -54,6 +54,39 @@ export async function createVacuumPackageAction(raw: unknown): Promise<{ ok: tru
     revalidatePath("/admin/vacuum/recent");
     return { ok: true, data };
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar el paquete" }; }
+}
+
+/** Estación de producción: TODOS los cortes habilitados con su precio/kg vigente, categoría y frecuencia de uso (RPC de sólo lectura). */
+export async function listVacuumStationProductsAction(branchId: string): Promise<{ data: Json } | { error: string }> {
+  try {
+    if (!isUuid(branchId)) throw new Error("Elegí la sucursal");
+    return { data: await rpc("list_vacuum_station_products", { p_branch_id: branchId }) };
+  } catch (error) { return { error: error instanceof Error ? error.message : "No se pudieron leer los cortes" }; }
+}
+
+/** Estación de producción: paquetes y kilogramos del día en la sucursal (sin anulados). También sirve de latido: si falla por la red, la estación se pausa. */
+export async function getVacuumStationSummaryAction(branchId: string): Promise<{ data: Json } | { error: string }> {
+  try {
+    if (!isUuid(branchId)) throw new Error("Elegí la sucursal");
+    return { data: await rpc("get_vacuum_station_summary", { p_branch_id: branchId }) };
+  } catch (error) { return { error: error instanceof Error ? error.message : "No se pudo leer el resumen" }; }
+}
+
+/** Lee el snapshot de un paquete registrado (para armar sus etiquetas en el navegador al reimprimir). */
+export async function getVacuumPackageAction(packageId: string): Promise<{ ok: true; data: Json } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(packageId)) throw new Error("Paquete inválido");
+    return { ok: true, data: await rpc("get_vacuum_package", { p_package_id: packageId }) };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo leer el paquete" }; }
+}
+
+/** Deja constancia de una impresión o reimpresión de etiquetas (el mismo registro que escribe el módulo manual al imprimir). */
+export async function recordVacuumPrintAction(packageId: string, kind: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(packageId) || !isVacuumPrintKind(kind)) throw new Error("Pedido inválido");
+    await rpc("record_vacuum_print", { p_package_id: packageId, p_kind: kind });
+    return { ok: true };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar la impresión" }; }
 }
 
 /** Envía paquetes DISPONIBLES a otra sucursal: sólo cambia dónde los ofrece el POS (el stock del corte se mueve con las transferencias de siempre). */

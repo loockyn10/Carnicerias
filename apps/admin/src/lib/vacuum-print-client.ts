@@ -1,4 +1,7 @@
-import type { VacuumPrintKind } from "./vacuum";
+import { getVacuumPackageAction, recordVacuumPrintAction } from "../app/admin/vacuum/actions";
+import { parseVacuumPackage, type VacuumPackage, type VacuumPrintKind } from "./vacuum";
+import { browserStorage, loadStationConfig } from "./vacuum-station/config";
+import { buildPackageJobs, printJobs } from "./vacuum-station/label-print";
 
 /**
  * Impresión desde el navegador de la computadora que tiene la impresora térmica conectada (sin impresión remota ni RAW): se pide el PDF al
@@ -53,4 +56,28 @@ export function openPdfBlob(blob: Blob): void {
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank", "noopener");
   window.setTimeout(() => { URL.revokeObjectURL(url); }, 60_000);
+}
+
+/**
+ * Impresión de las etiquetas de un paquete con el tamaño EXACTO del papel (cada etiqueta es su propio documento con `@page { size }`), como la estación.
+ * Usa el giro calibrado en la estación de este equipo. Si algo falla devuelve el error y quien llama puede recurrir al PDF de siempre
+ * (`requestVacuumPdf` + `printPdfBlob`), que sigue funcionando.
+ */
+export async function printPackageLabels(packageId: string, kind: VacuumPrintKind, known?: VacuumPackage): Promise<{ ok: true; dialogShown: boolean } | { ok: false; error: string }> {
+  try {
+    let pkg = known ?? null;
+    if (pkg === null) {
+      const result = await getVacuumPackageAction(packageId);
+      if (!result.ok) return { ok: false, error: result.error };
+      pkg = parseVacuumPackage(result.data);
+      if (pkg === null) return { ok: false, error: "No se pudo leer el paquete" };
+    }
+    const rotation = loadStationConfig(browserStorage()).print.rotation;
+    const outcome = await printJobs(buildPackageJobs(pkg, kind, rotation));
+    if (!outcome.ok) return { ok: false, error: outcome.error ?? "No se pudo imprimir" };
+    void recordVacuumPrintAction(packageId, kind).catch(() => undefined);
+    return { ok: true, dialogShown: outcome.dialogShown };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "No se pudo imprimir" };
+  }
 }

@@ -134,3 +134,15 @@ export {
 } from "./vacuum-ean";
 export type { EanBuildFailure, EanBuildResult, EanInputs, EanScheme, EanSchemeConfig, VacuumEanReading } from "./vacuum-ean";
 export { calculateVacuumPackagePricing } from "./vacuum-package";
+export {
+  createScaleFrameParser,
+  isScaleProtocol,
+  KRETZ_SERIAL_PARAMS,
+  parseAsciiLine,
+  parseKretzFrame,
+  SCALE_FRAME_ERROR_LABELS,
+  SCALE_PROTOCOL_LABELS,
+  SCALE_PROTOCOLS,
+  SERIAL_BAUD_RATES
+} from "./scale-protocol";
+export type { ScaleFrameErrorCode, ScaleFrameParser, ScaleParseItem, ScaleProtocol, SerialLineParams } from "./scale-protocol";

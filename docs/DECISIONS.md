@@ -1251,3 +1251,13 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 **Offline y conflictos.** No hay exclusividad global con cajas desconectadas: la caja marca el paquete vendido en la misma transacción local, y el servidor, al sincronizar, NUNCA descarta una venta ya cobrada: si el paquete ya estaba vendido / anulado / en otra sucursal registra la venta igual (con su movimiento de stock) y abre un conflicto para resolver en Admin → Envasados → Conflictos de venta. Un EAN que cumple el esquema queda reservado: no puede cargarse como código de barras del catálogo y un escaneo reservado nunca llega al alta rápida.
 
 **Motivo:** que Fran envase, imprima la etiqueta con el precio incorporado y cualquier caja la cobre por ese importe descontando el peso real, sin otro sistema de stock.
+
+## D-092 — Estación de producción de Envasados: registro automático por peso estable, impresión HTML a tamaño exacto
+
+**Status:** Active — implementado 2026-11-07; migración `202611070096` (sólo lectura) sin aplicar. Extiende D-090/D-091 sin duplicarlos: registra con el mismo `create_vacuum_package` y la misma tabla `vacuum_packages`.
+
+**Un ciclo de pesado = un registro.** Máquina de estados pura (esperando paquete → detectando → estabilizando → registrando → imprimiendo → esperando retiro, más pausado): tras capturar el peso hace falta ver el retorno estable a cero antes de aceptar otro; la señal de estabilidad de la balanza manda cuando existe y, si no, lecturas consecutivas dentro de una tolerancia durante 800 ms (todo configurable por equipo). El frame del KRETZ no trae estabilidad documentada: no se asume. Registro e impresión son operaciones separadas: un fallo de impresión no genera otro paquete (se reimprimen las mismas etiquetas); sin servidor se pausa; los reintentos usan la misma `request_key`.
+
+**Impresión.** Cada etiqueta se imprime como su propio documento HTML/SVG con `@page { size }` exacto en vez de un PDF en el visor del navegador (que decide hoja, giro y escala por su cuenta); hay un giro de calibración por equipo. `window.print()` no es silencioso: la impresión sin diálogo requiere abrir Chrome/Edge con `--kiosk-printing`, y el navegador no puede confirmar que la etiqueta salió. La impresión automática sólo se habilita tras aprobar una prueba para las medidas y el giro vigentes.
+
+**Alcance.** Sólo web/PWA con Web Serial (Chrome/Edge de escritorio, https): sin Tauri, sin servicio local, sin offline completo (la lectura de la balanza es local pero no se emiten etiquetas de paquetes no registrados). Detalle en `docs/VACUUM_STATION.md`.

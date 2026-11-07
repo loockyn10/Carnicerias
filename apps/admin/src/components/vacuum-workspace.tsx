@@ -10,7 +10,7 @@ import {
   type VacuumPackage, type VacuumPrintKind, type VacuumProductOption
 } from "../lib/vacuum";
 import { buildInfoLabelLayout, buildPriceLabelLayout, packageToLabelData, type VacuumLabelData } from "../lib/vacuum-label-layout";
-import { openPdfBlob, printPdfBlob, requestVacuumPdf } from "../lib/vacuum-print-client";
+import { openPdfBlob, printPackageLabels, printPdfBlob, requestVacuumPdf } from "../lib/vacuum-print-client";
 import { VacuumLabelPreview } from "./vacuum-label-preview";
 import { VacuumReprintButtons } from "./vacuum-reprint-buttons";
 
@@ -91,6 +91,12 @@ export function VacuumWorkspace({ branches, defaultBranchId, initialProducts, se
   }
 
   async function printSaved(pkg: VacuumPackage, kind: VacuumPrintKind) {
+    // Primero la impresión con el tamaño exacto del papel (la que usa la estación); si falla, el PDF de siempre.
+    const exact = await printPackageLabels(pkg.id, kind, pkg);
+    if (exact.ok) {
+      setNotice(`Lote ${pkg.lot} registrado · ${kind === "BOTH" ? "ambas etiquetas" : kind === "INFO" ? "etiqueta informativa" : "etiqueta de precio"} enviada a imprimir.`);
+      return;
+    }
     const result = await requestVacuumPdf(pkg.id, kind);
     if (!result.ok) { setError(`El paquete quedó registrado (lote ${pkg.lot}) pero la impresión falló: ${result.error}`); return; }
     const printed = await printPdfBlob(result.blob);
