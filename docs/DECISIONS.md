@@ -1235,3 +1235,19 @@ Los cortes son los `products` existentes (sólo `WEIGHT`, activos); la configura
 Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe, fechas, lote único `SUCURSAL-AAMMDD-0001`, EAN-13, textos y esquema usados, medidas de etiqueta) con historial de impresiones; las etiquetas —incluida la reimpresión— se arman SIEMPRE desde ese snapshot. Las dos etiquetas (informativa y de precio) salen de un layout en milímetros compartido por el preview SVG y el PDF (una página por etiqueta, tamaño exacto del papel, medidas por defecto 58 × 40 mm centralizadas en `vacuum-label-spec.ts` y sobrescribibles por organización). Se imprime desde el navegador de la computadora de la impresora térmica: no hay impresión remota ni RAW. El EAN-13 se dibuja con un codificador propio de ~60 líneas (sin dependencia ni servicio web) y el armado se replica en SQL y TS con los mismos vectores de prueba.
 
 **Motivo:** velocidad y trazabilidad al envasar muchos paquetes seguidos, sin asumir reglas sanitarias ni el formato de la caja del supermercado.
+
+## D-091 — Envasados se venden desde el POS: EAN-13 de importe variable, importe comercial único y paquetes con estado
+
+**Status:** Active — implementado 2026-11-07; migración `202611070095` sin aplicar. Extiende D-090 sin reconstruirlo ni tocar `products`, el pricing de las ventas por peso/unidad ni el ledger.
+
+**Importe comercial único.** Con el esquema `PRICE_EMBEDDED`, el importe del paquete (impreso, embebido en el EAN, mostrado en el POS y cobrado) es el calculado precio/kg × peso redondeado half-up a un múltiplo del divisor del valor (divisor 100 = pesos enteros); `vacuum_packages.computed_total_cents` conserva el cálculo con centavos sólo para auditoría. Con otros divisores o esquemas de peso no cambia nada. El esquema sigue siendo configuración (inicial: precio embebido, prefijo 20, PLU 4, valor 6, divisor 100).
+
+**Línea `PACKAGE`.** El POS reconoce el EAN (13 dígitos, verificador válido, prefijo del esquema) contra los paquetes DISPONIBLES de su sucursal (SQLite, sin Internet), también desde cualquier sucursal. La línea lleva el paquete, su EAN, los gramos reales y el importe FIJO: nunca precio/kg × peso, sin promociones, Pack, descuentos por cantidad ni precio manual (no se usa el mecanismo de Central); sólo admite el recargo de tarjeta una vez sobre ese importe. Envasar sigue sin mover stock: la venta descuenta del ledger existente los gramos reales (un movimiento `SALE` por línea) y marca el paquete vendido.
+
+**Estado sin romper la inmutabilidad.** `vacuum_packages` no se modifica: `vacuum_package_state` (AVAILABLE / SOLD / VOIDED + sucursal donde está), `vacuum_package_events` (historial) y `vacuum_package_conflicts`. Anular una venta (`cancel_sale`, Mercado Pago sin acreditar) libera el paquete y reactivarla lo reclama de nuevo (trigger sobre `sales.status`). Enviar un paquete a otra sucursal sólo cambia dónde lo ofrece el POS; el stock del corte se sigue moviendo con las transferencias.
+
+**Códigos repetidos.** Mismo EAN y mismo peso: FIFO (el más antiguo); mismo EAN y pesos distintos: el cajero elige (peso, lote, fecha). FIFO no es identificación física.
+
+**Offline y conflictos.** No hay exclusividad global con cajas desconectadas: la caja marca el paquete vendido en la misma transacción local, y el servidor, al sincronizar, NUNCA descarta una venta ya cobrada: si el paquete ya estaba vendido / anulado / en otra sucursal registra la venta igual (con su movimiento de stock) y abre un conflicto para resolver en Admin → Envasados → Conflictos de venta. Un EAN que cumple el esquema queda reservado: no puede cargarse como código de barras del catálogo y un escaneo reservado nunca llega al alta rápida.
+
+**Motivo:** que Fran envase, imprima la etiqueta con el precio incorporado y cualquier caja la cobre por ese importe descontando el peso real, sin otro sistema de stock.

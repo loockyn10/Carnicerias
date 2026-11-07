@@ -156,6 +156,19 @@ export interface TicketLine {
   branchPromotionDiscountBps?: number;
   branchPromotionDiscountedUnits?: number;
   branchPromotionDiscountCents?: bigint;
+  /**
+   * Línea PACKAGE (paquete envasado al vacío, D-091): `weightGrams` es el peso REAL del paquete y su importe es FIJO
+   * (`vacuumPackageTotalCents`, el que está impreso y embebido en el EAN): nunca se recalcula precio/kg × peso. Sólo admite el recargo de tarjeta
+   * (sobre ese importe fijo); no recibe promociones, Pack, descuentos por cantidad ni precio manual. `pricePerKgCents` y
+   * `originalPricePerKgCents` son precios por kg DERIVADOS del importe, sólo para mostrar.
+   */
+  vacuumPackageId?: string;
+  /** EAN-13 del paquete (el que se escaneó). */
+  vacuumEan13?: string;
+  /** Importe fijo del paquete en centavos (sin recargo de tarjeta). */
+  vacuumPackageTotalCents?: bigint;
+  /** Sólo para mostrar el lote en el ticket (nunca se envía). */
+  vacuumLot?: string;
 }
 
 // ---------------------------------------------------------------------------------------------

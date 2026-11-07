@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { TicketLineDetail } from "./TicketLineDetail";
-import { applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, type DiscountRule } from "./lib/ticket-pricing";
+import { applyManualPrice, buildUnitTicketLine, buildVacuumPackageLine, buildWeightTicketLine, type DiscountRule } from "./lib/ticket-pricing";
 
 const molida = { productId: "molida", productName: "MOLIDA VACUNA", pricePerKgCents: 1_100_000n };
 const promo: DiscountRule = {
@@ -91,5 +91,17 @@ describe("TicketLineDetail", () => {
       expect(html).toContain("Pack 20% OFF");
       expect(html).not.toContain("Descuento");
     });
+  });
+});
+
+describe("TicketLineDetail: paquete envasado al vacío", () => {
+  const candidate = { packageId: "p1", productId: "vacio", productName: "Vacío", ean13: "2000120112506", weightGrams: 750, chargeCents: 1_125_000n, lot: "CEN-261101-0001" };
+
+  it("muestra peso, importe fijo y lote, sin precio/kg ni promociones", () => {
+    const html = render(buildVacuumPackageLine(candidate, "l", "CASH", 0n));
+    expect(html).toContain("0,750 kg · importe fijo del paquete · Lote CEN-261101-0001");
+    expect(html).toContain("Envasado al vacío");
+    expect(html).not.toContain("/kg");
+    expect(html).not.toContain("final-price-per-kg");
   });
 });

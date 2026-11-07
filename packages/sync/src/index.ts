@@ -68,6 +68,37 @@ export interface OfflineSaleItemPayload {
   branchPromotionDiscountBps?: number;
   branchPromotionDiscountedUnits?: number;
   branchPromotionDiscountCents?: string;
+  /** Línea PACKAGE (paquete envasado al vacío): sus tres claves viajan sólo en esa línea. El importe es el fijo del paquete; el servidor lo valida
+   * contra `vacuum_packages` y descuenta del ledger los gramos reales (`weightGrams`). */
+  vacuumPackageId?: string;
+  vacuumEan13?: string;
+  vacuumPackageTotalCents?: string;
+}
+
+/** Estado de Envasados de la sucursal del dispositivo (`get_pos_vacuum_state`): lo único que el POS necesita para reconocer y vender paquetes sin Internet.
+ * Siempre un snapshot completo (nunca un delta). */
+export interface VacuumStatePayload {
+  serverTime: string;
+  branchId: string;
+  /** null = la organización todavía no configuró el esquema EAN-13 de Envasados. */
+  scheme: { scheme: "PRICE_EMBEDDED" | "WEIGHT_EMBEDDED"; prefix: string; pluDigits: number; valueDigits: number; valueStep: number } | null;
+  /** PLU de cada corte habilitado para envasar. */
+  plus: { productId: string; plu: string }[];
+  /** Paquetes DISPONIBLES de la sucursal, del más antiguo al más nuevo (FIFO). */
+  packages: VacuumPackageRow[];
+}
+
+export interface VacuumPackageRow {
+  packageId: string;
+  productId: string;
+  productName: string;
+  ean13: string;
+  weightGrams: number;
+  /** Importe a cobrar (centavos, decimal string). */
+  chargeCents: string;
+  lot: string;
+  packedOn: string;
+  expiresOn: string;
 }
 
 /** Proveedor que debe verificar el cobro. Hoy sólo Mercado Pago, siempre sobre method TRANSFER
@@ -287,6 +318,9 @@ export function createOfflineSale(input: CreateOfflineSaleInput): OfflineSalePay
           packDiscountBps: line.packDiscountBps ?? 0,
           packDiscountCents: (line.packDiscountCents ?? 0n).toString()
         }
+      : {}),
+    ...(line.vacuumPackageId && line.vacuumEan13 && line.vacuumPackageTotalCents != null
+      ? { vacuumPackageId: line.vacuumPackageId, vacuumEan13: line.vacuumEan13, vacuumPackageTotalCents: line.vacuumPackageTotalCents.toString() }
       : {}),
     ...(line.branchPromotionId && !line.soldAsPack && !line.manualPriceApplied && line.quantityUnits != null
       ? {

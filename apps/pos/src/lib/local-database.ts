@@ -4,7 +4,8 @@ import type {
   BranchStockSnapshot,
   CatalogPullPayload,
   OfflineSalePayload,
-  OutboxRecord
+  OutboxRecord,
+  VacuumStatePayload
 } from "@carnicerias/sync";
 
 export interface LocalDiscountRow {
@@ -150,6 +151,16 @@ export interface PendingProviderPayment {
   completedAt: string;
   verificationStatus: string;
 }
+/** Estado de Envasados de la sucursal del dispositivo tal como lo guarda SQLite (sin Internet): el esquema EAN-13, el PLU de cada corte y los paquetes que esta caja todavía puede vender. */
+export interface LocalVacuumState {
+  scheme: { scheme: "PRICE_EMBEDDED" | "WEIGHT_EMBEDDED"; prefix: string; pluDigits: number; valueDigits: number; valueStep: number } | null;
+  plus: { productId: string; plu: string }[];
+  /** Del más antiguo al más nuevo (FIFO). Los que esta caja ya vendió no figuran. */
+  packages: {
+    packageId: string; productId: string; productName: string; ean13: string; weightGrams: number;
+    chargeCents: string; lot: string; packedOn: string; expiresOn: string;
+  }[];
+}
 export interface OutboxSummary { pending: number; syncing: number; failed: number; synced: number; lastError: string | null; }
 export interface OperatorRosterRow { profileId: string; displayName: string; roleName: string; hasPin: boolean; hasShiftIssue: boolean }
 export interface VerifiedOperatorInput { profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string }
@@ -176,6 +187,8 @@ export const localDatabase = {
     desktopVoid("apply_catalog_pull", { pull, profileId, userEmail }),
   branchStock: (branchId: string) => desktopOnly<LocalBranchStock>("get_local_branch_stock", { branchId }),
   applyBranchStock: (snapshot: BranchStockSnapshot) => desktopVoid("apply_branch_stock", { snapshot }),
+  applyVacuumState: (vacuum: VacuumStatePayload) => desktopVoid("apply_vacuum_state", { vacuum }),
+  vacuumState: (branchId: string) => desktopOnly<LocalVacuumState>("get_local_vacuum_state", { branchId }),
   applyCommercialConfig: (config: unknown) => desktopVoid("apply_commercial_config", { config }),
   applyOperatorRoster: (operators: OperatorRosterRow[], maxShiftHours: number) => desktopVoid("apply_operator_roster", { operators, maxShiftHours }),
   operators: () => desktopOnly<LocalOperator[]>("get_local_operators"),

@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Envasados vendidos desde el POS: aplicar y probar (acción del usuario)
+
+Implementado 2026-11-07 (D-091). **Migración pendiente: `202611070095_vacuum_pos_sales.sql`** (verificado 2026-11-07 con `supabase migration list --linked`: es la única que falta). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin y de instalar el POS nuevo (`022_vacuum_packages.sql` de SQLite se aplica solo al abrir la app) → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+1. Envasados → Configuración: cargar el esquema precio embebido, prefijo `20`, PLU 4, valor 6, divisor 100. Si hay códigos de barras del catálogo que empiezan con `20` el servidor lo rechaza (elegir otro prefijo o corregir esos códigos).
+2. Envasar un corte y probar el ejemplo: Vacío, PLU 12, 0,750 kg a $15.000/kg → $11.250, EAN `2000120112506`. Imprimir y escanear la etiqueta con el lector real en una caja: tiene que sumar $11.250, descontar 750 g y no ofrecer de nuevo ese paquete. Probar también tarjeta (recargo sobre $11.250), cancelar la venta (el paquete vuelve a estar disponible) y dos paquetes del mismo código con pesos distintos (aparece el selector).
+3. Enviar un paquete a otra sucursal desde «Envasados recientes» y venderlo ahí (esa caja tiene que sincronizar antes de verlo).
+4. Dos cajas sin Internet vendiendo el mismo paquete: al sincronizar, la segunda venta queda registrada y aparece en «Conflictos de venta».
+5. Estado real pendiente de verificar: el lector de código de barras físico y la lectura del EAN por la caja de un supermercado externo (el supermercado debe aceptar el esquema acordado).
+
 ## P0 — Pollos y Envasados: aplicar y probar (acción del usuario)
 
 Implementado 2026-11-01 (D-089, D-090). **Migraciones pendientes, en este orden: `202611010092_poultry_module.sql`, `202611010093_vacuum_packaging.sql` y `202611060094_poultry_products_link_catalog.sql`** (esta última vincula los productos de Pollos al catálogo general) (tablas nuevas `poultry_*` y `*_vacuum_*`, permisos `poultry.*` y `vacuum.*` para el rol de administración, RPC; no modifican datos existentes ni el POS). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).

@@ -6,6 +6,15 @@ import { describeUnitLine, finalPricePerKgCents, finalPricePerUnitCents } from "
 
 /** Montos y badges de una card del ticket (se muestra sólo cuando el método de pago permite ver importes). */
 export function TicketLineDetail({ line }: { line: TicketLine }) {
+  // Paquete envasado al vacío: importe FIJO (el impreso en su etiqueta), no precio/kg × peso. Sin precio por kg, ni promociones, ni precio manual.
+  if (line.vacuumPackageId != null) {
+    return (
+      <>
+        <p className="mt-1 text-sm text-stone-400" data-testid="vacuum-package-line">{formatWeight(line.weightGrams)} · importe fijo del paquete{line.vacuumLot ? ` · Lote ${line.vacuumLot}` : ""}</p>
+        <p className="mt-1 text-xs font-bold text-sky-300">Envasado al vacío</p>
+      </>
+    );
+  }
   const isUnit = line.quantityUnits != null;
   // Mismo concepto para WEIGHT y UNIT: total real de la línea / cantidad real, sólo si difiere del precio base que ya se muestra.
   const finalPrice = isUnit ? finalPricePerUnitCents(line) : finalPricePerKgCents(line);

@@ -56,6 +56,36 @@ export async function createVacuumPackageAction(raw: unknown): Promise<{ ok: tru
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar el paquete" }; }
 }
 
+/** Envía paquetes DISPONIBLES a otra sucursal: sólo cambia dónde los ofrece el POS (el stock del corte se mueve con las transferencias de siempre). */
+export async function moveVacuumPackagesAction(packageIds: string[], toBranchId: string): Promise<{ ok: true; moved: number } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(toBranchId) || packageIds.length === 0 || packageIds.length > 500 || !packageIds.every(isUuid)) throw new Error("Elegí los paquetes y la sucursal de destino");
+    const moved = await rpc("move_vacuum_packages", { p_package_ids: packageIds, p_to_branch_id: toBranchId });
+    revalidatePath("/admin/vacuum", "layout");
+    return { ok: true, moved };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo enviar el paquete" }; }
+}
+
+/** Anula un paquete disponible (se descartó o se rompió el vacío). No mueve stock: envasar nunca lo descontó. */
+export async function voidVacuumPackageAction(packageId: string, reason: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(packageId)) throw new Error("Paquete inválido");
+    await rpc("void_vacuum_package", { p_package_id: packageId, p_reason: reason.trim().slice(0, 300) });
+    revalidatePath("/admin/vacuum", "layout");
+    return { ok: true };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo anular el paquete" }; }
+}
+
+/** Da por resuelto un conflicto de venta de un paquete, con la nota de cómo se resolvió. */
+export async function resolveVacuumConflictAction(conflictId: string, note: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(conflictId)) throw new Error("Conflicto inválido");
+    await rpc("resolve_vacuum_package_conflict", { p_conflict_id: conflictId, p_note: note.trim().slice(0, 500) });
+    revalidatePath("/admin/vacuum", "layout");
+    return { ok: true };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo resolver el conflicto" }; }
+}
+
 export async function saveVacuumSettingsAction(_: VacuumFormState, formData: FormData): Promise<VacuumFormState> {
   try {
     const optional = (key: string) => text(formData, key);

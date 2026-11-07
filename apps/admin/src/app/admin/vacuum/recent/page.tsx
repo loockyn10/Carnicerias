@@ -2,13 +2,14 @@ import Link from "next/link";
 
 import { SectionTabs } from "../../../../components/section-tabs";
 import { VacuumLabelPreview } from "../../../../components/vacuum-label-preview";
+import { VacuumPackageActions } from "../../../../components/vacuum-package-actions";
 import { VacuumReprintButtons } from "../../../../components/vacuum-reprint-buttons";
 import { requireAdminContext } from "../../../../lib/admin";
 import { formatLocalDateTime, isIsoDate } from "../../../../lib/date-range";
 import { createPerfLogger } from "../../../../lib/perf";
 import { createClient } from "../../../../lib/supabase/server";
 import { isUuid } from "../../../../lib/uuid";
-import { formatIsoDate, moneyText, parseVacuumPackage, parseVacuumPackagesPage, parseVacuumConfigPage, vacuumDims, weightText } from "../../../../lib/vacuum";
+import { formatIsoDate, moneyText, parseVacuumPackage, parseVacuumPackagesPage, parseVacuumConfigPage, vacuumDims, VACUUM_PACKAGE_STATUS_LABELS, weightText } from "../../../../lib/vacuum";
 import { buildInfoLabelLayout, buildPriceLabelLayout, packageToLabelData } from "../../../../lib/vacuum-label-layout";
 import { VACUUM_TABS } from "../../../../lib/vacuum-tabs";
 
@@ -32,19 +33,21 @@ export default async function VacuumRecentPage({ searchParams }: { searchParams:
   const page = Math.max(1, Number.parseInt(value("page") || "1", 10) || 1);
 
   const supabase = await createClient();
-  const [listResult, productsResult, detailResult] = await Promise.all([
+  const [listResult, productsResult, detailResult, branchesResult] = await Promise.all([
     perf.measure("packages", supabase.rpc("list_vacuum_packages_page", {
       ...(from ? { p_from: from } : {}), ...(to ? { p_to: to } : {}), ...(productId ? { p_product_id: productId } : {}), ...(search ? { p_search: search } : {}),
       p_limit: PAGE_SIZE, p_offset: (page - 1) * PAGE_SIZE
     })),
     perf.measure("products", supabase.rpc("list_vacuum_config_products_page", { p_filter: "enabled", p_limit: 200 })),
-    packageId ? perf.measure("detail", supabase.rpc("get_vacuum_package", { p_package_id: packageId })) : Promise.resolve({ data: null, error: null })
+    packageId ? perf.measure("detail", supabase.rpc("get_vacuum_package", { p_package_id: packageId })) : Promise.resolve({ data: null, error: null }),
+    perf.measure("branches", supabase.from("branches").select("id, name").eq("organization_id", context.organizationId).eq("active", true).order("name"))
   ]);
   perf.flush();
   const list = parseVacuumPackagesPage(listResult.data);
   const products = parseVacuumConfigPage(productsResult.data).rows;
   const detail = parseVacuumPackage(detailResult.data);
-  const error = listResult.error ?? productsResult.error ?? detailResult.error;
+  const branches = branchesResult.data ?? [];
+  const error = listResult.error ?? productsResult.error ?? detailResult.error ?? branchesResult.error;
   const totalPages = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
   const href = (extra: Record<string, string>) => {
     const query = new URLSearchParams();
@@ -91,13 +94,14 @@ export default async function VacuumRecentPage({ searchParams }: { searchParams:
     <p className="mt-3 text-sm text-stone-500">{list.total} paquete{list.total === 1 ? "" : "s"}</p>
 
     <section className="mt-3 overflow-hidden rounded-xl bg-white shadow-sm">
-      <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm" data-testid="vacuum-recent">
-        <thead className="border-b border-stone-200 bg-stone-50 text-stone-500"><tr><th className="p-4">Corte / lote</th><th className="p-4">Peso</th><th className="p-4">Precio</th><th className="p-4">Fechas</th><th className="p-4">EAN-13</th><th className="p-4">Impresiones</th><th className="p-4 text-right">Acciones</th></tr></thead>
+      <div className="overflow-x-auto"><table className="w-full min-w-[1100px] text-left text-sm" data-testid="vacuum-recent">
+        <thead className="border-b border-stone-200 bg-stone-50 text-stone-500"><tr><th className="p-4">Corte / lote</th><th className="p-4">Peso</th><th className="p-4">Precio</th><th className="p-4">Estado</th><th className="p-4">Fechas</th><th className="p-4">EAN-13</th><th className="p-4">Impresiones</th><th className="p-4 text-right">Acciones</th></tr></thead>
         <tbody>{list.rows.map((row) => (
           <tr className="border-b border-stone-100 last:border-0" key={row.id}>
             <td className="p-4"><strong>{row.productName}</strong><span className="block text-xs text-stone-500">{row.lot} · {row.branchName}</span></td>
             <td className="p-4">{weightText(row.weightGrams)}<span className="block text-xs text-stone-500">{moneyText(row.pricePerKgCents)}/kg</span></td>
             <td className="p-4 font-bold">{moneyText(row.totalCents)}</td>
+            <td className="p-4 text-xs" data-testid="vacuum-package-status"><strong>{VACUUM_PACKAGE_STATUS_LABELS[row.status]}</strong>{row.currentBranchName ? <span className="block text-stone-500">en {row.currentBranchName}</span> : null}{row.status === "AVAILABLE" ? <VacuumPackageActions branches={branches} currentBranchId={row.currentBranchId} packageId={row.id} /> : null}</td>
             <td className="p-4 text-xs text-stone-600">Elab. {formatIsoDate(row.packedOn)}<br />Venc. {formatIsoDate(row.expiresOn)}</td>
             <td className="p-4 font-mono text-xs">{row.ean13}</td>
             <td className="p-4 text-xs text-stone-500">{row.printCount}{row.lastPrintedAt ? <span className="block">{formatLocalDateTime(row.lastPrintedAt, context.timezone)}</span> : null}</td>

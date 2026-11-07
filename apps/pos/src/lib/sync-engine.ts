@@ -4,7 +4,8 @@ import {
   type BranchStockSnapshot,
   type CatalogPullPayload,
   type OfflineSalePayload,
-  type SyncStatusSnapshot
+  type SyncStatusSnapshot,
+  type VacuumStatePayload
 } from "@carnicerias/sync";
 
 import { localDatabase, type LocalRuntime } from "./local-database";
@@ -76,6 +77,23 @@ async function refreshBranchStock(runtime: LocalRuntime): Promise<void> {
     await localDatabase.applyBranchStock(data as unknown as BranchStockSnapshot);
   } catch (stockError) {
     console.warn("Branch stock refresh skipped:", stockError);
+  }
+}
+
+/**
+ * Refreshes the Envasados state the POS needs to recognise and sell vacuum packages WITHOUT Internet: the EAN-13 scheme, the PLU of each cut and
+ * this branch's available packages. Runs AFTER the outbox push on purpose: a package sold by this device is then already SOLD on the server and drops
+ * out of the list. Best-effort like the stock refresh: offline or an older server without the RPC keeps the last stored state and never fails the sync.
+ */
+async function refreshVacuumState(runtime: LocalRuntime): Promise<void> {
+  if (!runtime.branchId) return;
+  try {
+    const { data, error } = await supabase.rpc("get_pos_vacuum_state", { p_branch_id: runtime.branchId });
+    if (error) throw error;
+    if (!data || Array.isArray(data) || typeof data !== "object") throw new Error("Invalid vacuum state payload");
+    await localDatabase.applyVacuumState(data as unknown as VacuumStatePayload);
+  } catch (vacuumError) {
+    console.warn("Vacuum state refresh skipped:", vacuumError);
   }
 }
 
@@ -199,6 +217,7 @@ export async function synchronizeDesktop(
     }
 
     await refreshBranchStock(runtime);
+    await refreshVacuumState(runtime);
     await refreshDeviceCapabilities(runtime);
     runtime = await localDatabase.runtime();
     listener({

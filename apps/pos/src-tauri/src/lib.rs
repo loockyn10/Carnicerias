@@ -31,6 +31,7 @@ const PACK_CONFIG_SCHEMA: &str = include_str!("../migrations/018_pack_config_ver
 const PACK_DISCOUNT_SCHEMA: &str = include_str!("../migrations/019_pack_discount_single_category_threshold_promotions.sql");
 const RECEIPT_SNAPSHOTS_SCHEMA: &str = include_str!("../migrations/020_receipt_snapshots.sql");
 const GLOBAL_QUANTITY_DISCOUNTS_SCHEMA: &str = include_str!("../migrations/021_product_global_quantity_discounts.sql");
+const VACUUM_PACKAGES_SCHEMA: &str = include_str!("../migrations/022_vacuum_packages.sql");
 
 /// Un producto sin precio (precio 0, importado desde SimplyGest) nunca se vende: el POS pide el precio antes de agregarlo al ticket.
 const PRICE_REQUIRED: &str = "PRICE_REQUIRED: el producto no tiene precio; fijá el precio antes de venderlo.";
@@ -131,6 +132,87 @@ struct BranchStockSnapshotItem {
 struct BranchStockSnapshot {
     branch_id: String,
     items: Vec<BranchStockSnapshotItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VacuumSchemeIn {
+    scheme: String,
+    prefix: String,
+    plu_digits: i64,
+    value_digits: i64,
+    value_step: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VacuumPluIn {
+    product_id: String,
+    plu: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VacuumPackageIn {
+    package_id: String,
+    product_id: String,
+    product_name: String,
+    ean13: String,
+    weight_grams: i64,
+    charge_cents: String,
+    lot: String,
+    packed_on: String,
+    expires_on: String,
+}
+
+/// Snapshot completo de Envasados de la sucursal del dispositivo (`get_pos_vacuum_state`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VacuumStateIn {
+    branch_id: String,
+    scheme: Option<VacuumSchemeIn>,
+    plus: Vec<VacuumPluIn>,
+    packages: Vec<VacuumPackageIn>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVacuumScheme {
+    scheme: String,
+    prefix: String,
+    plu_digits: i64,
+    value_digits: i64,
+    value_step: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVacuumPlu {
+    product_id: String,
+    plu: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVacuumPackage {
+    package_id: String,
+    product_id: String,
+    product_name: String,
+    ean13: String,
+    weight_grams: i64,
+    charge_cents: String,
+    lot: String,
+    packed_on: String,
+    expires_on: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVacuumState {
+    scheme: Option<LocalVacuumScheme>,
+    plus: Vec<LocalVacuumPlu>,
+    /// Sólo los paquetes que esta caja todavía puede vender (los que ya vendió localmente no figuran).
+    packages: Vec<LocalVacuumPackage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -320,6 +402,15 @@ struct OfflineSaleItem {
     branch_promotion_discounted_units: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     branch_promotion_discount_cents: Option<String>,
+    /// Línea PACKAGE (paquete envasado al vacío, D-091): peso REAL en `weight_grams` e importe FIJO en `vacuum_package_total_cents` (el impreso y
+    /// embebido en el EAN), nunca precio/kg × peso. Las tres claves se omiten al serializar cuando la línea no es un paquete: el payload del
+    /// outbox de una línea normal no cambia.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vacuum_package_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vacuum_ean13: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vacuum_package_total_cents: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -655,6 +746,14 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction.execute_batch(GLOBAL_QUANTITY_DISCOUNTS_SCHEMA).map_err(|error| error.to_string())?;
         transaction.execute("insert into schema_migrations(version, applied_at) values (21, ?1)", [now()]).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+
+    let vacuum_packages_applied = connection.query_row("select exists(select 1 from schema_migrations where version = 22)", [], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?;
+    if !vacuum_packages_applied {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch(VACUUM_PACKAGES_SCHEMA).map_err(|error| error.to_string())?;
+        transaction.execute("insert into schema_migrations(version, applied_at) values (22, ?1)", [now()]).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
 
@@ -1152,6 +1251,176 @@ fn local_branch_stock_inner(connection: &Connection, branch_id: &str) -> Result<
     Ok(LocalBranchStock { snapshot_applied: true, items })
 }
 
+/// Reemplaza el estado de Envasados de la sucursal con el del servidor (snapshot completo, nunca un delta). Lo que esta caja ya vendió y todavía no
+/// confirmó el servidor (`sold_sale_id` con su venta pendiente en el outbox) se CONSERVA marcado: el paquete no se vuelve a ofrecer aunque el
+/// servidor todavía lo tenga disponible. Cuando la venta ya sincronizó, el servidor lo da por vendido y la marca local se descarta.
+fn apply_vacuum_state_inner(connection: &mut Connection, state: &VacuumStateIn) -> Result<(), String> {
+    let device_branch: Option<String> = connection
+        .query_row("select branch_id from local_device where singleton = 1", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if device_branch.as_deref() != Some(state.branch_id.as_str()) {
+        return Err("Vacuum state is for a different branch than this device".to_string());
+    }
+    let mut packages: Vec<(&VacuumPackageIn, i64)> = Vec::with_capacity(state.packages.len());
+    for package in &state.packages {
+        let charge = parse_i64(&package.charge_cents, "chargeCents")?;
+        if charge <= 0 || package.weight_grams <= 0 {
+            return Err("Vacuum package with a non-positive amount or weight".to_string());
+        }
+        packages.push((package, charge));
+    }
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let timestamp = now();
+    transaction.execute("delete from vacuum_scheme", []).map_err(|error| error.to_string())?;
+    if let Some(scheme) = &state.scheme {
+        transaction
+            .execute(
+                "insert into vacuum_scheme(singleton, branch_id, scheme, prefix, plu_digits, value_digits, value_step, applied_at) values (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![state.branch_id, scheme.scheme, scheme.prefix, scheme.plu_digits, scheme.value_digits, scheme.value_step, timestamp],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.execute("delete from catalog_vacuum_plu", []).map_err(|error| error.to_string())?;
+    for plu in &state.plus {
+        transaction
+            .execute("insert or replace into catalog_vacuum_plu(product_id, plu) values (?1, ?2)", params![plu.product_id, plu.plu])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction
+        .execute(
+            "delete from local_vacuum_packages where sold_sale_id is not null and sold_sale_id in
+               (select aggregate_id from sync_outbox where aggregate_type = 'SALE' and status = 'SYNCED')",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.execute("delete from local_vacuum_packages where sold_sale_id is null", []).map_err(|error| error.to_string())?;
+    for (package, charge) in packages {
+        transaction
+            .execute(
+                "insert into local_vacuum_packages(package_id, product_id, product_name, ean13, weight_grams, charge_cents, lot, packed_on, expires_on, sold_sale_id, updated_at)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, null, ?10)
+                 on conflict(package_id) do nothing",
+                params![package.package_id, package.product_id, package.product_name, package.ean13, package.weight_grams, charge, package.lot, package.packed_on, package.expires_on, timestamp],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    set_metadata(&transaction, "vacuum_state_applied_at", &timestamp, &timestamp)?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn local_vacuum_state_inner(connection: &Connection, branch_id: &str) -> Result<LocalVacuumState, String> {
+    let scheme = connection
+        .query_row(
+            "select scheme, prefix, plu_digits, value_digits, value_step from vacuum_scheme where singleton = 1 and branch_id = ?1",
+            [branch_id],
+            |row| Ok(LocalVacuumScheme { scheme: row.get(0)?, prefix: row.get(1)?, plu_digits: row.get(2)?, value_digits: row.get(3)?, value_step: row.get(4)? }),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let mut plu_statement = connection.prepare("select product_id, plu from catalog_vacuum_plu order by product_id").map_err(|error| error.to_string())?;
+    let plus = plu_statement
+        .query_map([], |row| Ok(LocalVacuumPlu { product_id: row.get(0)?, plu: row.get(1)? }))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut package_statement = connection
+        .prepare(
+            "select package_id, product_id, product_name, ean13, weight_grams, charge_cents, lot, packed_on, expires_on
+             from local_vacuum_packages where sold_sale_id is null order by packed_on, lot, package_id",
+        )
+        .map_err(|error| error.to_string())?;
+    let packages = package_statement
+        .query_map([], |row| {
+            Ok(LocalVacuumPackage {
+                package_id: row.get(0)?, product_id: row.get(1)?, product_name: row.get(2)?, ean13: row.get(3)?, weight_grams: row.get(4)?,
+                charge_cents: row.get::<_, i64>(5)?.to_string(), lot: row.get(6)?, packed_on: row.get(7)?, expires_on: row.get(8)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(LocalVacuumState { scheme, plus, packages })
+}
+
+/// Valida UNA línea PACKAGE contra el paquete que esta caja tiene disponible y devuelve (gramos, subtotal). El importe es el FIJO del paquete:
+/// jamás precio/kg × peso. Lo único que puede sumarse es el recargo de tarjeta, una vez sobre el importe completo (mismo cálculo que el servidor,
+/// `sync_vacuum_package_line`). Sin promociones, Pack, descuentos ni precio manual.
+fn validate_vacuum_package_line(transaction: &Transaction<'_>, sale: &OfflineSalePayload, item: &OfflineSaleItem, package_id: &str, price: i64, original_price: i64) -> Result<(i64, i64), String> {
+    let invalid = |detail: &str| format!("Invalid vacuum package line: {detail}");
+    let grams = item.weight_grams.ok_or_else(|| invalid("missing weight"))?;
+    let ean13 = item.vacuum_ean13.as_deref().ok_or_else(|| invalid("missing EAN-13"))?;
+    let fixed_total = item.vacuum_package_total_cents.as_deref().map(|value| parse_i64(value, "vacuumPackageTotalCents")).transpose()?.ok_or_else(|| invalid("missing amount"))?;
+    let subtotal = parse_i64(&item.subtotal_cents, "subtotalCents")?;
+    let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
+    let cash_discount_bps = item.cash_discount_bps.as_deref().map(|value| parse_i64(value, "cashDiscountBps")).transpose()?.unwrap_or(0);
+    let cash_discount_cents = item.cash_discount_cents.as_deref().map(|value| parse_i64(value, "cashDiscountCents")).transpose()?.unwrap_or(0);
+    let card_surcharge_cents = item.card_surcharge_cents.as_deref().map(|value| parse_i64(value, "cardSurchargeCents")).transpose()?.unwrap_or(0);
+    let promotion_discount_cents = item.promotion_discount_cents.as_deref().map(|value| parse_i64(value, "promotionDiscountCents")).transpose()?.unwrap_or(0);
+    if grams <= 0 || fixed_total <= 0 || item.quantity_units.is_some() || item.manual_price_applied || item.manual_unit_price_cents.is_some() || item.manual_adjustment_cents.is_some()
+        || item.sold_as_pack || item.pack_count.is_some() || item.pack_size_units_snapshot.is_some() || item.pack_discount_bps.is_some() || item.pack_discount_cents.is_some()
+        || item.pack_config_id.is_some() || item.branch_promotion_id.is_some() || item.branch_promotion_minimum_units.is_some() || item.branch_promotion_discount_bps.is_some()
+        || item.branch_promotion_discounted_units.is_some() || item.branch_promotion_discount_cents.is_some()
+        || item.discount_rule_id.is_some() || item.discount_type.is_some() || item.discount_value.is_some() || item.promotion_mode.is_some()
+        || discount_cents != 0 || cash_discount_cents != 0 || promotion_discount_cents != 0
+    {
+        return Err(invalid("a package has a fixed amount and takes no quantity, promotion, discount or manual price"));
+    }
+    if !(0..10_000).contains(&cash_discount_bps) || (payment_method_receives_discount(&sale.payment.method) && cash_discount_bps != 0) {
+        return Err(invalid("invalid card surcharge"));
+    }
+    let round_half_up = |numerator: i64, denominator: i64| numerator.checked_add(denominator / 2).map(|value| value / denominator).ok_or_else(|| "Sale amount overflow".to_string());
+    let expected_subtotal = if cash_discount_bps > 0 {
+        round_half_up(fixed_total.checked_mul(10_000 + cash_discount_bps).ok_or_else(|| "Sale amount overflow".to_string())?, 10_000)?
+    } else { fixed_total };
+    let expected_list_price = round_half_up(fixed_total.checked_mul(1000).ok_or_else(|| "Sale amount overflow".to_string())?, grams)?;
+    let expected_final_price = round_half_up(subtotal.checked_mul(1000).ok_or_else(|| "Sale amount overflow".to_string())?, grams)?;
+    if subtotal != expected_subtotal || card_surcharge_cents != subtotal - fixed_total || original_price != expected_list_price || price != expected_final_price {
+        return Err(invalid("the amount does not match the package"));
+    }
+    // El paquete tiene que estar disponible en ESTA caja con ese mismo peso, EAN e importe (los datos del servidor, sincronizados).
+    let local: Option<(String, i64, String, i64, Option<String>)> = transaction
+        .query_row(
+            "select product_id, weight_grams, ean13, charge_cents, sold_sale_id from local_vacuum_packages where package_id = ?1",
+            [package_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((local_product, local_grams, local_ean, local_charge, sold_sale_id)) = local else {
+        return Err("El paquete no está disponible en esta caja (sincronizá y volvé a escanearlo)".to_string());
+    };
+    if sold_sale_id.is_some() {
+        return Err("El paquete ya fue vendido en esta caja".to_string());
+    }
+    if local_product != item.product_id || local_grams != grams || local_ean != ean13 || local_charge != fixed_total {
+        return Err(invalid("it does not match the package registered on this device"));
+    }
+    let product_in_catalog: bool = transaction
+        .query_row(
+            "select exists(select 1 from catalog_products p join catalog_prices cp on cp.product_id = p.id
+               where p.id = ?1 and p.active = 1 and p.unit_type = 'WEIGHT' and cp.branch_id = ?2)",
+            params![item.product_id, sale.branch_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !product_in_catalog {
+        return Err(format!("Product {} is unavailable in this branch", item.product_id));
+    }
+    Ok((grams, subtotal))
+}
+
+#[tauri::command]
+fn apply_vacuum_state(state: State<'_, DatabaseState>, vacuum: VacuumStateIn) -> Result<(), String> {
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    apply_vacuum_state_inner(&mut connection, &vacuum)
+}
+
+#[tauri::command]
+fn get_local_vacuum_state(state: State<'_, DatabaseState>, branch_id: String) -> Result<LocalVacuumState, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    local_vacuum_state_inner(&connection, &branch_id)
+}
+
 #[tauri::command]
 fn apply_branch_stock(state: State<'_, DatabaseState>, snapshot: BranchStockSnapshot) -> Result<(), String> {
     let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
@@ -1437,6 +1706,13 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
         // A product without price (0) is never sold, whatever the UI did: the line would be worth $0.
         if price <= 0 || original_price <= 0 {
             return Err(PRICE_REQUIRED.to_string());
+        }
+        // Línea de PAQUETE ENVASADO (D-091): importe fijo del paquete y gramos reales; no pasa por ninguna regla de precio/kg.
+        if let Some(package_id) = item.vacuum_package_id.as_deref() {
+            let (package_grams, package_subtotal) = validate_vacuum_package_line(transaction, sale, item, package_id, price, original_price)?;
+            computed_weight = computed_weight.checked_add(package_grams).ok_or_else(|| "Sale weight overflow".to_string())?;
+            computed_total = computed_total.checked_add(package_subtotal).ok_or_else(|| "Sale total overflow".to_string())?;
+            continue;
         }
         let subtotal = parse_i64(&item.subtotal_cents, "subtotalCents")?;
         let discount_cents = item.discount_cents.as_deref().map(|value| parse_i64(value, "discountCents")).transpose()?.unwrap_or(0);
@@ -1815,17 +2091,26 @@ fn insert_sale(transaction: &Transaction<'_>, sale: &OfflineSalePayload) -> Resu
                   manual_price_applied, manual_unit_price_cents, manual_adjustment_cents,
                   sold_as_pack, pack_size_units_snapshot, pack_count, pack_discount_bps, pack_discount_cents,
                   branch_promotion_id, branch_promotion_every_units, branch_promotion_discount_bps, branch_promotion_discounted_units, branch_promotion_discount_cents,
-                  pack_config_id)
+                  pack_config_id, vacuum_package_id, vacuum_ean13)
                  values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                         ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
+                         ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)",
                 params![item.id, sale.sale_id, item.product_id, item.product_name_snapshot, item.weight_grams, item.quantity_units,
                         parse_i64(&item.price_per_kg_cents, "pricePerKgCents")?, original_price, item.discount_rule_id, item.discount_type, discount_value, discount_cents, cash_discount_bps, cash_discount_cents, card_surcharge_cents, promotion_discount_cents, cost_snapshot, profit_snapshot, parse_i64(&item.subtotal_cents, "subtotalCents")?, item.promotion_mode, sale.created_at,
                         i64::from(item.manual_price_applied), manual_unit_price, manual_adjustment,
                         i64::from(item.sold_as_pack), item.pack_size_units_snapshot, item.pack_count, item.pack_discount_bps, pack_discount_cents,
                         item.branch_promotion_id, item.branch_promotion_minimum_units, item.branch_promotion_discount_bps, item.branch_promotion_discounted_units, promotion_snapshot_cents,
-                        item.pack_config_id],
+                        item.pack_config_id, item.vacuum_package_id, item.vacuum_ean13],
             )
             .map_err(|error| error.to_string())?;
+        // El paquete queda vendido en esta caja en la MISMA transacción que la venta: nunca se ofrece dos veces, ni siquiera dos veces en un ticket.
+        if let Some(package_id) = item.vacuum_package_id.as_deref() {
+            let claimed = transaction
+                .execute("update local_vacuum_packages set sold_sale_id = ?1 where package_id = ?2 and sold_sale_id is null", params![sale.sale_id, package_id])
+                .map_err(|error| error.to_string())?;
+            if claimed != 1 {
+                return Err("El paquete ya fue vendido en esta caja".to_string());
+            }
+        }
     }
     // Mercado Pago: sólo se acepta como proveedor sobre TRANSFER (no cambia el pricing ni los
     // métodos elegibles). La venta nace PENDING: ninguna acción local puede marcarla verificada.
@@ -2362,6 +2647,8 @@ pub fn run() {
             apply_catalog_pull,
             apply_branch_stock,
             get_local_branch_stock,
+            apply_vacuum_state,
+            get_local_vacuum_state,
             apply_commercial_config,
             get_local_commercial_config,
             apply_operator_roster,
@@ -2422,7 +2709,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let second: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         assert_eq!(first, second);
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 20);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 22);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'cash_discount_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from pragma_table_info('local_sale_items') where name = 'card_surcharge_cents'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
@@ -2474,7 +2761,7 @@ mod tests {
         // card_surcharge_cents column) and 11 (shift heartbeat lease) run.
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 20);
+        assert_eq!(connection.query_row("select count(*) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 22);
         assert_eq!(connection.query_row("select total_cents from local_sales where id = 'old-sale'", [], |row| row.get::<_, i64>(0)).unwrap(), 123400);
         assert_eq!(connection.query_row("select weight_grams from local_sale_items where id = 'old-item'", [], |row| row.get::<_, i64>(0)).unwrap(), 1000);
         assert_eq!(connection.query_row("select quantity_units from local_sale_items where id = 'old-item'", [], |row| row.get::<_, Option<i64>>(0)).unwrap(), None);
@@ -2512,7 +2799,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         let sale = OfflineSalePayload {
@@ -2549,7 +2836,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1444444,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         // 5% off the (unchanged) list price: 1.444.444 * 0,95 rounded half up = 1.372.222.
@@ -2581,7 +2868,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','Asado',null,'WEIGHT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1000000,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         let sale = OfflineSalePayload {
@@ -2603,7 +2890,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-23T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-23T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',10000,'2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
         connection.execute("insert into local_weight_discounts(id,product_id,branch_id,promotion_mode,pack_price_cents) values('pack-1','product',null,'PACK_FIXED_TOTAL',18000)", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
@@ -2692,7 +2979,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-24T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-24T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-24T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','Vacio',null,'WEIGHT',1,'2026-09-24T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',1000000,'2026-09-24T00:00:00Z','2026-09-24T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         // 1kg at $10.000/kg list, FIXED_PRICE_PER_KG promo = $9.000/kg, DEBIT +10% -> $9.900/kg.
@@ -2718,7 +3005,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Carnes',0,1,'2026-09-23T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('hamburguesa','org','category','Hamburguesa',null,'UNIT',1,'2026-09-23T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('hamburguesa','org','category','Hamburguesa',null,'UNIT',1,'2026-09-23T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('hamburguesa','branch',800,'2026-09-23T00:00:00Z','2026-09-23T00:00:00Z')", []).unwrap();
         connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap()
     }
@@ -3582,7 +3869,7 @@ mod tests {
         connection.execute_batch("pragma foreign_keys = on;").unwrap();
         connection.execute_batch(INITIAL_SCHEMA).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('cat','org','Almacen',0,1,'2026-09-30T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('coca','org','cat','Coca Cola',null,'UNIT',1,'2026-09-30T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('coca','org','cat','Coca Cola',null,'UNIT',1,'2026-09-30T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('coca','central',350000,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).unwrap();
         // Before: a zero price is rejected by the old schema.
         assert!(connection.execute("insert into catalog_prices values('coca','other',0,'2026-09-30T00:00:00Z','2026-09-30T00:00:00Z')", []).is_err());
@@ -3637,7 +3924,7 @@ mod tests {
         connection.execute("update local_device set organization_id='org',branch_id='branch',profile_id='profile',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
         connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values('profile','Operador','Empleado',1,1,0,'token','2099-01-01T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_categories(id,organization_id,name,sort_order,active,updated_at) values('category','org','Almacen',0,1,'2026-09-13T00:00:00Z')", []).unwrap();
-        connection.execute("insert into catalog_products values('product','org','category','GALLETITAS X',null,'UNIT',1,'2026-09-13T00:00:00Z')", []).unwrap();
+        connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values('product','org','category','GALLETITAS X',null,'UNIT',1,'2026-09-13T00:00:00Z')", []).unwrap();
         connection.execute("insert into catalog_prices values('product','branch',0,'2026-09-13T00:00:00Z','2026-09-13T00:00:00Z')", []).unwrap();
         let device_id: String = connection.query_row("select device_id from local_device", [], |row| row.get(0)).unwrap();
         let sale = OfflineSalePayload {
@@ -3665,7 +3952,7 @@ mod tests {
         initialize_connection(&mut connection).unwrap();
         let device_id = unit_sale_device(&connection);
         for (id, name, unit, price) in [("coca", "Coca Cola 2.25 L", "UNIT", 1_200_000), ("fanta", "Fanta 2.25 L", "UNIT", 1_400_000), ("vacio", "Vacío", "WEIGHT", 1_500_000)] {
-            connection.execute("insert into catalog_products values(?1,'org','category',?2,null,?3,1,'2026-10-02T00:00:00Z')", params![id, name, unit]).unwrap();
+            connection.execute("insert into catalog_products(id, organization_id, category_id, name, sku, unit_type, active, updated_at) values(?1,'org','category',?2,null,?3,1,'2026-10-02T00:00:00Z')", params![id, name, unit]).unwrap();
             connection.execute("insert into catalog_prices values(?1,'branch',?2,'2026-10-02T00:00:00Z','2026-10-02T00:00:00Z')", params![id, price]).unwrap();
         }
         if central { set_flexible_pricing_branch_inner(&mut connection, "branch", true).unwrap(); }
@@ -4566,7 +4853,7 @@ mod tests {
 
         initialize_connection(&mut connection).unwrap();
 
-        assert_eq!(connection.query_row("select max(version) from schema_migrations", [], |r| r.get::<_, i64>(0)).unwrap(), 20);
+        assert_eq!(connection.query_row("select max(version) from schema_migrations", [], |r| r.get::<_, i64>(0)).unwrap(), 22);
         let pairs: Vec<(String, String)> = connection.prepare("select product_id, category_id from catalog_product_categories order by product_id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap();
         assert_eq!(pairs, vec![("coca".into(), "bebidas".into()), ("leche-a".into(), "almacen".into()), ("leche-b".into(), "lacteos".into())], "only the principal category of each product remains");
         let packs: Vec<(String, i64, String, i64)> = connection.prepare("select product_id, pack_size_units, pack_config_id, pack_discount_bps from catalog_product_packs order by product_id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().collect::<Result<_, _>>().unwrap();
@@ -4795,5 +5082,235 @@ mod tests {
         let cancelled = payment_of(&connection);
         assert_eq!((cancelled.provider.as_deref(), cancelled.verification_status.as_str()), (Some("MERCADOPAGO"), "CANCELLED"));
         assert!(sale_receipt_source(&connection, "missing-sale").unwrap().is_none());
+    }
+
+    // ---- Envasados al vacío: línea PACKAGE (D-091) ----------------------------------------------------------------
+
+    fn vacuum_package_in(id: &str, ean13: &str, weight_grams: i64, charge_cents: i64, packed_on: &str) -> VacuumPackageIn {
+        VacuumPackageIn {
+            package_id: id.into(), product_id: "product".into(), product_name: "Vacio".into(), ean13: ean13.into(), weight_grams,
+            charge_cents: charge_cents.to_string(), lot: format!("LOT-{id}"), packed_on: packed_on.into(), expires_on: "2026-12-31".into()
+        }
+    }
+
+    fn vacuum_state_in(packages: Vec<VacuumPackageIn>) -> VacuumStateIn {
+        VacuumStateIn {
+            branch_id: "branch".into(),
+            scheme: Some(VacuumSchemeIn { scheme: "PRICE_EMBEDDED".into(), prefix: "20".into(), plu_digits: 4, value_digits: 6, value_step: 100 }),
+            plus: vec![VacuumPluIn { product_id: "product".into(), plu: "12".into() }],
+            packages,
+        }
+    }
+
+    /// Una venta de un solo paquete con el cálculo del POS (importe fijo; recargo de tarjeta una vez sobre ese importe).
+    fn vacuum_sale(device_id: &str, package_id: &str, ean13: &str, weight_grams: i64, charge_cents: i64, method: &str, bps: i64) -> OfflineSalePayload {
+        let half_up = |numerator: i64, denominator: i64| (numerator + denominator / 2) / denominator;
+        let subtotal = if bps > 0 { half_up(charge_cents * (10_000 + bps), 10_000) } else { charge_cents };
+        OfflineSalePayload {
+            schema_version: 1, event_id: Uuid::new_v4().to_string(), sale_id: Uuid::new_v4().to_string(),
+            organization_id: "org".into(), branch_id: "branch".into(), profile_id: "profile".into(), operator_token: Some("token".into()), device_id: device_id.into(),
+            status: "COMPLETED".into(), total_cents: subtotal.to_string(), total_weight_grams: weight_grams.to_string(),
+            created_at: "2026-09-23T00:00:00Z".into(), completed_at: "2026-09-23T00:00:00Z".into(),
+            items: vec![OfflineSaleItem {
+                id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(weight_grams),
+                price_per_kg_cents: half_up(subtotal * 1000, weight_grams).to_string(), original_price_per_kg_cents: Some(half_up(charge_cents * 1000, weight_grams).to_string()),
+                discount_cents: Some("0".into()), cash_discount_bps: Some(bps.to_string()), cash_discount_cents: Some("0".into()),
+                card_surcharge_cents: Some((subtotal - charge_cents).to_string()), promotion_discount_cents: Some("0".into()), subtotal_cents: subtotal.to_string(),
+                vacuum_package_id: Some(package_id.into()), vacuum_ean13: Some(ean13.into()), vacuum_package_total_cents: Some(charge_cents.to_string()),
+                ..Default::default()
+            }],
+            payment: OfflinePayment { id: Uuid::new_v4().to_string(), method: method.into(), amount_cents: subtotal.to_string(), provider: None },
+            stock_movements: vec![OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: (-weight_grams).to_string(), occurred_at: "2026-09-23T00:00:00Z".into() }],
+            ..Default::default()
+        }
+    }
+
+    fn vacuum_connection() -> (Connection, String) {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let (device_id, _) = pack_sale_fixture(&connection);
+        apply_vacuum_state_inner(&mut connection, &vacuum_state_in(vec![
+            vacuum_package_in("pkg-1", "2000120112506", 750, 11_250, "2026-11-01"),
+            vacuum_package_in("pkg-2", "2000120112506", 750, 11_250, "2026-11-02"),
+            vacuum_package_in("pkg-3", "2000070180532", 333, 499_500, "2026-11-02"),
+        ])).unwrap();
+        (connection, device_id)
+    }
+
+    fn try_insert_sale(connection: &mut Connection, sale: &OfflineSalePayload) -> Result<(), String> {
+        let transaction = connection.transaction().unwrap();
+        let outcome = insert_sale(&transaction, sale);
+        if outcome.is_ok() { transaction.commit().unwrap(); }
+        outcome
+    }
+
+    #[test]
+    fn the_vacuum_state_is_stored_locally_and_returned_in_fifo_order() {
+        let (connection, _) = vacuum_connection();
+        let state = local_vacuum_state_inner(&connection, "branch").unwrap();
+        let scheme = state.scheme.unwrap();
+        assert_eq!((scheme.prefix.as_str(), scheme.plu_digits, scheme.value_digits, scheme.value_step), ("20", 4, 6, 100), "the scheme is configurable data, not constants");
+        assert_eq!(state.plus.iter().map(|plu| plu.plu.as_str()).collect::<Vec<_>>(), vec!["12"]);
+        assert_eq!(state.packages.iter().map(|package| package.package_id.as_str()).collect::<Vec<_>>(), vec!["pkg-1", "pkg-2", "pkg-3"], "oldest first");
+        assert_eq!(state.packages[0].charge_cents, "11250");
+        assert!(local_vacuum_state_inner(&connection, "another-branch").unwrap().scheme.is_none(), "another branch never reads this scheme");
+    }
+
+    #[test]
+    fn a_vacuum_state_for_another_branch_is_refused() {
+        let (mut connection, _) = vacuum_connection();
+        let mut state = vacuum_state_in(vec![]);
+        state.branch_id = "other".into();
+        assert!(apply_vacuum_state_inner(&mut connection, &state).is_err());
+    }
+
+    #[test]
+    fn a_package_sale_charges_the_fixed_amount_not_price_per_kg_times_weight() {
+        // El catálogo tiene el Vacío a $100/kg (10000 ¢); el paquete de 0,750 kg se envasó a $15.000/kg y vale $112,50: se cobra ESE importe.
+        let (mut connection, device_id) = vacuum_connection();
+        let sale = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        try_insert_sale(&mut connection, &sale).unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 11_250);
+        assert_eq!(connection.query_row("select weight_grams from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 750);
+        assert_eq!(connection.query_row("select vacuum_package_id from local_sale_items", [], |row| row.get::<_, String>(0)).unwrap(), "pkg-1");
+        assert_eq!(connection.query_row("select vacuum_ean13 from local_sale_items", [], |row| row.get::<_, String>(0)).unwrap(), "2000120112506");
+        assert_eq!(connection.query_row("select total_cents from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 11_250);
+        assert_eq!(connection.query_row("select total_weight_grams from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 750);
+        assert_eq!(connection.query_row("select quantity_grams from local_stock_movements", [], |row| row.get::<_, i64>(0)).unwrap(), -750, "the real grams leave the ledger, once");
+        assert_eq!(connection.query_row("select count(*) from local_stock_movements", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select sold_sale_id from local_vacuum_packages where package_id = 'pkg-1'", [], |row| row.get::<_, String>(0)).unwrap(), sale.sale_id);
+    }
+
+    #[test]
+    fn a_sold_package_is_not_offered_again_and_cannot_be_sold_twice_on_this_register() {
+        let (mut connection, device_id) = vacuum_connection();
+        try_insert_sale(&mut connection, &vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0)).unwrap();
+        let again = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        let error = try_insert_sale(&mut connection, &again).unwrap_err();
+        assert!(error.contains("ya fue vendido"), "{error}");
+        assert_eq!(connection.query_row("select count(*) from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 1, "the rejected sale leaves nothing behind");
+        let state = local_vacuum_state_inner(&connection, "branch").unwrap();
+        assert_eq!(state.packages.iter().map(|package| package.package_id.as_str()).collect::<Vec<_>>(), vec!["pkg-2", "pkg-3"]);
+        // El segundo paquete idéntico (mismo EAN) sigue vendible: FIFO lo decide la pantalla, el almacenamiento lo permite.
+        try_insert_sale(&mut connection, &vacuum_sale(&device_id, "pkg-2", "2000120112506", 750, 11_250, "CASH", 0)).unwrap();
+    }
+
+    #[test]
+    fn the_same_package_twice_in_one_ticket_is_refused() {
+        let (mut connection, device_id) = vacuum_connection();
+        let mut sale = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        let mut second = sale.items[0].clone();
+        second.id = Uuid::new_v4().to_string();
+        sale.items.push(second);
+        sale.stock_movements.push(OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-750".into(), occurred_at: "2026-09-23T00:00:00Z".into() });
+        sale.total_cents = "22500".into();
+        sale.total_weight_grams = "1500".into();
+        sale.payment.amount_cents = "22500".into();
+        assert!(try_insert_sale(&mut connection, &sale).is_err());
+        assert_eq!(connection.query_row("select count(*) from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_package_line_that_does_not_match_the_registered_package_is_refused() {
+        let (mut connection, device_id) = vacuum_connection();
+        // importe distinto del paquete
+        let amount = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_300, "CASH", 0);
+        assert!(try_insert_sale(&mut connection, &amount).is_err());
+        // peso distinto
+        let weight = vacuum_sale(&device_id, "pkg-1", "2000120112506", 760, 11_250, "CASH", 0);
+        assert!(try_insert_sale(&mut connection, &weight).is_err());
+        // EAN distinto
+        let ean = vacuum_sale(&device_id, "pkg-1", "2000130012301", 750, 11_250, "CASH", 0);
+        assert!(try_insert_sale(&mut connection, &ean).is_err());
+        // paquete que esta caja no tiene
+        let unknown = vacuum_sale(&device_id, "pkg-x", "2000120112506", 750, 11_250, "CASH", 0);
+        assert!(try_insert_sale(&mut connection, &unknown).unwrap_err().contains("no está disponible"));
+        // precio manual / promoción sobre un paquete
+        let mut manual = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        manual.items[0].manual_price_applied = true;
+        assert!(try_insert_sale(&mut connection, &manual).is_err());
+        let mut promo = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        promo.items[0].promotion_mode = Some("PACK_FIXED_TOTAL".into());
+        assert!(try_insert_sale(&mut connection, &promo).is_err());
+        assert_eq!(connection.query_row("select count(*) from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 0, "nothing was registered by any of them");
+        assert_eq!(local_vacuum_state_inner(&connection, "branch").unwrap().packages.len(), 3, "and every package is still available");
+    }
+
+    #[test]
+    fn a_package_paid_by_card_carries_the_surcharge_over_its_fixed_amount() {
+        let (mut connection, device_id) = vacuum_connection();
+        let sale = vacuum_sale(&device_id, "pkg-3", "2000070180532", 333, 499_500, "DEBIT", 1000);
+        try_insert_sale(&mut connection, &sale).unwrap();
+        assert_eq!(connection.query_row("select subtotal_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 549_450);
+        assert_eq!(connection.query_row("select card_surcharge_cents from local_sale_items", [], |row| row.get::<_, i64>(0)).unwrap(), 49_950);
+        // un recargo mal calculado se rechaza
+        let (mut other, other_device) = vacuum_connection();
+        let mut wrong = vacuum_sale(&other_device, "pkg-3", "2000070180532", 333, 499_500, "DEBIT", 1000);
+        wrong.items[0].card_surcharge_cents = Some("1".into());
+        assert!(try_insert_sale(&mut other, &wrong).is_err());
+        // efectivo con porcentaje de recargo: inválido
+        let mut cash_with_bps = vacuum_sale(&other_device, "pkg-3", "2000070180532", 333, 499_500, "CASH", 0);
+        cash_with_bps.items[0].cash_discount_bps = Some("1000".into());
+        assert!(try_insert_sale(&mut other, &cash_with_bps).is_err());
+    }
+
+    #[test]
+    fn a_ticket_can_mix_a_package_with_a_normal_weighed_line() {
+        let (mut connection, device_id) = vacuum_connection();
+        let mut sale = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        sale.items.push(OfflineSaleItem {
+            id: Uuid::new_v4().to_string(), product_id: "product".into(), product_name_snapshot: "Vacio".into(), weight_grams: Some(1000),
+            price_per_kg_cents: "10000".into(), original_price_per_kg_cents: Some("10000".into()), discount_cents: Some("0".into()), cash_discount_bps: Some("0".into()),
+            cash_discount_cents: Some("0".into()), card_surcharge_cents: Some("0".into()), promotion_discount_cents: Some("0".into()), subtotal_cents: "10000".into(), ..Default::default()
+        });
+        sale.stock_movements.push(OfflineStockMovement { id: Uuid::new_v4().to_string(), product_id: "product".into(), quantity_grams: "-1000".into(), occurred_at: "2026-09-23T00:00:00Z".into() });
+        sale.total_cents = "21250".into();
+        sale.total_weight_grams = "1750".into();
+        sale.payment.amount_cents = "21250".into();
+        try_insert_sale(&mut connection, &sale).unwrap();
+        assert_eq!(connection.query_row("select count(*) from local_sale_items where vacuum_package_id is null", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("select total_weight_grams from local_sales", [], |row| row.get::<_, i64>(0)).unwrap(), 1750);
+    }
+
+    #[test]
+    fn a_normal_weighed_sale_is_unchanged_and_serializes_without_vacuum_keys() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        let (_, sale) = pack_sale_fixture(&connection);
+        let json = serde_json::to_string(&sale.items[0]).unwrap();
+        assert!(!json.contains("vacuum"), "the outbox payload of a normal line must not change: {json}");
+    }
+
+    #[test]
+    fn refreshing_the_vacuum_state_keeps_unsynced_local_sales_marked_and_forgets_synced_ones() {
+        let (mut connection, device_id) = vacuum_connection();
+        let sale = vacuum_sale(&device_id, "pkg-1", "2000120112506", 750, 11_250, "CASH", 0);
+        try_insert_sale(&mut connection, &sale).unwrap();
+        connection.execute(
+            "insert into sync_outbox(id, aggregate_type, aggregate_id, operation, payload, status, attempts, created_at, next_attempt_at) values (?1, 'SALE', ?2, 'UPSERT', '{}', 'PENDING', 0, '2026-09-23T00:00:00Z', '2026-09-23T00:00:00Z')",
+            params![sale.event_id, sale.sale_id],
+        ).unwrap();
+        // El servidor todavía tiene pkg-1 disponible (la venta no sincronizó): esta caja NO lo vuelve a ofrecer.
+        let refresh = || vacuum_state_in(vec![
+            vacuum_package_in("pkg-1", "2000120112506", 750, 11_250, "2026-11-01"),
+            vacuum_package_in("pkg-2", "2000120112506", 750, 11_250, "2026-11-02"),
+        ]);
+        apply_vacuum_state_inner(&mut connection, &refresh()).unwrap();
+        let ids = |connection: &Connection| local_vacuum_state_inner(connection, "branch").unwrap().packages.into_iter().map(|package| package.package_id).collect::<Vec<_>>();
+        assert_eq!(ids(&connection), vec!["pkg-2"], "pkg-1 stays sold locally and pkg-3 left the server list");
+        // Ya sincronizó: el servidor lo da por vendido y la marca local se descarta.
+        connection.execute("update sync_outbox set status = 'SYNCED' where aggregate_id = ?1", params![sale.sale_id]).unwrap();
+        apply_vacuum_state_inner(&mut connection, &vacuum_state_in(vec![vacuum_package_in("pkg-2", "2000120112506", 750, 11_250, "2026-11-02")])).unwrap();
+        assert_eq!(connection.query_row("select count(*) from local_vacuum_packages where package_id = 'pkg-1'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(ids(&connection), vec!["pkg-2"]);
+    }
+
+    #[test]
+    fn the_local_sale_sync_payload_keeps_the_vacuum_keys_for_the_server() {
+        let (_, sale) = (0, vacuum_sale("device", "pkg-1", "2000120112506", 750, 11_250, "CASH", 0));
+        let value = serde_json::to_value(&sale.items[0]).unwrap();
+        assert_eq!(value["vacuumPackageId"], "pkg-1");
+        assert_eq!(value["vacuumEan13"], "2000120112506");
+        assert_eq!(value["vacuumPackageTotalCents"], "11250");
     }
 }

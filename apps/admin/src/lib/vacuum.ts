@@ -3,7 +3,7 @@ import { formatCurrency, formatWeight, parseWeightToGrams, priceForWeight } from
 import { isIsoDate, shiftIsoDate } from "./date-range";
 import { isUuid } from "./uuid";
 import { asArray, asRecord, bool, cents, centsOrNull, int, intOrNull, str, strOrNull } from "./rpc-json";
-import { buildEan13, isEanScheme, validateEanSchemeConfig, type EanBuildResult, type EanSchemeConfig } from "./vacuum-ean";
+import { buildEan13, isEanScheme, validateEanSchemeConfig, vacuumCommercialTotalCents, type EanBuildResult, type EanSchemeConfig } from "./vacuum-ean";
 import { resolveVacuumLabelDims, type VacuumLabelDims } from "./vacuum-label-spec";
 
 /**
@@ -148,6 +148,18 @@ export interface VacuumPackageRow {
   createdAt: string;
   printCount: number;
   lastPrintedAt: string | null;
+  /** AVAILABLE (disponible para vender), SOLD (vendido en una caja) o VOIDED (anulado). */
+  status: VacuumPackageStatus;
+  currentBranchId: string | null;
+  currentBranchName: string | null;
+}
+
+export const VACUUM_PACKAGE_STATUSES = ["AVAILABLE", "SOLD", "VOIDED"] as const;
+export type VacuumPackageStatus = (typeof VACUUM_PACKAGE_STATUSES)[number];
+export const VACUUM_PACKAGE_STATUS_LABELS: Record<VacuumPackageStatus, string> = { AVAILABLE: "Disponible", SOLD: "Vendido", VOIDED: "Anulado" };
+
+function packageStatus(value: unknown): VacuumPackageStatus {
+  return (VACUUM_PACKAGE_STATUSES as readonly unknown[]).includes(value) ? (value as VacuumPackageStatus) : "AVAILABLE";
 }
 
 export interface VacuumPackagesPage {
@@ -165,10 +177,45 @@ export function parseVacuumPackagesPage(value: unknown): VacuumPackagesPage {
         id: str(row.id), lot: str(row.lot), branchId: str(row.branchId), branchName: str(row.branchName), productId: str(row.productId),
         productName: str(row.productName), weightGrams: int(row.weightGrams), pricePerKgCents: cents(row.pricePerKgCents), totalCents: cents(row.totalCents),
         packedOn: str(row.packedOn), expiresOn: str(row.expiresOn), ean13: str(row.ean13), createdAt: str(row.createdAt), printCount: int(row.printCount),
-        lastPrintedAt: strOrNull(row.lastPrintedAt)
+        lastPrintedAt: strOrNull(row.lastPrintedAt), status: packageStatus(row.status), currentBranchId: strOrNull(row.currentBranchId), currentBranchName: strOrNull(row.currentBranchName)
       };
     })
   };
+}
+
+export const VACUUM_CONFLICT_REASON_LABELS: Record<string, string> = {
+  ALREADY_SOLD: "El paquete ya estaba vendido",
+  VOIDED: "El paquete estaba anulado",
+  WRONG_BRANCH: "El paquete estaba en otra sucursal",
+  RESTORE_UNAVAILABLE: "Se restableció una venta cuyo paquete ya no estaba disponible"
+};
+
+/** Una venta (offline) que reclamó un paquete que el servidor ya tenía vendido, anulado o en otra sucursal. La venta SÍ quedó registrada. */
+export interface VacuumConflictRow {
+  id: string;
+  status: "OPEN" | "RESOLVED";
+  reason: string;
+  createdAt: string;
+  branchName: string;
+  productName: string;
+  weightGrams: number;
+  totalCents: bigint;
+  lot: string;
+  ean13: string;
+  saleId: string;
+  firstSaleId: string | null;
+  resolutionNote: string | null;
+}
+
+export function parseVacuumConflicts(value: unknown): VacuumConflictRow[] {
+  return asArray(value).map((entry) => {
+    const row = asRecord(entry);
+    return {
+      id: str(row.id), status: row.status === "RESOLVED" ? "RESOLVED" : "OPEN", reason: str(row.reason), createdAt: str(row.createdAt), branchName: str(row.branchName),
+      productName: str(row.productName), weightGrams: int(row.weightGrams), totalCents: cents(row.totalCents), lot: str(row.lot), ean13: str(row.ean13),
+      saleId: str(row.saleId), firstSaleId: strOrNull(row.firstSaleId), resolutionNote: strOrNull(row.resolutionNote)
+    };
+  });
 }
 
 export interface VacuumConfigRow {
@@ -213,9 +260,14 @@ export function parsePackageWeight(input: string): WeightParse {
   }
 }
 
-/** Importe del paquete: precio/kg × gramos / 1000, half-up en centavos (igual que el POS). */
+/** Importe CALCULADO del paquete: precio/kg × gramos / 1000, half-up en centavos (igual que el POS). Es el dato de auditoría, no lo que se cobra. */
 export function packageTotalCents(pricePerKgCents: bigint, weightGrams: number): bigint {
   return priceForWeight(pricePerKgCents, weightGrams);
+}
+
+/** Importe COMERCIAL único del paquete: el calculado, redondeado según el esquema EAN (divisor 100 = pesos enteros). Es el que se imprime, va en el EAN, muestra el POS y se cobra. */
+export function packageCommercialTotalCents(pricePerKgCents: bigint, weightGrams: number, scheme: EanSchemeConfig | null): bigint {
+  return vacuumCommercialTotalCents(scheme, packageTotalCents(pricePerKgCents, weightGrams));
 }
 
 /** Vencimiento por defecto = elaboración + vida útil configurada (null si el producto no tiene vida útil). */
@@ -235,7 +287,10 @@ export interface DraftInput {
 export interface PackageDraft {
   /** null mientras falte algo para calcular (corte, peso válido o precio). */
   weightGrams: number | null;
+  /** Importe comercial único (impreso, en el EAN y cobrado). */
   totalCents: bigint | null;
+  /** Cálculo con centavos (sólo auditoría); igual a totalCents cuando el esquema no redondea. */
+  computedTotalCents: bigint | null;
   ean: EanBuildResult | null;
   /** Problemas que impiden registrar (en castellano). */
   problems: string[];
@@ -259,7 +314,11 @@ export function buildPackageDraft(input: DraftInput): PackageDraft {
 
   const grams = weight.ok ? weight.grams : null;
   const price = input.product?.pricePerKgCents ?? null;
-  const totalCents = grams !== null && price !== null ? packageTotalCents(price, grams) : null;
+  const computedTotalCents = grams !== null && price !== null ? packageTotalCents(price, grams) : null;
+  const totalCents = computedTotalCents !== null ? vacuumCommercialTotalCents(input.settings?.ean ?? null, computedTotalCents) : null;
+  if (computedTotalCents !== null && totalCents !== null && totalCents !== computedTotalCents) {
+    warnings.push(`El importe se redondea a pesos enteros: ${moneyText(totalCents)} (calculado ${moneyText(computedTotalCents)})`);
+  }
   let ean: EanBuildResult | null = null;
   if (input.product && grams !== null && totalCents !== null) {
     ean = buildEan13(input.settings?.ean ?? null, { plu: input.product.plu, priceCents: totalCents, weightGrams: grams });
@@ -267,7 +326,7 @@ export function buildPackageDraft(input: DraftInput): PackageDraft {
   } else if (!input.settings?.ean) {
     problems.push("Falta configurar el esquema EAN-13 de envasados");
   }
-  return { weightGrams: grams, totalCents, ean, problems, warnings };
+  return { weightGrams: grams, totalCents, computedTotalCents, ean, problems, warnings };
 }
 
 /** Texto de importe para etiquetas y pantallas: «$18.052,50» (sin espacio tras el signo). */

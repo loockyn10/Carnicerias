@@ -6,6 +6,7 @@ import {
   calculateTicketDiscount,
   calculateUnitPackLinePricing,
   calculateUnitPackSalePricing,
+  calculateVacuumPackagePricing,
   calculateWeightPackSalePricing,
   divideRoundHalfUp,
   packDiscountLabel,
@@ -376,6 +377,41 @@ export function appliedQuantityTier(promotions: readonly BranchUnitPromotion[], 
   return Number.isSafeInteger(quantityUnits) && quantityUnits > 0 ? selectQuantityTier(promotions, quantityUnits) : null;
 }
 
+/** Línea PACKAGE: un paquete envasado al vacío con importe fijo (nunca precio/kg × peso). */
+export function isVacuumPackageLine(line: TicketLine): line is TicketLine & { vacuumPackageId: string; vacuumPackageTotalCents: bigint } {
+  return line.vacuumPackageId != null && line.vacuumPackageTotalCents != null;
+}
+
+/** Un paquete disponible tal como lo conoce el POS (SQLite): lo necesario para armar su línea. */
+export interface VacuumPackageForSale {
+  packageId: string; productId: string; productName: string; ean13: string; weightGrams: number; chargeCents: bigint; lot: string;
+}
+
+function vacuumLineFields(totalCents: bigint, weightGrams: number, paymentMethod: PaymentMethod, cashDiscountBps: bigint): Partial<TicketLine> {
+  const pricing = calculateVacuumPackagePricing({ fixedTotalCents: totalCents, weightGrams, paymentMethod, cashDiscountBps });
+  return {
+    pricePerKgCents: pricing.finalPriceCents, originalPricePerKgCents: pricing.listPriceCents, discountRuleId: null, discountType: null, discountValue: null,
+    promotionMode: null, discountCents: 0n, cashDiscountBps: pricing.cashDiscountBps, cashDiscountCents: 0n, cardSurchargeCents: pricing.cardSurchargeCents,
+    promotionDiscountCents: 0n, subtotalCents: pricing.subtotalCents
+  };
+}
+
+/**
+ * Una línea PACKAGE para el medio de pago actual: el importe del paquete es el importe fijo; el único ajuste posible es el recargo de tarjeta,
+ * una sola vez sobre ese importe. NO usa el precio/kg del catálogo, ni promociones, ni Pack, ni descuentos por cantidad.
+ */
+export function buildVacuumPackageLine(pkg: VacuumPackageForSale, id: string, paymentMethod: PaymentMethod, cashDiscountBps: bigint): TicketLine {
+  return {
+    id, productId: pkg.productId, productName: pkg.productName, weightGrams: pkg.weightGrams, subtotalCents: 0n, pricePerKgCents: 0n,
+    ...vacuumLineFields(pkg.chargeCents, pkg.weightGrams, paymentMethod, cashDiscountBps),
+    vacuumPackageId: pkg.packageId, vacuumEan13: pkg.ean13, vacuumPackageTotalCents: pkg.chargeCents, vacuumLot: pkg.lot
+  };
+}
+
+function repriceVacuumPackageLine(line: TicketLine & { vacuumPackageTotalCents: bigint }, paymentMethod: PaymentMethod, cashDiscountBps: bigint): TicketLine {
+  return { ...line, ...vacuumLineFields(line.vacuumPackageTotalCents, line.weightGrams, paymentMethod, cashDiscountBps) };
+}
+
 /** A WEIGHT ticket line for `weightGrams` of `product` (pack toggle + threshold promotions included). */
 export function buildWeightTicketLine(
   product: LineProduct, weightGrams: number, id: string, sellAsPack: boolean, pack: DiscountRule | null,
@@ -402,6 +438,7 @@ export interface PricingContext {
  */
 export function repriceTicketLine(line: TicketLine, context: PricingContext): TicketLine {
   if (line.manualPriceApplied) return line;
+  if (isVacuumPackageLine(line)) return repriceVacuumPackageLine(line, context.paymentMethod, context.cashDiscountBps);
   const { paymentMethod: method, discounts, cashDiscountBps } = context;
   const listPriceCents = line.originalPricePerKgCents ?? line.pricePerKgCents;
   let pricing: ReturnType<typeof calculateSalePricing>;
@@ -457,6 +494,7 @@ export function repriceTicketLine(line: TicketLine, context: PricingContext): Ti
  * Lanza RangeError si el precio es <= 0 o la línea quedaría en $0.
  */
 export function applyManualPrice(line: TicketLine, manualUnitPriceCents: bigint): TicketLine {
+  if (isVacuumPackageLine(line)) throw new RangeError("A vacuum package has a fixed amount: it cannot take a manual price");
   const listPriceCents = line.originalPricePerKgCents;
   if (listPriceCents == null) throw new RangeError("The line has no catalog price to compare against");
   const isUnit = line.quantityUnits != null;

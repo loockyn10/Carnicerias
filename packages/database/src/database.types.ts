@@ -5271,6 +5271,7 @@ export type Database = {
         Returns: Json
       }
       get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json }
+      get_pos_vacuum_state: { Args: { p_branch_id: string }; Returns: Json }
       get_poultry_customer_detail: {
         Args: {
           p_customer_id: string
@@ -5591,6 +5592,10 @@ export type Database = {
         }
         Returns: Json
       }
+      list_vacuum_package_conflicts: {
+        Args: { p_limit?: number; p_status?: string }
+        Returns: Json
+      }
       list_vacuum_packages_page: {
         Args: {
           p_branch_id?: string
@@ -5612,6 +5617,10 @@ export type Database = {
           p_status?: Database["public"]["Enums"]["membership_status"]
         }
         Returns: string
+      }
+      move_vacuum_packages: {
+        Args: { p_package_ids: string[]; p_to_branch_id: string }
+        Returns: number
       }
       mp_abandon_unpaid_sale: {
         Args: { p_device_id: string; p_sale_id: string }
@@ -5814,6 +5823,10 @@ export type Database = {
           sku: string
           unit_type: Database["public"]["Enums"]["unit_type"]
         }[]
+      }
+      resolve_vacuum_package_conflict: {
+        Args: { p_conflict_id: string; p_note: string }
+        Returns: undefined
       }
       resolve_weight_discount: {
         Args: {
@@ -6456,6 +6469,10 @@ export type Database = {
       }
       void_settlement: {
         Args: { p_reason: string; p_settlement_id: string }
+        Returns: undefined
+      }
+      void_vacuum_package: {
+        Args: { p_package_id: string; p_reason: string }
         Returns: undefined
       }
       wa_apply_status_event: {

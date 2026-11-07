@@ -25,19 +25,21 @@ import { CategoryPicker } from "./CategoryPicker";
 import { CentralProductList, type CentralRowBadge } from "./CentralProductList";
 import { catalogViewMode } from "./lib/central-list";
 import { emptyScanBuffer, flushTypeAhead, isEditableTarget, routeKey, SCAN_MAX_KEY_GAP_MS } from "./lib/scanner";
+import { describeVacuumCandidate, resolveVacuumScan, type VacuumCandidate, type VacuumScanOutcome } from "./lib/vacuum-scan";
+import { VacuumPackagePicker } from "./VacuumPackagePicker";
 import { resetSearchForNextProduct } from "./lib/search-focus";
 import { TicketLineDetail } from "./TicketLineDetail";
 import { describeCaughtValue, formatDiagnostics, resolveErrorMessage } from "./lib/error-messages";
 import { filterPaymentMethodButtons, initialPaymentMethodFor, INITIAL_PAYMENT_METHOD, isSaleConfirmable, shouldDisplayTicketAmounts, validatePaymentMethodForSale } from "./lib/ticket-payment";
 import {
-  applyManualPrice, buildUnitTicketLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, findUnitLineToMerge,
-  appliedTierMinimumUnits, autoPackSale, effectiveUnitPriceCents, packOfferLabel, packOfferUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalQuantity, unitPromotionChips, type DiscountRule, type PackOffer
+  applyManualPrice, buildUnitTicketLine, buildVacuumPackageLine, buildWeightTicketLine, carryManualPrice, computeUnitLine, computeWeightLine, findPackRule, findUnitLineToMerge,
+  appliedTierMinimumUnits, autoPackSale, effectiveUnitPriceCents, isVacuumPackageLine, packOfferLabel, packOfferUnitPriceCents, repriceTicketLine, resolveUnitLineRequest, restoreNormalPrice, summarizeTicket, unitModalQuantity, unitPromotionChips, type DiscountRule, type PackOffer
 } from "./lib/ticket-pricing";
 import { DiscountChip } from "./DiscountChip";
 import { QuantityTierList } from "./QuantityTierList";
 import { PACK_PALETTE, tierPalette, tierPositionByMinimumUnits } from "./lib/discount-chips";
 import { ManualPriceModal } from "./ManualPriceModal";
-import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type LocalVacuumState, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
 import { mergeRecentSales, readRemoteRecentSales, readRemoteSaleReceipt, RECENT_SALES_LIMIT, type RecentSaleView } from "./lib/remote-recent-sales";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
@@ -331,6 +333,10 @@ export default function App() {
   // Stock real de la sucursal del dispositivo (no global de la organización); null = todavía nunca
   // sincronizado, en cuyo caso no se deshabilita nada (ver lib/catalog.ts).
   const [branchStock, setBranchStock] = useState<BranchStock>(null);
+  // Envasados al vacío (D-091): esquema EAN-13, PLU y paquetes disponibles de ESTA sucursal, leídos de SQLite (funciona sin Internet). null = sin estado todavía.
+  const [vacuumState, setVacuumState] = useState<LocalVacuumState | null>(null);
+  // Varios paquetes con el mismo código y PESOS distintos: el cajero elige cuál tiene en la mano.
+  const [vacuumChoice, setVacuumChoice] = useState<VacuumCandidate[] | null>(null);
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
   // POS de Central (el servidor lo decide: sucursal productiva, ver lib/quick-product.ts): habilita el
   // alta rápida desde un scan desconocido y hace que la disponibilidad NO dependa del stock (ver
@@ -726,6 +732,16 @@ export default function App() {
     }
   }, [branchId, desktop, localRuntime?.branchId]);
 
+  const loadVacuumState = useCallback(async () => {
+    if (!desktop || !branchId || localRuntime?.branchId !== branchId) { setVacuumState(null); return; }
+    try {
+      setVacuumState(await localDatabase.vacuumState(branchId));
+    } catch {
+      // Sin estado de Envasados los paquetes no se reconocen; el resto de la venta sigue exactamente igual.
+    }
+  }, [branchId, desktop, localRuntime?.branchId]);
+  useEffect(() => { void loadVacuumState(); }, [loadVacuumState, localRuntime?.lastSuccessfulSyncAt, localRuntime?.catalogCursor]);
+
   useEffect(() => { setBranchStock(null); }, [branchId]);
   // La capacidad la refresca el sync (rara vez); acá sólo se lee lo recordado, también sin conexión.
   useEffect(() => {
@@ -1097,6 +1113,7 @@ export default function App() {
   const ticketTotal = ticketSummary.totalCents;
   const ticketManualAdjustment = useMemo(() => sumMoney(ticket.map((line) => line.manualAdjustmentCents ?? 0n)), [ticket]);
   const ticketListSubtotal = useMemo(() => sumMoney(ticket.map((line) => {
+    if (isVacuumPackageLine(line)) return line.vacuumPackageTotalCents;
     const listPrice = line.originalPricePerKgCents ?? line.pricePerKgCents;
     return line.quantityUnits != null ? listPrice * BigInt(line.quantityUnits) : priceForWeight(listPrice, line.weightGrams);
   })), [ticket]);
@@ -1349,11 +1366,47 @@ export default function App() {
     setScanFeedback({ tone: "ok", text: `${note?.created ? "Producto creado: " : note?.priceSet ? `Precio guardado (${formatCurrency(product.pricePerKgCents)}): ` : ""}${product.productName} ×${String(quantity)}` });
   }
 
+  /** Agrega UN paquete al ticket con su importe fijo (nunca precio/kg × peso): el mismo importe que está impreso y embebido en su EAN. */
+  function addVacuumPackage(candidate: VacuumCandidate) {
+    setVacuumChoice(null);
+    if (!catalog.some((product) => product.productId === candidate.productId)) {
+      setScanFeedback({ tone: "warn", text: `${candidate.productName}: el corte no está habilitado en esta sucursal` });
+      return;
+    }
+    if (ticketRef.current.some((line) => line.vacuumPackageId === candidate.packageId)) {
+      setScanFeedback({ tone: "warn", text: "Ese paquete ya está en el ticket" });
+      return;
+    }
+    const line = buildVacuumPackageLine(candidate, crypto.randomUUID(), paymentMethod ?? "CASH", BigInt(cashDiscountBps));
+    const next = [...ticketRef.current, line];
+    ticketRef.current = next;
+    setTicket(next);
+    setError(null);
+    focusSearchForNextProduct();
+    setScanFeedback({ tone: "ok", text: `${candidate.productName} ${describeVacuumCandidate(candidate).weight} · ${formatCurrency(candidate.chargeCents)}` });
+  }
+
+  function handleVacuumScan(outcome: Exclude<VacuumScanOutcome, { kind: "NOT_VACUUM" }>) {
+    if (outcome.kind === "PACKAGE") { addVacuumPackage(outcome.package); return; }
+    if (outcome.kind === "CHOOSE") { setScanFeedback(null); setVacuumChoice(outcome.candidates); return; }
+    if (outcome.kind === "NO_PACKAGE") {
+      const amount = outcome.amountCents !== null ? ` (${formatCurrency(outcome.amountCents)})` : "";
+      setScanFeedback({ tone: "warn", text: outcome.alreadyInTicket ? "Ya cargaste todos los paquetes con ese código" : `Paquete envasado no disponible en esta sucursal${amount}. Sincronizá la caja.` });
+      return;
+    }
+    setScanFeedback({ tone: "warn", text: `Código de Envasados desconocido (PLU ${outcome.plu}). Sincronizá la caja.` });
+  }
+
   function handleScan(rawCode: string) {
     // En Central `stockGate` es null: un producto habilitado se escanea y se vende aunque su stock figure en 0 o negativo.
     const outcome = resolveScan(barcodeIndex, stockGate, rawCode);
     if (!outcome) return;
     if (outcome.kind === "NOT_FOUND") {
+      // Un código de Envasados (EAN-13 de importe variable del esquema configurado) se resuelve contra los paquetes disponibles de la sucursal, también
+      // sin Internet, y NUNCA llega al alta rápida de productos. Los códigos del catálogo ya se resolvieron arriba, exactos y como siempre.
+      const inTicket = new Set(ticketRef.current.flatMap((line) => (line.vacuumPackageId ? [line.vacuumPackageId] : [])));
+      const vacuum = resolveVacuumScan(vacuumState, outcome.code, inTicket);
+      if (vacuum.kind !== "NOT_VACUUM") { handleVacuumScan(vacuum); return; }
       // Sólo el POS de Central ofrece el alta; en el resto un código desconocido sigue siendo "no encontrado".
       if (centralPos) { void resolveUnknownScan(outcome.code); return; }
       setScanFeedback({ tone: "warn", text: "Producto no encontrado" });
@@ -1847,6 +1900,7 @@ export default function App() {
         const runtime = await localDatabase.runtime();
         setLocalRuntime(runtime);
         void loadBranchStock();
+        void loadVacuumState();
         setSyncStatus((current) => ({
           ...current,
           state: navigator.onLine ? "online" : "offline",
@@ -2323,8 +2377,8 @@ export default function App() {
                     {shouldDisplayTicketAmounts(paymentMethod) ? <strong className="shrink-0 whitespace-nowrap text-lg text-rose-400">{formatCurrency(line.subtotalCents)}</strong> : null}
                   </div>
                   <div className="mt-3 flex gap-3 text-sm font-bold">
-                    <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>{line.quantityUnits != null ? "Modificar cantidad" : "Modificar peso"}</button>
-                    {centralPos && shouldDisplayTicketAmounts(paymentMethod) ? <button className="text-sky-300" onClick={() => setManualPriceLineId(line.id)}>Editar precio</button> : null}
+                    {isVacuumPackageLine(line) ? null : <button className="text-amber-300" disabled={!product} onClick={() => product && openWeight(product, line)}>{line.quantityUnits != null ? "Modificar cantidad" : "Modificar peso"}</button>}
+                    {centralPos && shouldDisplayTicketAmounts(paymentMethod) && !isVacuumPackageLine(line) ? <button className="text-sky-300" onClick={() => setManualPriceLineId(line.id)}>Editar precio</button> : null}
                     <button className="text-red-400" onClick={() => setTicket((current) => current.filter((candidate) => candidate.id !== line.id))}>Eliminar</button>
                   </div>
                 </article>
@@ -2414,6 +2468,8 @@ export default function App() {
           </section>
         </div>
       ) : null}
+
+      {vacuumChoice ? <VacuumPackagePicker candidates={vacuumChoice} onCancel={() => setVacuumChoice(null)} onPick={addVacuumPackage} /> : null}
 
       {manualPriceLine ? (
         <ManualPriceModal

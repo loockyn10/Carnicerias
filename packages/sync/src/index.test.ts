@@ -233,3 +233,39 @@ describe("outbox retry", () => {
     expect(shouldAttempt({ ...base, status: "SYNCED" }, new Date("2026-09-10T00:00:03.000Z"))).toBe(false);
   });
 });
+
+describe("offline sale envelope: paquete envasado al vacío", () => {
+  const packageLine = {
+    id: "line", productId: "vacio", productName: "Vacío", weightGrams: 750, pricePerKgCents: 1_500_000n, originalPricePerKgCents: 1_500_000n,
+    subtotalCents: 1_125_000n, discountCents: 0n, cashDiscountBps: 0n, cardSurchargeCents: 0n,
+    vacuumPackageId: "package-1", vacuumEan13: "2000120112506", vacuumPackageTotalCents: 1_125_000n, vacuumLot: "CEN-261101-0001"
+  };
+  const base = { organizationId: "org", branchId: "branch", profileId: "profile", deviceId: "device", paymentMethod: "CASH" as const };
+
+  it("la línea PACKAGE lleva el paquete, su EAN y el importe fijo; los gramos reales descuentan el stock una vez", () => {
+    const payload = createOfflineSale({ ...base, ticket: [packageLine] });
+    expect(payload.items[0]).toMatchObject({
+      weightGrams: 750, subtotalCents: "1125000", vacuumPackageId: "package-1", vacuumEan13: "2000120112506", vacuumPackageTotalCents: "1125000"
+    });
+    expect(payload.items[0]).not.toHaveProperty("quantityUnits");
+    expect(payload.items[0]).not.toHaveProperty("vacuumLot");
+    expect(payload.totalCents).toBe("1125000");
+    expect(payload.totalWeightGrams).toBe("750");
+    expect(payload.stockMovements).toHaveLength(1);
+    expect(payload.stockMovements[0]).toMatchObject({ productId: "vacio", quantityGrams: "-750" });
+  });
+
+  it("una línea normal no lleva ninguna clave de paquete", () => {
+    const payload = createOfflineSale({ ...base, ticket: [{ id: "line", productId: "product", productName: "Asado", weightGrams: 1000, pricePerKgCents: 10000n, subtotalCents: 10000n }] });
+    expect(JSON.stringify(payload.items[0])).not.toContain("vacuum");
+  });
+
+  it("un ticket mixto suma el paquete y la línea por peso en el total y en el peso", () => {
+    const payload = createOfflineSale({
+      ...base, ticket: [packageLine, { id: "line-2", productId: "asado", productName: "Asado", weightGrams: 500, pricePerKgCents: 1_000_000n, subtotalCents: 500_000n }]
+    });
+    expect(payload.totalCents).toBe("1625000");
+    expect(payload.totalWeightGrams).toBe("1250");
+    expect(payload.stockMovements.map((movement) => movement.quantityGrams)).toEqual(["-750", "-500"]);
+  });
+});

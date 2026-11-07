@@ -71,6 +71,18 @@ describe("borrador del formulario (preview inmediato)", () => {
     expect(draft.ean?.ok && draft.ean.ean13).not.toBe("2000718052504");
   });
 
+  it("con el esquema en pesos (divisor 100) el importe impreso, el embebido y el cobrado son el MISMO importe comercial", () => {
+    const pesos = sampleSettings({ ean: { scheme: "PRICE_EMBEDDED", prefix: "20", pluDigits: 4, valueDigits: 6, valueStep: 100 } });
+    const draft = buildPackageDraft({ ...base, settings: pesos, product: sampleProduct({ plu: "12", pricePerKgCents: 1_500_000n }), weightText: "0,750" });
+    expect(draft.totalCents).toBe(1_125_000n);
+    expect(draft.ean).toEqual({ ok: true, ean13: "2000120112506" });
+    const rounded = buildPackageDraft({ ...base, settings: pesos, weightText: "1,245" });
+    expect(rounded.computedTotalCents).toBe(1_805_250n);
+    expect(rounded.totalCents).toBe(1_805_300n);
+    expect(rounded.warnings.some((warning) => warning.includes("redondea a pesos enteros"))).toBe(true);
+    expect(rounded.ean?.ok && rounded.ean.ean13).toBe("2000070180532");
+  });
+
   it("sin esquema EAN configurado lo informa y no inventa un código", () => {
     const draft = buildPackageDraft({ ...base, settings: sampleSettings({ ean: null }) });
     expect(draft.ean).toMatchObject({ ok: false, reason: "NOT_CONFIGURED" });
