@@ -32,8 +32,14 @@ describe("escaneo de Envasados: reconocimiento", () => {
     expect(resolveVacuumScan(state, "").kind).toBe("NOT_VACUUM");
   });
 
-  it("un dígito verificador incorrecto no se trata como Envasados", () => {
-    expect(resolveVacuumScan(stateOf([pkg("a")]), "2000120112507").kind).toBe("NOT_VACUUM");
+  it("un código del esquema con el dígito verificador incorrecto es una etiqueta mal leída, nunca un producto nuevo", () => {
+    expect(resolveVacuumScan(stateOf([pkg("a")]), "2000120112507")).toEqual({ kind: "INVALID_CHECK_DIGIT", code: "2000120112507" });
+    // Un código comercial con el verificador mal pero SIN el prefijo de Envasados sigue el camino de siempre.
+    expect(resolveVacuumScan(stateOf([pkg("a")]), "7790895000011").kind).toBe("NOT_VACUUM");
+  });
+
+  it("un código del esquema con importe cero no se puede cobrar", () => {
+    expect(resolveVacuumScan(stateOf([]), "2000120000001")).toMatchObject({ kind: "INVALID_AMOUNT", plu: "0012" });
   });
 
   it("sin esquema configurado o sin estado nada es de Envasados", () => {

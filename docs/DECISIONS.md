@@ -1273,3 +1273,13 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 **Devoluciones.** Un paquete devuelto entra en cuarentena y NUNCA vuelve solo a estar disponible: sólo una decisión explícita con `distribution.approve_reentry` (motivo, usuario y fecha), con envase intacto, conservación verificada y sin vencer (validado en la función y garantizado por un check de la tabla). Rechazar o descartar no mueve stock. Las fechas del paquete no se modifican.
 
 **Conciliación.** Ventas informadas por el supermercado se registran por paquete identificado o sólo por cantidad (estimación, sin marcar paquetes); las estadísticas muestran lo confirmado y lo estimado por separado. Sin integración con POS externos. Detalle en `docs/VACUUM_DISTRIBUTION.md`.
+
+---
+
+## D-094 — Envasados: PLU automático, vencimiento general por organización y reconocimiento del EAN en el POS
+
+**Status:** Active (2026-11-12; migración `202611120099` sin aplicar)
+
+- **PLU:** lo asigna el sistema (`app_private.vacuum_next_plu`, lock consultivo por organización, único por organización, dentro de los dígitos del esquema). Habilitar un corte le da PLU si no tiene; deshabilitar y rehabilitar conserva el original; un PLU de otro corte o de una etiqueta ya impresa nunca se reutiliza; el agotamiento del espacio se informa (`54000`). `save_vacuum_product_config` (PLU manual) queda sólo por compatibilidad: la pantalla ya no lo usa.
+- **Vencimiento:** `organization_vacuum_settings.default_shelf_life_days` (14 por defecto, parámetro operativo, no vida útil sanitaria). `product_vacuum_settings.shelf_life_days` es la excepción del corte (NULL = usa el general). Cambiar el general nunca toca paquetes ya registrados (snapshot).
+- **POS:** un código con el prefijo del esquema NUNCA llega al alta rápida: dígito verificador incorrecto, importe cero, paquete no sincronizado (se sincroniza Envasados en el momento), vendido, reservado, despachado, anulado o de otra sucursal muestran un mensaje específico (`get_pos_vacuum_code_status`). Una caja que nunca sincronizó Envasados no da de alta ningún código de 13 dígitos. El panel de diagnóstico y un aviso «⚠ ENVASADOS» muestran el error de sincronización de paquetes; el build se identifica por fecha y commit (`BUILD_INFO`) y la versión de datos SQLite.

@@ -20,12 +20,14 @@ import {
 import type { PaymentMethod, TicketLine } from "@carnicerias/types";
 import { createOfflineSale, type BranchStockSnapshot, type SyncStatusSnapshot } from "@carnicerias/sync";
 
-import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, resolveScan, stockForAvailability, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
+import { buildBarcodeIndex, buildCategoryTabs, hasStock, normalizeBarcode, partitionByStock, productMatchesCategory, stockForAvailability, type BranchStock, type CategoryDirectoryEntryLike } from "./lib/catalog";
 import { CategoryPicker } from "./CategoryPicker";
 import { CentralProductList, type CentralRowBadge } from "./CentralProductList";
 import { catalogViewMode } from "./lib/central-list";
 import { emptyScanBuffer, flushTypeAhead, isEditableTarget, routeKey, SCAN_MAX_KEY_GAP_MS } from "./lib/scanner";
-import { describeVacuumCandidate, resolveVacuumScan, type VacuumCandidate, type VacuumScanOutcome } from "./lib/vacuum-scan";
+import { BUILD_INFO } from "./lib/build-info";
+import { concludeVacuumLookup, decideScan, offlineVacuumBlock, type PendingVacuumScan, type ScanDecision, type VacuumCodeStatus } from "./lib/scan-flow";
+import { describeVacuumCandidate, type VacuumCandidate } from "./lib/vacuum-scan";
 import { VacuumPackagePicker } from "./VacuumPackagePicker";
 import { resetSearchForNextProduct } from "./lib/search-focus";
 import { TicketLineDetail } from "./TicketLineDetail";
@@ -45,7 +47,7 @@ import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { supabase } from "./lib/supabase";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
 import { isPriceMissing, NO_PRICE_OFFLINE_MESSAGE, parseSetPriceResult, resolveProductRequest } from "./lib/product-price";
-import { registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
+import { refreshVacuumStateNow, registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 import { QuickProductModal } from "./QuickProductModal";
 import { UnitQuantityFields } from "./UnitQuantityFields";
 import { ProductPriceModal } from "./ProductPriceModal";
@@ -335,6 +337,8 @@ export default function App() {
   const [branchStock, setBranchStock] = useState<BranchStock>(null);
   // Envasados al vacío (D-091): esquema EAN-13, PLU y paquetes disponibles de ESTA sucursal, leídos de SQLite (funciona sin Internet). null = sin estado todavía.
   const [vacuumState, setVacuumState] = useState<LocalVacuumState | null>(null);
+  /** Por qué Envasados no se pudo sincronizar la última vez (null = al día, o todavía sin intentar). */
+  const [vacuumSyncError, setVacuumSyncError] = useState<string | null>(null);
   // Varios paquetes con el mismo código y PESOS distintos: el cajero elige cuál tiene en la mano.
   const [vacuumChoice, setVacuumChoice] = useState<VacuumCandidate[] | null>(null);
   const [outOfStockOpen, setOutOfStockOpen] = useState(false);
@@ -804,8 +808,12 @@ export default function App() {
     if (syncPromiseRef.current) return syncPromiseRef.current;
     const syncPromise = (async () => {
       try {
-        const runtime = await synchronizeDesktop(user, setSyncStatus);
+        const runtime = await synchronizeDesktop(user, (status) => {
+          if (status.vacuumError !== undefined) setVacuumSyncError(status.vacuumError);
+          setSyncStatus(status);
+        });
         setLocalRuntime(runtime);
+        void loadVacuumState();
         const config = await localDatabase.commercialConfig();
         setCashDiscountBps(config.cashDiscountBps);
         setDiscounts(config.discounts);
@@ -1386,32 +1394,62 @@ export default function App() {
     setScanFeedback({ tone: "ok", text: `${candidate.productName} ${describeVacuumCandidate(candidate).weight} · ${formatCurrency(candidate.chargeCents)}` });
   }
 
-  function handleVacuumScan(outcome: Exclude<VacuumScanOutcome, { kind: "NOT_VACUUM" }>) {
-    if (outcome.kind === "PACKAGE") { addVacuumPackage(outcome.package); return; }
-    if (outcome.kind === "CHOOSE") { setScanFeedback(null); setVacuumChoice(outcome.candidates); return; }
-    if (outcome.kind === "NO_PACKAGE") {
-      const amount = outcome.amountCents !== null ? ` (${formatCurrency(outcome.amountCents)})` : "";
-      setScanFeedback({ tone: "warn", text: outcome.alreadyInTicket ? "Ya cargaste todos los paquetes con ese código" : `Paquete envasado no disponible en esta sucursal${amount}. Sincronizá la caja.` });
-      return;
+  const vacuumPackagesInTicket = () => new Set(ticketRef.current.flatMap((line) => (line.vacuumPackageId ? [line.vacuumPackageId] : [])));
+
+  /** Ejecuta lo que el flujo de escaneo decidió para un código que no es del catálogo. Un código de Envasados nunca llega al alta rápida. */
+  function applyScanDecision(decision: Exclude<ScanDecision<CatalogProduct>, { kind: "IGNORE" | "CATALOG" | "VACUUM_LOOKUP" }>) {
+    if (decision.kind === "VACUUM_PACKAGE") { addVacuumPackage(decision.package); return; }
+    if (decision.kind === "VACUUM_CHOOSE") { setScanFeedback(null); setVacuumChoice(decision.candidates); return; }
+    if (decision.kind === "VACUUM_BLOCKED") { setScanFeedback({ tone: "warn", text: decision.message }); return; }
+    // Con certeza no es de Envasados. Sólo el POS de Central ofrece el alta; en el resto un código desconocido sigue siendo "no encontrado".
+    if (centralPos) { void resolveUnknownScan(decision.code); return; }
+    setScanFeedback({ tone: "warn", text: "Producto no encontrado" });
+  }
+
+  // El paquete no está (todavía) en esta caja: se sincroniza Envasados en el momento y se vuelve a resolver, así una etiqueta recién impresa
+  // entra al carrito sin esperar al próximo ciclo. Si igual no se puede vender, el servidor dice por qué (vendido, reservado, otra sucursal…).
+  const vacuumLookupInFlight = useRef(false);
+  async function lookUpVacuumScan(pending: PendingVacuumScan) {
+    const vacuumBranch = localRuntime?.branchId ?? null;
+    if (!vacuumBranch || !user || user.offline || !navigator.onLine) { applyScanDecision(offlineVacuumBlock(pending, formatCurrency)); return; }
+    if (vacuumLookupInFlight.current) return;
+    vacuumLookupInFlight.current = true;
+    setScanFeedback({ tone: "ok", text: "Buscando paquete envasado…" });
+    try {
+      const decision = await concludeVacuumLookup<CatalogProduct>(pending, {
+        refresh: async () => {
+          const failure = await refreshVacuumStateNow(vacuumBranch);
+          setVacuumSyncError(failure);
+          if (failure) throw new Error(failure);
+          const fresh = await localDatabase.vacuumState(vacuumBranch);
+          setVacuumState(fresh);
+          return fresh;
+        },
+        codeStatus: async (code) => {
+          const { data, error: statusError } = await supabase.rpc("get_pos_vacuum_code_status", { p_branch_id: vacuumBranch, p_ean13: code });
+          return statusError || !data || typeof data !== "object" || Array.isArray(data) ? null : (data as unknown as VacuumCodeStatus);
+        },
+        packageIdsInTicket: vacuumPackagesInTicket,
+        today: new Date().toLocaleDateString("sv-SE"),
+        formatAmount: formatCurrency
+      });
+      if (decision.kind === "IGNORE" || decision.kind === "CATALOG" || decision.kind === "VACUUM_LOOKUP") return;
+      applyScanDecision(decision);
+    } finally {
+      vacuumLookupInFlight.current = false;
     }
-    setScanFeedback({ tone: "warn", text: `Código de Envasados desconocido (PLU ${outcome.plu}). Sincronizá la caja.` });
   }
 
   function handleScan(rawCode: string) {
     // En Central `stockGate` es null: un producto habilitado se escanea y se vende aunque su stock figure en 0 o negativo.
-    const outcome = resolveScan(barcodeIndex, stockGate, rawCode);
-    if (!outcome) return;
-    if (outcome.kind === "NOT_FOUND") {
-      // Un código de Envasados (EAN-13 de importe variable del esquema configurado) se resuelve contra los paquetes disponibles de la sucursal, también
-      // sin Internet, y NUNCA llega al alta rápida de productos. Los códigos del catálogo ya se resolvieron arriba, exactos y como siempre.
-      const inTicket = new Set(ticketRef.current.flatMap((line) => (line.vacuumPackageId ? [line.vacuumPackageId] : [])));
-      const vacuum = resolveVacuumScan(vacuumState, outcome.code, inTicket);
-      if (vacuum.kind !== "NOT_VACUUM") { handleVacuumScan(vacuum); return; }
-      // Sólo el POS de Central ofrece el alta; en el resto un código desconocido sigue siendo "no encontrado".
-      if (centralPos) { void resolveUnknownScan(outcome.code); return; }
-      setScanFeedback({ tone: "warn", text: "Producto no encontrado" });
-      return;
-    }
+    // Los códigos del catálogo se resuelven primero, exactos y como siempre; recién lo que no está en el catálogo se evalúa como Envasados.
+    const decision = decideScan<CatalogProduct>({
+      barcodeIndex, stock: stockGate, vacuumSupported: desktop && Boolean(localRuntime?.branchId), vacuumState, packageIdsInTicket: vacuumPackagesInTicket()
+    }, rawCode);
+    if (decision.kind === "IGNORE") return;
+    if (decision.kind === "VACUUM_LOOKUP") { void lookUpVacuumScan(decision.pending); return; }
+    if (decision.kind !== "CATALOG") { applyScanDecision(decision); return; }
+    const outcome = decision.outcome;
     if (outcome.kind === "NO_STOCK") { setScanFeedback({ tone: "warn", text: `${outcome.product.productName}: Sin stock` }); return; }
     if (outcome.kind === "OPEN_WEIGHT") {
       setScanFeedback(null);
@@ -1603,7 +1641,7 @@ export default function App() {
 
   useEffect(() => {
     if (!scanFeedback) return;
-    const timeout = window.setTimeout(() => setScanFeedback(null), scanFeedback.tone === "warn" ? 3_500 : 1_800);
+    const timeout = window.setTimeout(() => setScanFeedback(null), scanFeedback.tone === "warn" ? (scanFeedback.text.length > 60 ? 7_000 : 3_500) : 1_800);
     return () => window.clearTimeout(timeout);
   }, [scanFeedback]);
 
@@ -2132,6 +2170,14 @@ export default function App() {
         : syncStatus.pendingCount > 0
           ? `● ${String(syncStatus.pendingCount)}`
           : "✓";
+  // Envasados nunca debe aparentar estar al día: si el último intento falló, o la caja ya sincronizó pero jamás guardó el estado de paquetes, se avisa.
+  const vacuumIssue = !desktop || !localRuntime?.branchId
+    ? null
+    : vacuumSyncError
+      ? `Envasados sin sincronizar: ${vacuumSyncError}`
+      : vacuumState?.appliedAt === null && localRuntime.lastSuccessfulSyncAt && navigator.onLine && !user.offline
+        ? "Envasados todavía no se sincronizó en esta caja"
+        : null;
   const unreadNotifications = announcements.length;
 
   return (
@@ -2204,6 +2250,11 @@ export default function App() {
             >
               <span className="pos-label-full">{syncLabel}</span>
               <span className="pos-label-compact">{syncCompactLabel}</span>
+            </button>
+          ) : null}
+          {vacuumIssue ? (
+            <button className="shrink-0 whitespace-nowrap rounded-xl border border-amber-700 bg-amber-950 px-3 py-2 text-xs font-black text-amber-200" data-testid="vacuum-sync-issue" onClick={() => setDiagnosticsOpen(true)} title={`${vacuumIssue}. Los paquetes envasados nuevos no se reconocen hasta que sincronice.`} type="button">
+              ⚠ ENVASADOS
             </button>
           ) : null}
           {desktop && scale.config.kind !== "MANUAL" ? (
@@ -2534,11 +2585,19 @@ export default function App() {
               <dt className="font-bold text-stone-400">Mercado Pago</dt><dd className={mpAvailability.usable ? "text-emerald-300" : "text-amber-300"}>{mpAvailability.explanation}{mpLookupError ? ` · ${mpLookupError}` : ""}</dd>
               <dt className="font-bold text-stone-400">SQLite</dt><dd>Operativo</dd>
               <dt className="font-bold text-stone-400">Última sync</dt><dd>{localRuntime.lastSuccessfulSyncAt ? new Date(localRuntime.lastSuccessfulSyncAt).toLocaleString("es-AR") : "Nunca"}</dd>
+              <dt className="font-bold text-stone-400">Envasados</dt><dd className={vacuumIssue ? "text-amber-300" : undefined} data-testid="vacuum-sync-status">{vacuumIssue
+                ? `${vacuumIssue}. Los paquetes nuevos no se reconocen hasta que sincronice.`
+                : !vacuumState?.appliedAt
+                  ? "Sin sincronizar todavía"
+                  : vacuumState.scheme
+                    ? `Prefijo ${vacuumState.scheme.prefix} · ${String(vacuumState.plus.length)} cortes · ${String(vacuumState.packages.length)} paquetes disponibles · ${new Date(vacuumState.appliedAt).toLocaleString("es-AR")}`
+                    : "La organización no tiene esquema EAN-13 de Envasados configurado"}</dd>
               <dt className="font-bold text-stone-400">Pendientes</dt><dd>{localRuntime.pendingCount}</dd>
               <dt className="font-bold text-stone-400">Pull</dt><dd>{syncStatus.pullReceived ?? 0} actualizaciones recibidas</dd>
               <dt className="font-bold text-stone-400">Push</dt><dd>Antes: {syncStatus.pushPendingBefore ?? 0} · enviadas: {syncStatus.pushSucceeded ?? 0} · fallidas: {syncStatus.pushFailed ?? 0} · después: {syncStatus.pushPendingAfter ?? localRuntime.pendingCount}</dd>
               <dt className="font-bold text-stone-400">Outbox</dt><dd>{outboxSummary ? `PENDING ${String(outboxSummary.pending)} · FAILED ${String(outboxSummary.failed)} · SYNCED ${String(outboxSummary.synced)}` : "Abrí Sincronizar ahora para actualizar"}</dd>
               <dt className="font-bold text-stone-400">Ventas locales</dt><dd>{localRuntime.localSalesCount}</dd>
+              <dt className="font-bold text-stone-400">Versión</dt><dd data-testid="build-info">{BUILD_INFO.label} · datos v{localRuntime.schemaVersion}</dd>
               <dt className="font-bold text-stone-400">Device ID</dt><dd className="break-all font-mono text-xs">{localRuntime.deviceId}</dd>
               <dt className="font-bold text-stone-400">Sucursal</dt><dd>{localRuntime.branchName ?? "Sin vincular"}</dd>
               <dt className="font-bold text-stone-400">Autorización offline</dt><dd>{localRuntime.authorizationExpiresAt ? `Hasta ${new Date(localRuntime.authorizationExpiresAt).toLocaleString("es-AR")}` : "No disponible"}</dd>

@@ -118,6 +118,17 @@ export type VacuumEanReading =
  * está RESERVADO para Envasados (13 dígitos, verificador válido y prefijo del esquema) y extrae PLU y valor. Un código que no cumple las tres cosas
  * se interpreta como siempre (catálogo). Sin esquema (null) nada es de Envasados.
  */
+/**
+ * Un código que TIENE LA FORMA de un EAN de Envasados (13 dígitos y el prefijo del esquema) pero cuyo dígito verificador no cierra: una etiqueta
+ * mal leída o dañada. Ningún EAN-13 comercial válido tiene un verificador incorrecto, así que tratarlo aparte nunca intercepta un código normal:
+ * sólo evita que una mala lectura de un paquete termine dando de alta un producto.
+ */
+export function isMisreadVacuumEan13(config: EanSchemeConfig | null, scanned: string): boolean {
+  if (!config || !isEanScheme(config.scheme) || validateEanSchemeConfig(config) !== null) return false;
+  const code = scanned.trim();
+  return /^\d{13}$/.test(code) && code.startsWith(config.prefix) && !isValidEan13(code);
+}
+
 export function readVacuumEan13(config: EanSchemeConfig | null, scanned: string): VacuumEanReading {
   if (!config || !isEanScheme(config.scheme) || validateEanSchemeConfig(config) !== null) return { kind: "NOT_VACUUM" };
   const code = scanned.trim();

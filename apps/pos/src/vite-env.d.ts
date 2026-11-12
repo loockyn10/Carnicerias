@@ -13,3 +13,5 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+declare const __POS_BUILD__: { version: string; builtAt: string | null; commit: string | null } | undefined;

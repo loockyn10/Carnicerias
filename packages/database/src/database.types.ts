@@ -5271,6 +5271,10 @@ export type Database = {
         Returns: Json
       }
       get_pos_operator_roster: { Args: { p_device_id: string }; Returns: Json }
+      get_pos_vacuum_code_status: {
+        Args: { p_branch_id: string; p_ean13: string }
+        Returns: Json
+      }
       get_pos_vacuum_state: { Args: { p_branch_id: string }; Returns: Json }
       get_poultry_customer_detail: {
         Args: {
@@ -6349,6 +6353,7 @@ export type Database = {
             }
             Returns: string
           }
+      save_vacuum_default_shelf_life: { Args: { p_days: number }; Returns: number }
       save_vacuum_ean_scheme: {
         Args: {
           p_plu_digits?: number
@@ -6368,6 +6373,14 @@ export type Database = {
           p_shelf_life_days?: number
         }
         Returns: undefined
+      }
+      save_vacuum_product_overrides: {
+        Args: {
+          p_conservation_text?: string
+          p_product_id: string
+          p_shelf_life_days?: number
+        }
+        Returns: Json
       }
       save_vacuum_settings: {
         Args: {
@@ -6651,6 +6664,10 @@ export type Database = {
       set_timekeeping_max_shift_hours: {
         Args: { p_hours: number }
         Returns: undefined
+      }
+      set_vacuum_product_enabled: {
+        Args: { p_enabled: boolean; p_product_id: string }
+        Returns: Json
       }
       signage_object_is_published: {
         Args: { p_name: string }

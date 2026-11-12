@@ -19,6 +19,8 @@ export interface SyncStatusSnapshot {
   pushSucceeded?: number;
   pushFailed?: number;
   pushPendingAfter?: number;
+  /** Envasados: null = el estado de paquetes se sincronizó en este ciclo; texto = por qué no (la caja sigue vendiendo lo que ya tenía). */
+  vacuumError?: string | null;
 }
 
 export interface OfflineSaleItemPayload {

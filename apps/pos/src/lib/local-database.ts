@@ -40,6 +40,8 @@ export interface LocalRuntime {
   lastSuccessfulSyncAt: string | null;
   lastError: string | null;
   localSalesCount: number;
+  /** Última migración SQLite aplicada en esta instalación (22 = Envasados). */
+  schemaVersion: number;
 }
 
 export interface LocalCatalogRow {
@@ -153,6 +155,8 @@ export interface PendingProviderPayment {
 }
 /** Estado de Envasados de la sucursal del dispositivo tal como lo guarda SQLite (sin Internet): el esquema EAN-13, el PLU de cada corte y los paquetes que esta caja todavía puede vender. */
 export interface LocalVacuumState {
+  /** Cuándo se guardó por última vez el estado de Envasados en esta caja (null = nunca sincronizó). */
+  appliedAt: string | null;
   scheme: { scheme: "PRICE_EMBEDDED" | "WEIGHT_EMBEDDED"; prefix: string; pluDigits: number; valueDigits: number; valueStep: number } | null;
   plus: { productId: string; plu: string }[];
   /** Del más antiguo al más nuevo (FIFO). Los que esta caja ya vendió no figuran. */

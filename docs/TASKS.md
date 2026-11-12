@@ -2,6 +2,15 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Envasados: PLU automático, vencimiento general y POS con reconocimiento nuevo (acción del usuario)
+
+Implementado 2026-11-12 (D-094). **Migración pendiente: `202611120099_vacuum_auto_plu_default_shelf_life.sql`** (antes, verificar con `supabase migration list --linked` el estado de 095–098; el POS necesita `get_pos_vacuum_code_status`, que sólo existe con la 099). Orden: `supabase db push --dry-run` → `db push` → desplegar el Admin → instalar el POS nuevo. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+1. Instalar el POS nuevo y abrir el diagnóstico (clic en el estado de sincronización): «Versión» debe mostrar el build de hoy y «Envasados» los cortes/paquetes sincronizados.
+2. Envasados → Configuración: fijar el vencimiento general, habilitar cortes con el botón verde (el PLU aparece solo) y configurar sólo las excepciones.
+3. Envasar un paquete, imprimir con la Unnion y escanearlo en el POS: debe entrar al carrito con su peso e importe, sin alta rápida; probar también uno recién envasado (se sincroniza en el momento), uno vendido y uno de otra sucursal.
+4. Cuando haya Docker: `pnpm db:reset && pnpm db:test` corre `vacuum_auto_plu_default_shelf_life.test.sql` contra Supabase real.
+
 ## P0 — Distribución a supermercados: aplicar y probar (acción del usuario)
 
 Implementada 2026-11-12 (D-093, `docs/VACUUM_DISTRIBUTION.md`). **Migraciones pendientes: `095`, `096`, `202611120097` y `202611120098`** (095/096 sin aplicar al 2026-11-07; el 2026-11-12 la CLI respondió 403 al listar, así que **verificar antes**: `supabase migration list --linked`). Orden: `supabase db push --dry-run` → `supabase db push` → desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).

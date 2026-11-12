@@ -64,7 +64,7 @@ select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000
 select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000001') -> 1 ->> 'categoryName', 'Vacuno', 'a cut carries its category (id and name)');
 select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000001') -> 1 ->> 'categoryId', 'f5000000-0000-4000-8000-000000000002', 'and the category id');
 select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000001') -> 2 ->> 'shelfLifeDays', '14', 'the shelf life comes along (the station never invents an expiry)');
-select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000001') -> 1 ->> 'shelfLifeDays', null, 'a cut without shelf life stays null');
+select is(public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000001') -> 1 ->> 'shelfLifeDays', '14', 'a cut without its own shelf life gets the general default (202611120099)');
 select throws_ok($$select public.list_vacuum_station_products('f3000000-0000-4000-8000-000000000009')$$, '42501', null, 'a branch of another organization is refused');
 
 -- Frecuencia y resumen: dos paquetes de Vacío y uno de Churrasco hoy en Central; uno de ellos se anula.

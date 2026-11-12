@@ -130,7 +130,7 @@ export {
 export type { ClaimMessage, ClaimReplyKind } from "./whatsapp-claim";
 export { renderWhatsAppMessage, MAX_WHATSAPP_MESSAGE_LENGTH } from "./whatsapp-ticket";
 export {
-  buildEan13, EAN_SCHEME_LABELS, EAN_SCHEMES, ean13CheckDigit, isEanScheme, isValidEan13, readVacuumEan13, validateEanSchemeConfig, vacuumCommercialTotalCents
+  buildEan13, EAN_SCHEME_LABELS, EAN_SCHEMES, ean13CheckDigit, isEanScheme, isMisreadVacuumEan13, isValidEan13, readVacuumEan13, validateEanSchemeConfig, vacuumCommercialTotalCents
 } from "./vacuum-ean";
 export type { EanBuildFailure, EanBuildResult, EanInputs, EanScheme, EanSchemeConfig, VacuumEanReading } from "./vacuum-ean";
 export { calculateVacuumPackagePricing } from "./vacuum-package";

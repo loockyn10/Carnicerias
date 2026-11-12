@@ -63,6 +63,7 @@ struct LocalRuntime {
     last_successful_sync_at: Option<String>,
     last_error: Option<String>,
     local_sales_count: i64,
+    schema_version: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +210,8 @@ struct LocalVacuumPackage {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalVacuumState {
+    /// Cuándo se aplicó por última vez el snapshot de Envasados en esta caja; None = nunca (la caja no sabe todavía qué códigos son paquetes).
+    applied_at: Option<String>,
     scheme: Option<LocalVacuumScheme>,
     plus: Vec<LocalVacuumPlu>,
     /// Sólo los paquetes que esta caja todavía puede vender (los que ya vendió localmente no figuran).
@@ -872,6 +875,7 @@ fn get_local_runtime(state: State<'_, DatabaseState>) -> Result<LocalRuntime, St
                     last_successful_sync_at: None,
                     last_error: None,
                     local_sales_count: 0,
+                    schema_version: 0,
                 })
             },
         )
@@ -891,6 +895,9 @@ fn get_local_runtime(state: State<'_, DatabaseState>) -> Result<LocalRuntime, St
         .map_err(|error| error.to_string())?;
     runtime.local_sales_count = connection
         .query_row("select count(*) from local_sales", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    runtime.schema_version = connection
+        .query_row("select coalesce(max(version), 0) from schema_migrations", [], |row| row.get(0))
         .map_err(|error| error.to_string())?;
     Ok(runtime)
 }
@@ -1339,7 +1346,8 @@ fn local_vacuum_state_inner(connection: &Connection, branch_id: &str) -> Result<
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    Ok(LocalVacuumState { scheme, plus, packages })
+    let applied_at = metadata(connection, "vacuum_state_applied_at")?;
+    Ok(LocalVacuumState { applied_at, scheme, plus, packages })
 }
 
 /// Valida UNA línea PACKAGE contra el paquete que esta caja tiene disponible y devuelve (gramos, subtotal). El importe es el FIJO del paquete:
@@ -5142,6 +5150,20 @@ mod tests {
         let outcome = insert_sale(&transaction, sale);
         if outcome.is_ok() { transaction.commit().unwrap(); }
         outcome
+    }
+
+    #[test]
+    fn a_pos_that_never_synced_vacuum_knows_it_and_an_upgraded_one_has_the_vacuum_tables() {
+        // Instalación vieja: la base llega hasta la migración 21 (sin Envasados). Al abrirla con la versión nueva se migra sola a la 22 y la caja
+        // sabe que todavía no sincronizó Envasados (applied_at = None) en vez de aparentar que está al día.
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute_batch("drop table vacuum_scheme; drop table catalog_vacuum_plu; drop table local_vacuum_packages; alter table local_sale_items drop column vacuum_package_id; alter table local_sale_items drop column vacuum_ean13; delete from schema_migrations where version = 22;").unwrap();
+        initialize_connection(&mut connection).unwrap();
+        assert_eq!(connection.query_row("select max(version) from schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 22);
+        assert!(local_vacuum_state_inner(&connection, "branch").unwrap().applied_at.is_none(), "never synced");
+        let (connection, _) = vacuum_connection();
+        assert!(local_vacuum_state_inner(&connection, "branch").unwrap().applied_at.is_some(), "synced");
     }
 
     #[test]

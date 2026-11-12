@@ -1,4 +1,4 @@
-import { readVacuumEan13, type EanSchemeConfig } from "@carnicerias/business-logic";
+import { isMisreadVacuumEan13, readVacuumEan13, type EanSchemeConfig } from "@carnicerias/business-logic";
 
 import type { VacuumPackageForSale } from "./ticket-pricing";
 
@@ -12,6 +12,8 @@ import type { VacuumPackageForSale } from "./ticket-pricing";
  */
 
 export interface LocalVacuumStateLike {
+  /** Cuándo esta caja guardó por última vez el estado de Envasados; null/ausente = todavía nunca lo sincronizó. */
+  appliedAt?: string | null;
   scheme: { scheme: "PRICE_EMBEDDED" | "WEIGHT_EMBEDDED"; prefix: string; pluDigits: number; valueDigits: number; valueStep: number } | null;
   plus: readonly { productId: string; plu: string }[];
   packages: readonly {
@@ -28,6 +30,10 @@ export interface VacuumCandidate extends VacuumPackageForSale {
 export type VacuumScanOutcome =
   /** No es un código de Envasados (o no hay esquema configurado): se interpreta como siempre. */
   | { kind: "NOT_VACUUM" }
+  /** Tiene la forma de un código de Envasados (13 dígitos y el prefijo del esquema) pero el dígito verificador no cierra: etiqueta mal leída. */
+  | { kind: "INVALID_CHECK_DIGIT"; code: string }
+  /** Es del esquema pero el valor embebido es cero y ningún paquete lo respalda: no se puede cobrar. */
+  | { kind: "INVALID_AMOUNT"; code: string; plu: string }
   /** Cumple el esquema pero el PLU no corresponde a ningún corte habilitado ni hay un paquete con ese código. */
   | { kind: "UNKNOWN_PLU"; code: string; plu: string }
   /** Cumple el esquema y el corte existe, pero esta caja no tiene un paquete disponible con ese código. */
@@ -63,11 +69,12 @@ export function resolveVacuumScan(state: LocalVacuumStateLike | null, rawCode: s
   if (!state || !scheme) return { kind: "NOT_VACUUM" };
   const code = rawCode.trim();
   const reading = readVacuumEan13(scheme, code);
-  if (reading.kind === "NOT_VACUUM") return { kind: "NOT_VACUUM" };
+  if (reading.kind === "NOT_VACUUM") return isMisreadVacuumEan13(scheme, code) ? { kind: "INVALID_CHECK_DIGIT", code } : { kind: "NOT_VACUUM" };
 
   const sameCode = state.packages.filter((row) => row.ean13 === code);
   const candidates = sameCode.filter((row) => !packageIdsInTicket.has(row.packageId)).map(toCandidate).sort(compareFifo);
   if (candidates.length === 0) {
+    if (sameCode.length === 0 && reading.value === 0n) return { kind: "INVALID_AMOUNT", code, plu: reading.plu };
     const productId = state.plus.find((row) => /^\d+$/.test(row.plu) && BigInt(row.plu).toString() === reading.pluNumber)?.productId ?? sameCode[0]?.productId ?? null;
     if (productId === null) return { kind: "UNKNOWN_PLU", code, plu: reading.plu };
     return { kind: "NO_PACKAGE", code, productId, amountCents: reading.amountCents, alreadyInTicket: sameCode.length > 0 };

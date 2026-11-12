@@ -2,6 +2,12 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## Envasados: PLU automático y reconocimiento del EAN en el POS — implementado 2026-11-12 (D-094; migración `202611120099` **sin aplicar**)
+
+- Causa verificada del fallo del POS de escritorio: la caja instalada era una compilación del 22 de octubre (sin Envasados: su SQLite estaba en la migración 21 y el ejecutable no contenía `vacuum_scheme`), y todos los instaladores se llaman 0.1.0. Con ese POS un EAN de Envasados es un código desconocido → alta rápida. El código nuevo además cierra los huecos que quedaban con una caja actual: verificador incorrecto y caja sin sincronizar caían igual al alta rápida, y el error de `get_pos_vacuum_state` se tragaba en silencio.
+- Validado: `pnpm check` (typecheck, lint, tests), build del Admin, `cargo test --lib` (165) y pgTAP en PGlite (`vacuum_auto_plu_default_shelf_life` 63/63; las suites de Envasados existentes siguen pasando, con dos aserciones actualizadas a la regla nueva del vencimiento). No corrió contra Supabase real ni se probó una etiqueta física.
+- `database.types.ts` se editó a mano (4 RPC nuevas).
+
 ## Núcleo confirmado
 
 - Monorepo pnpm con Admin Next.js, POS React/Vite/Tauri y paquetes compartidos.

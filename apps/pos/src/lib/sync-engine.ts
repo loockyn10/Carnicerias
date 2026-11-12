@@ -83,18 +83,25 @@ async function refreshBranchStock(runtime: LocalRuntime): Promise<void> {
 /**
  * Refreshes the Envasados state the POS needs to recognise and sell vacuum packages WITHOUT Internet: the EAN-13 scheme, the PLU of each cut and
  * this branch's available packages. Runs AFTER the outbox push on purpose: a package sold by this device is then already SOLD on the server and drops
- * out of the list. Best-effort like the stock refresh: offline or an older server without the RPC keeps the last stored state and never fails the sync.
+ * out of the list. It never fails the sync (sales, catalog and timekeeping do not depend on it), but it is NOT silent: the reason is returned so the
+ * POS can show that Envasados is out of date instead of pretending everything synced.
  */
-async function refreshVacuumState(runtime: LocalRuntime): Promise<void> {
-  if (!runtime.branchId) return;
+export async function refreshVacuumStateNow(branchId: string): Promise<string | null> {
   try {
-    const { data, error } = await supabase.rpc("get_pos_vacuum_state", { p_branch_id: runtime.branchId });
-    if (error) throw error;
-    if (!data || Array.isArray(data) || typeof data !== "object") throw new Error("Invalid vacuum state payload");
+    const { data, error } = await supabase.rpc("get_pos_vacuum_state", { p_branch_id: branchId });
+    if (error) throw new Error(describePushError(error));
+    if (!data || Array.isArray(data) || typeof data !== "object") throw new Error("Respuesta inválida del servidor");
     await localDatabase.applyVacuumState(data as unknown as VacuumStatePayload);
+    return null;
   } catch (vacuumError) {
-    console.warn("Vacuum state refresh skipped:", vacuumError);
+    const reason = vacuumError instanceof Error ? vacuumError.message : String(vacuumError);
+    console.warn("Vacuum state refresh failed:", reason);
+    return reason;
   }
+}
+
+async function refreshVacuumState(runtime: LocalRuntime): Promise<string | null> {
+  return runtime.branchId ? refreshVacuumStateNow(runtime.branchId) : null;
 }
 
 /**
@@ -217,7 +224,7 @@ export async function synchronizeDesktop(
     }
 
     await refreshBranchStock(runtime);
-    await refreshVacuumState(runtime);
+    const vacuumError = await refreshVacuumState(runtime);
     await refreshDeviceCapabilities(runtime);
     runtime = await localDatabase.runtime();
     listener({
@@ -227,13 +234,15 @@ export async function synchronizeDesktop(
       syncingTotal: 0,
       lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
       lastError: null,
-      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount
+      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount, vacuumError
     });
     return runtime;
   } catch (error) {
     // A stuck outbox event (or a failed pull) must not freeze stock visibility: whatever was
     // pushed before the failure is already in the server sum, and what wasn't stays subtracted locally.
     await refreshBranchStock(runtime);
+    // Lo mismo para Envasados: una venta trabada en el outbox no puede dejar a la caja sin reconocer los paquetes nuevos.
+    const vacuumError = await refreshVacuumState(runtime);
     runtime = await localDatabase.runtime();
     listener({
       state: "error",
@@ -242,7 +251,7 @@ export async function synchronizeDesktop(
       syncingTotal: runtime.pendingCount,
       lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
       lastError: error instanceof Error ? error.message : "Synchronization failed",
-      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount
+      pullReceived, pushPendingBefore, pushSucceeded, pushFailed, pushPendingAfter: runtime.pendingCount, vacuumError
     });
     throw error;
   }

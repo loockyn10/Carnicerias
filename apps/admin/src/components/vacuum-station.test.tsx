@@ -9,7 +9,7 @@ import type { VacuumSettings } from "../lib/vacuum";
 import { VacuumStation } from "./vacuum-station";
 
 const settings: VacuumSettings = {
-  businessName: "Carnicerías Fran", address: null, establishmentInfo: null, defaultConservationText: null, extraText: null, labelWidthMm: 58, infoHeightMm: 40, priceHeightMm: 40,
+  businessName: "Carnicerías Fran", address: null, establishmentInfo: null, defaultConservationText: null, extraText: null, labelWidthMm: 58, infoHeightMm: 40, priceHeightMm: 40, defaultShelfLifeDays: 14,
   ean: { scheme: "PRICE_EMBEDDED", prefix: "20", pluDigits: 4, valueDigits: 6, valueStep: 100 }
 };
 

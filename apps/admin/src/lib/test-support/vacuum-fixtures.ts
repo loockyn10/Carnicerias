@@ -28,7 +28,7 @@ export function sampleProduct(overrides: Partial<VacuumProductOption> = {}): Vac
 export function sampleSettings(overrides: Partial<VacuumSettings> = {}): VacuumSettings {
   return {
     businessName: "Carnicería Fran", address: "Av. Siempreviva 742", establishmentInfo: "Establecimiento Nº 1", defaultConservationText: null, extraText: null,
-    labelWidthMm: null, infoHeightMm: null, priceHeightMm: null,
+    labelWidthMm: null, infoHeightMm: null, priceHeightMm: null, defaultShelfLifeDays: 14,
     ean: { scheme: "PRICE_EMBEDDED", prefix: "2", pluDigits: 4, valueDigits: 7, valueStep: 1 }, ...overrides
   };
 }

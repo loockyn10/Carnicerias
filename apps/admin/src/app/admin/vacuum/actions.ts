@@ -156,6 +156,43 @@ export async function saveVacuumEanSchemeAction(_: VacuumFormState, formData: Fo
   } catch (error) { return failure(error, "No se pudo guardar el esquema EAN-13"); }
 }
 
+/** Habilita o deshabilita un corte en un clic. Habilitar asigna el PLU si todavía no tiene; deshabilitar conserva PLU, vencimiento propio e historial. */
+export async function setVacuumProductEnabledAction(productId: string, enabled: boolean): Promise<{ ok: true; plu: string | null } | { ok: false; error: string }> {
+  try {
+    if (!isUuid(productId)) throw new Error("Producto inválido");
+    const data = await rpc("set_vacuum_product_enabled", { p_product_id: productId, p_enabled: enabled });
+    const plu = data !== null && typeof data === "object" && !Array.isArray(data) && typeof data.plu === "string" ? data.plu : null;
+    revalidatePath("/admin/vacuum", "layout");
+    return { ok: true, plu };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo cambiar el corte" }; }
+}
+
+/** Vencimiento general de la organización: sólo afecta a los paquetes que se registren después. */
+export async function saveVacuumDefaultShelfLifeAction(_: VacuumFormState, formData: FormData): Promise<VacuumFormState> {
+  try {
+    const raw = text(formData, "default_shelf_life_days");
+    if (!/^\d{1,4}$/.test(raw)) throw new Error("Indicá los días de vencimiento (número entero)");
+    await rpc("save_vacuum_default_shelf_life", { p_days: Number.parseInt(raw, 10) });
+    return done();
+  } catch (error) { return failure(error, "No se pudo guardar el vencimiento general"); }
+}
+
+/** Excepciones de un corte: vencimiento propio (modo «general» = sin días propios) y texto de conservación. No toca el PLU ni si está habilitado. */
+export async function saveVacuumProductOverridesAction(_: VacuumFormState, formData: FormData): Promise<VacuumFormState> {
+  try {
+    const productId = text(formData, "product_id");
+    if (!isUuid(productId)) throw new Error("Producto inválido");
+    const custom = text(formData, "shelf_mode") === "custom";
+    const days = text(formData, "shelf_life_days");
+    if (custom && !/^\d{1,4}$/.test(days)) throw new Error("Indicá los días de vencimiento propios (número entero)");
+    const conservation = text(formData, "conservation_text");
+    await rpc("save_vacuum_product_overrides", {
+      p_product_id: productId, ...(custom ? { p_shelf_life_days: Number.parseInt(days, 10) } : {}), ...(conservation ? { p_conservation_text: conservation } : {})
+    });
+    return done();
+  } catch (error) { return failure(error, "No se pudo guardar la configuración del corte"); }
+}
+
 export async function saveVacuumProductConfigAction(_: VacuumFormState, formData: FormData): Promise<VacuumFormState> {
   try {
     const productId = text(formData, "product_id");

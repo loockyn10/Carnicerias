@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useActionState, useMemo, useRef, useState, useTransition } from "react";
 
-import { saveVacuumEanSchemeAction, saveVacuumProductConfigAction, saveVacuumSettingsAction, type VacuumFormState } from "../app/admin/vacuum/actions";
+import { saveVacuumDefaultShelfLifeAction, saveVacuumEanSchemeAction, saveVacuumProductOverridesAction, saveVacuumSettingsAction, setVacuumProductEnabledAction, type VacuumFormState } from "../app/admin/vacuum/actions";
 import type { VacuumConfigRow, VacuumSettings } from "../lib/vacuum";
 import { buildEan13, EAN_SCHEME_LABELS, EAN_SCHEMES, validateEanSchemeConfig, type EanScheme } from "../lib/vacuum-ean";
 import { VACUUM_LABEL_DEFAULTS } from "../lib/vacuum-label-spec";
@@ -94,21 +95,76 @@ export function VacuumEanSchemeForm({ config }: { config: VacuumSettings["ean"] 
   </form>;
 }
 
-/** Habilita un corte para envasar y define su vida útil, PLU y texto de conservación. */
-export function VacuumProductConfigModal({ row }: { row: VacuumConfigRow }) {
+/** Vencimiento general de la organización: lo usan todos los cortes que no tengan uno propio. Nunca cambia el vencimiento de un paquete ya registrado. */
+export function VacuumDefaultShelfLifeForm({ days }: { days: number }) {
+  const [state, action, pending] = useActionState(saveVacuumDefaultShelfLifeAction, {} as VacuumFormState);
+  return <form action={action} className="grid content-start gap-3 rounded-xl bg-white p-5 shadow-sm" data-testid="vacuum-default-shelf-life-form">
+    <div><h2 className="text-lg font-black">Días de vencimiento predeterminados</h2>
+      <p className="mt-1 text-sm text-stone-600">Se usa para todos los cortes que no tengan un vencimiento propio. Si lo cambiás, los paquetes ya envasados conservan el vencimiento con el que se registraron. Es un parámetro operativo tuyo, no una validación sanitaria de vida útil.</p></div>
+    <label className={fieldLabel}>Días<input className={fieldInput} defaultValue={days} inputMode="numeric" key={days} name="default_shelf_life_days" /></label>
+    <Feedback state={state} />
+    <div className="flex justify-end"><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Guardando…" : "Guardar"}</button></div>
+  </form>;
+}
+
+/**
+ * Habilitar / deshabilitar un corte en un solo clic, sin formularios. El PLU lo asigna el sistema al habilitar (y se conserva al deshabilitar).
+ * Mientras la operación está en curso el botón queda bloqueado: los clics repetidos no mandan pedidos duplicados.
+ */
+export function VacuumCutToggle({ productId, enabled }: { productId: string; enabled: boolean }) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const inFlight = useRef(false);
+  const click = () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await setVacuumProductEnabledAction(productId, !enabled);
+        if (result.ok) router.refresh(); else setError(result.error);
+      } finally { inFlight.current = false; }
+    });
+  };
+  return <span className="inline-flex flex-col items-end gap-1">
+    <button
+      aria-busy={pending}
+      className={`inline-flex min-w-36 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-white disabled:opacity-60 ${enabled ? "bg-red-700 hover:bg-red-800" : "bg-emerald-700 hover:bg-emerald-800"}`}
+      data-testid={enabled ? "vacuum-disable" : "vacuum-enable"}
+      disabled={pending}
+      onClick={click}
+      type="button"
+    >{pending ? "Guardando…" : enabled ? "✕ Deshabilitar" : "✓ Habilitar"}</button>
+    {error ? <span className="max-w-56 text-right text-xs text-red-700" role="alert">{error}</span> : null}
+  </span>;
+}
+
+/** Vencimiento de un corte: el efectivo y de dónde sale («General» o «Personalizado»). */
+export function shelfLifeSummary(row: Pick<VacuumConfigRow, "shelfLifeDays" | "customShelfLifeDays">): { text: string; custom: boolean } {
+  const days = row.shelfLifeDays;
+  const text = days === null ? "—" : `${String(days)} ${days === 1 ? "día" : "días"}`;
+  return { text, custom: row.customShelfLifeDays !== null };
+}
+
+/** Configuración individual de un corte: vencimiento general o propio y texto de conservación. El PLU no se edita acá. */
+export function VacuumProductConfigModal({ row, defaultShelfLifeDays }: { row: VacuumConfigRow; defaultShelfLifeDays: number }) {
+  const [mode, setMode] = useState<"general" | "custom">(row.customShelfLifeDays === null ? "general" : "custom");
   return <FormModal
-    action={saveVacuumProductConfigAction}
-    description="La vida útil y el texto de conservación son configuración tuya: el sistema no asume ningún plazo."
+    action={saveVacuumProductOverridesAction}
+    description="Elegí si este corte usa el vencimiento general o uno propio. El PLU lo administra el sistema."
     submitLabel="Guardar"
     title={`Envasado — ${row.name}`}
-    triggerLabel="Configurar"
+    triggerLabel="⚙ Configurar"
   >
     <input name="product_id" type="hidden" value={row.productId} />
-    <label className="flex items-center gap-2 text-sm font-bold"><input defaultChecked={row.enabled} name="enabled" type="checkbox" /> Disponible para envasado</label>
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className={fieldLabel}>Vida útil (días) <span className={optionalHint}>opcional</span><input className={fieldInput} defaultValue={row.shelfLifeDays ?? ""} inputMode="numeric" name="shelf_life_days" placeholder="7" /></label>
-      <label className={fieldLabel}>PLU / código para el EAN <span className={optionalHint}>sólo dígitos</span><input className={fieldInput} defaultValue={row.plu ?? ""} inputMode="numeric" maxLength={8} name="plu" placeholder="7" /></label>
-    </div>
+    <p className="rounded-lg bg-stone-50 p-3 text-sm" data-testid="effective-shelf-life">Vencimiento efectivo hoy: <strong>{shelfLifeSummary({ shelfLifeDays: mode === "custom" ? (Number.parseInt(row.customShelfLifeDays === null ? "" : String(row.customShelfLifeDays), 10) || defaultShelfLifeDays) : defaultShelfLifeDays, customShelfLifeDays: null }).text}</strong> · {row.customShelfLifeDays === null ? "General" : "Personalizado"} guardado{row.plu ? <> · PLU <span className="font-mono">{row.plu}</span></> : null}</p>
+    <fieldset className="grid gap-2">
+      <legend className="text-sm font-bold">Vencimiento</legend>
+      <label className="flex items-center gap-2 text-sm"><input checked={mode === "general"} name="shelf_mode" onChange={() => { setMode("general"); }} type="radio" value="general" /> Usar el general ({defaultShelfLifeDays} días)</label>
+      <label className="flex items-center gap-2 text-sm"><input checked={mode === "custom"} name="shelf_mode" onChange={() => { setMode("custom"); }} type="radio" value="custom" /> Personalizado</label>
+      {mode === "custom" ? <label className={fieldLabel}>Días propios<input className={fieldInput} defaultValue={row.customShelfLifeDays ?? ""} inputMode="numeric" name="shelf_life_days" /></label> : null}
+    </fieldset>
     <label className={fieldLabel}>Texto de conservación <span className={optionalHint}>opcional · si falta se usa el general</span><textarea className={fieldInput} defaultValue={row.conservationText ?? ""} maxLength={600} name="conservation_text" rows={3} /></label>
   </FormModal>;
 }

@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { StatusBadge } from "../../../../components/admin-ui";
 import { SectionTabs } from "../../../../components/section-tabs";
-import { VacuumEanSchemeForm, VacuumEstablishmentForm, VacuumProductConfigModal } from "../../../../components/vacuum-settings-forms";
+import { shelfLifeSummary, VacuumCutToggle, VacuumDefaultShelfLifeForm, VacuumEanSchemeForm, VacuumEstablishmentForm, VacuumProductConfigModal } from "../../../../components/vacuum-settings-forms";
 import { requireAdminContext } from "../../../../lib/admin";
 import { createPerfLogger } from "../../../../lib/perf";
 import { createClient } from "../../../../lib/supabase/server";
@@ -51,28 +51,27 @@ export default async function VacuumSettingsPage({ searchParams }: { searchParam
 
     <div className="mt-6 grid gap-6 lg:grid-cols-2">
       <VacuumEanSchemeForm config={settings.ean} key={JSON.stringify(settings.ean)} />
+      <VacuumDefaultShelfLifeForm days={settings.defaultShelfLifeDays} key={settings.defaultShelfLifeDays} />
       <VacuumEstablishmentForm key={[settings.businessName, settings.infoHeightMm, settings.priceHeightMm, settings.labelWidthMm].map(String).join("|")} settings={settings} />
     </div>
 
     <section className="mt-8">
       <h2 className="text-xl font-black">Cortes disponibles para envasar</h2>
-      <p className="mt-1 text-sm text-stone-600">Sólo productos por peso. Un corte sin configurar no aparece en la pantalla de envasado. ¿Falta uno? Se crea en <Link className="font-bold text-rose-800 underline" href="/admin/products">Productos</Link>.</p>
+      <p className="mt-1 text-sm text-stone-600">Sólo productos por peso. Habilitar es un clic: el sistema asigna el PLU solo y el corte usa el vencimiento general salvo que lo configures aparte. ¿Falta uno? Se crea en <Link className="font-bold text-rose-800 underline" href="/admin/products">Productos</Link>.</p>
       <form className="mt-3 grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-[1fr_11rem_auto]">
         <input className={input} defaultValue={search} name="q" placeholder="Buscar por nombre o SKU…" type="search" />
         <select className={input} defaultValue={filter} name="filter"><option value="all">Todos</option><option value="enabled">Habilitados</option><option value="disabled">No habilitados</option></select>
         <button className="rounded-lg border border-stone-300 px-4 py-2 text-sm font-bold">Filtrar</button>
       </form>
       <p className="mt-3 text-sm text-stone-500">{products.total} producto{products.total === 1 ? "" : "s"}</p>
-      <div className="mt-3 overflow-hidden rounded-xl bg-white shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm" data-testid="vacuum-config-products">
-        <thead className="border-b border-stone-200 bg-stone-50 text-stone-500"><tr><th className="p-4">Corte</th><th className="p-4">Estado</th><th className="p-4">Vida útil</th><th className="p-4">PLU</th><th className="p-4">Conservación</th><th className="p-4 text-right">Acciones</th></tr></thead>
+      <div className="mt-3 overflow-hidden rounded-xl bg-white shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm" data-testid="vacuum-config-products">
+        <thead className="border-b border-stone-200 bg-stone-50 text-stone-500"><tr><th className="p-4">Corte</th><th className="p-4">Vencimiento</th><th className="p-4">Estado</th><th className="p-4 text-right">Acción</th></tr></thead>
         <tbody>{products.rows.map((row) => (
           <tr className="border-b border-stone-100 last:border-0" key={row.productId}>
             <td className="p-4"><strong>{row.name}</strong>{row.sku ? <span className="block text-xs text-stone-500">{row.sku}</span> : null}</td>
+            <td className="p-4">{shelfLifeSummary(row).text} <span className="text-xs text-stone-500">· {shelfLifeSummary(row).custom ? "Personalizado" : "General"}</span></td>
             <td className="p-4"><StatusBadge tone={row.enabled ? "success" : "neutral"}>{row.enabled ? "Habilitado" : "No habilitado"}</StatusBadge></td>
-            <td className="p-4">{row.shelfLifeDays !== null ? `${String(row.shelfLifeDays)} días` : <span className="text-stone-400">—</span>}</td>
-            <td className="p-4">{row.plu ?? <span className="text-stone-400">—</span>}</td>
-            <td className="max-w-xs p-4 text-xs text-stone-600"><span className="line-clamp-2">{row.conservationText ?? "—"}</span></td>
-            <td className="p-4 text-right"><VacuumProductConfigModal row={row} /></td>
+            <td className="p-4"><div className="flex items-center justify-end gap-2"><VacuumProductConfigModal defaultShelfLifeDays={products.defaultShelfLifeDays} row={row} /><VacuumCutToggle enabled={row.enabled} productId={row.productId} /></div></td>
           </tr>
         ))}</tbody>
       </table></div>

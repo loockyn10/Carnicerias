@@ -26,6 +26,9 @@ export function formatIsoDate(value: string): string {
 // Tipos y lectura de RPC
 // ---------------------------------------------------------------------------------------------------------------------
 
+/** Valor inicial del vencimiento general (el mismo de la columna en la base). */
+export const DEFAULT_SHELF_LIFE_DAYS = 14;
+
 export interface VacuumSettings {
   businessName: string | null;
   address: string | null;
@@ -35,6 +38,8 @@ export interface VacuumSettings {
   labelWidthMm: number | null;
   infoHeightMm: number | null;
   priceHeightMm: number | null;
+  /** Días de vencimiento de los cortes sin valor propio (parámetro operativo configurable, no una validación sanitaria). */
+  defaultShelfLifeDays: number;
   ean: EanSchemeConfig | null;
 }
 
@@ -60,7 +65,7 @@ export function parseVacuumSettings(value: unknown): VacuumSettings {
     businessName: strOrNull(record.businessName), address: strOrNull(record.address), establishmentInfo: strOrNull(record.establishmentInfo),
     defaultConservationText: strOrNull(record.defaultConservationText), extraText: strOrNull(record.extraText),
     labelWidthMm: numberOrNull(record.labelWidthMm), infoHeightMm: numberOrNull(record.infoHeightMm), priceHeightMm: numberOrNull(record.priceHeightMm),
-    ean: parseEanConfig(record.ean)
+    defaultShelfLifeDays: intOrNull(record.defaultShelfLifeDays) ?? DEFAULT_SHELF_LIFE_DAYS, ean: parseEanConfig(record.ean)
   };
 }
 
@@ -229,20 +234,23 @@ export interface VacuumConfigRow {
   name: string;
   sku: string | null;
   enabled: boolean;
+  /** Vencimiento EFECTIVO: el propio del corte o, si no tiene, el general de la organización. */
   shelfLifeDays: number | null;
+  /** Vencimiento propio del corte; null = usa el general. */
+  customShelfLifeDays: number | null;
   plu: string | null;
   conservationText: string | null;
 }
 
-export function parseVacuumConfigPage(value: unknown): { total: number; rows: VacuumConfigRow[] } {
+export function parseVacuumConfigPage(value: unknown): { total: number; defaultShelfLifeDays: number; rows: VacuumConfigRow[] } {
   const record = asRecord(value);
   return {
-    total: int(record.total),
+    total: int(record.total), defaultShelfLifeDays: intOrNull(record.defaultShelfLifeDays) ?? DEFAULT_SHELF_LIFE_DAYS,
     rows: asArray(record.rows).map((entry) => {
       const row = asRecord(entry);
       return {
         productId: str(row.productId), name: str(row.name), sku: strOrNull(row.sku), enabled: bool(row.enabled), shelfLifeDays: intOrNull(row.shelfLifeDays),
-        plu: strOrNull(row.plu), conservationText: strOrNull(row.conservationText)
+        customShelfLifeDays: intOrNull(row.customShelfLifeDays), plu: strOrNull(row.plu), conservationText: strOrNull(row.conservationText)
       };
     })
   };
