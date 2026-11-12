@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Distribución a supermercados: aplicar y probar (acción del usuario)
+
+Implementada 2026-11-12 (D-093, `docs/VACUUM_DISTRIBUTION.md`). **Migraciones pendientes: `095`, `096`, `202611120097` y `202611120098`** (095/096 sin aplicar al 2026-11-07; el 2026-11-12 la CLI respondió 403 al listar, así que **verificar antes**: `supabase migration list --linked`). Orden: `supabase db push --dry-run` → `supabase db push` → desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+
+1. Supermercados: cargar un cliente (CUIT con dígito verificador) y su primer establecimiento; probar modalidad mayorista y consignación.
+2. Etiquetas: envasar un paquete y comprobar que ya tiene identificador logístico; imprimir la **etiqueta logística** y escanear su Code 128 con el lector real (módulo de 0,25/0,3 mm en la térmica de 203 dpi). Decidir si se sube el alto de la etiqueta informativa (≈ 50 mm) para llevar el código ahí o se usa la etiqueta logística.
+3. Nueva entrega: crear un borrador, agregar por cantidad, por código y de la lista, confirmar, imprimir el remito (hoja A4) y comprobar que el stock de Central bajó (un movimiento por producto) y que el POS ya no ofrece esos paquetes.
+4. Conciliar: informar vendidos por código y por cantidad; registrar devoluciones; recibirlas (cuarentena), inspeccionar y aprobar/rechazar/descartar; verificar que sólo el reingreso aprobado suma stock y que un paquete vencido o con envase dañado no se puede reingresar.
+5. Panel: revisar que lo estimado (ventas por cantidad) se vea aparte de lo confirmado.
+
 ## P0 — Estación de producción de Envasados: aplicar y probar con hardware (acción del usuario)
 
 Implementada 2026-11-07 (D-092, `docs/VACUUM_STATION.md`). **Migraciones pendientes: `202611070095` y `202611070096`** (verificado con `supabase migration list --linked` y `db push --dry-run`: ninguna aplicada). Orden: `supabase db push --dry-run` → `supabase db push` → desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).

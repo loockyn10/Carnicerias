@@ -77,3 +77,20 @@ export const VACUUM_PRICE_TYPE = {
 
 /** Separaciones entre bloques (mm). */
 export const VACUUM_GAPS_MM = { section: 1.4, line: 0.6 } as const;
+
+/**
+ * Identificador LOGÍSTICO en la etiqueta informativa (Code 128 B de 9 caracteres = 134 módulos). Módulo de 0,25 mm (= 2 puntos a 203 dpi: barras nítidas en una
+ * térmica) y 6 mm de alto. Sólo se dibuja si entra reduciendo la tipografía de la etiqueta a lo sumo un 8 % (`minFit` 0,92) y sin recortar nada (medido: en 55 × 44 mm hace falta reducirla un 12 %, así que NO se dibuja; desde unos 50 mm de alto entra sin reducir): si no entra, la
+ * informativa queda como era y se imprime la etiqueta logística aparte. El EAN-13 comercial (etiqueta de precio) no se toca.
+ */
+export const VACUUM_LOGISTIC = { moduleMm: 0.25, barHeightMm: 6, textPt: 6, gapMm: 1, minFit: 0.92 } as const;
+
+/** Etiqueta LOGÍSTICA adicional (mismo papel que la informativa): el código más grande, para escanearlo de lejos o con lectores económicos. */
+export const VACUUM_LOGISTIC_TYPE = {
+  title: { pt: 5.5, style: "bold" },
+  name: { maxPt: 10, minPt: 7, maxLines: 2, style: "bold", lineHeightEm: 1.1 },
+  barcode: { moduleMm: 0.3, barHeightMm: 11 },
+  code: { maxPt: 13, minPt: 8, style: "bold" },
+  detail: { pt: 7, style: "regular", lineHeightEm: 1.2 },
+  footer: { pt: 5.5, style: "regular" }
+} as const;

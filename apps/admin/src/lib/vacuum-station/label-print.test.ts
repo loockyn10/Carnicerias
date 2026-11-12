@@ -9,7 +9,7 @@ const pkg: VacuumPackage = {
   id: "11111111-1111-4111-8111-111111111111", branchId: "b", branchName: "Central", productId: "p", productName: "Vacío de cerdo & más", productSku: "VAC",
   weightGrams: 750, pricePerKgCents: 1_500_000n, totalCents: 1_125_000n, packedOn: "2026-11-07", expiresOn: "2026-11-21", lot: "CEN-261107-0001", ean13: "2000120112506",
   shelfLifeDays: 14, conservationText: "Conservar entre 0 y 4 °C", businessName: "Carnicerías Fran", address: "Calle 1", establishmentInfo: null, extraText: null,
-  dims: { widthMm: 58, infoHeightMm: 40, priceHeightMm: 40 }, createdAt: "2026-11-07T12:00:00Z", createdBy: null, printCount: 0
+  dims: { widthMm: 58, infoHeightMm: 40, priceHeightMm: 40 }, createdAt: "2026-11-07T12:00:00Z", createdBy: null, printCount: 0, logisticCode: "7K3M9QX4S"
 };
 
 describe("documento de impresión de una etiqueta", () => {

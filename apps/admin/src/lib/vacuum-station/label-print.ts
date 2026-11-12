@@ -89,9 +89,13 @@ export function buildLabelDocument(page: LabelPrintPage, title: string): string 
 // Etiquetas de un paquete y etiqueta de prueba
 // ---------------------------------------------------------------------------------------------------------------------
 
-export function kindsOf(kind: StationPrintKind): VacuumLabelKind[] {
+export type PackagePrintKind = StationPrintKind | "LOGISTIC";
+
+export function kindsOf(kind: PackagePrintKind): VacuumLabelKind[] {
   return kind === "BOTH" ? ["INFO", "PRICE"] : [kind];
 }
+
+const KIND_TITLES: Record<VacuumLabelKind, string> = { INFO: "informativa", PRICE: "precio", LOGISTIC: "logística" };
 
 export interface LabelJob {
   kind: VacuumLabelKind;
@@ -102,15 +106,23 @@ export interface LabelJob {
 }
 
 /** Los trabajos de impresión de un paquete REGISTRADO: las medidas y el contenido salen del snapshot del paquete, nunca de valores actuales. */
-export function buildPackageJobs(pkg: VacuumPackage, kind: StationPrintKind, rotation: LabelRotation): LabelJob[] {
+export function buildPackageJobs(pkg: VacuumPackage, kind: PackagePrintKind, rotation: LabelRotation, options: { logisticLabel: boolean } = { logisticLabel: false }): LabelJob[] {
   const dims = vacuumDims({ labelWidthMm: pkg.dims.widthMm, infoHeightMm: pkg.dims.infoHeightMm, priceHeightMm: pkg.dims.priceHeightMm });
   const data = packageToLabelData(pkg);
-  return kindsOf(kind).map((labelKind) => {
+  const jobs: LabelJob[] = [];
+  const push = (labelKind: VacuumLabelKind): VacuumLabelLayout => {
     const layout = buildVacuumLabelLayout(labelKind, data, dims);
     const page = buildLabelPage(layout, rotation);
-    const title = `Envasado ${pkg.lot} - ${labelKind === "INFO" ? "informativa" : "precio"}`;
-    return { kind: labelKind, title, html: buildLabelDocument(page, title), widthMm: page.pageWidthMm, heightMm: page.pageHeightMm };
-  });
+    const title = `Envasado ${pkg.lot} - ${KIND_TITLES[labelKind]}`;
+    jobs.push({ kind: labelKind, title, html: buildLabelDocument(page, title), widthMm: page.pageWidthMm, heightMm: page.pageHeightMm });
+    return layout;
+  };
+  for (const labelKind of kindsOf(kind)) {
+    const layout = push(labelKind);
+    // La informativa no admite el código logístico (no entra sin achicar la tipografía): se imprime aparte, a pedido de la estación.
+    if (labelKind === "INFO" && layout.logisticOmitted && options.logisticLabel) push("LOGISTIC");
+  }
+  return jobs;
 }
 
 /**
@@ -140,13 +152,13 @@ export function buildTestLayout(kind: VacuumLabelKind, dims: VacuumLabelDims, ro
     { id: "left", text: "IZQ", x: 1.4, y: heightMm / 2 + 1, sizePt: 5, style: "bold", anchor: "start" },
     { id: "right", text: "DER", x: widthMm - 1.4, y: heightMm / 2 + 1, sizePt: 5, style: "bold", anchor: "end" }
   ];
-  return { kind, widthMm, heightMm, texts, rules, rects, bars: [], overflow: false };
+  return { kind, widthMm, heightMm, texts, rules, rects, bars: [], overflow: false, fitScale: 1, logisticOmitted: false };
 }
 
 export function buildTestJobs(dims: VacuumLabelDims, kind: StationPrintKind, rotation: LabelRotation): LabelJob[] {
   return kindsOf(kind).map((labelKind) => {
     const page = buildLabelPage(buildTestLayout(labelKind, dims, rotation), rotation);
-    const title = `Prueba de impresión - ${labelKind === "INFO" ? "informativa" : "precio"}`;
+    const title = `Prueba de impresión - ${KIND_TITLES[labelKind]}`;
     return { kind: labelKind, title, html: buildLabelDocument(page, title), widthMm: page.pageWidthMm, heightMm: page.pageHeightMm };
   });
 }
@@ -229,7 +241,7 @@ export async function printJobs(jobs: LabelJob[], printer: (html: string) => Pro
   for (const job of jobs) {
     const outcome = await printer(job.html);
     if (!outcome.ok) {
-      const sentText = sent.length > 0 ? ` Ya se envió la etiqueta ${sent.includes("INFO") ? "informativa" : "de precio"}.` : "";
+      const sentText = sent.length > 0 ? ` Ya se enviaron: ${sent.map((entry) => KIND_TITLES[entry]).join(", ")}.` : "";
       return { ok: false, error: `${outcome.error}${sentText}`, dialogShown, sent };
     }
     dialogShown ||= outcome.dialogShown;

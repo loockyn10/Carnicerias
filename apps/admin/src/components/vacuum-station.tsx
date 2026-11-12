@@ -199,7 +199,7 @@ function LastPackage({ model, onReprint, message }: { model: VacuumStationModel;
     {last ? <>
       <p className="mt-1 text-xl font-black">{last.payload.productName}</p>
       <p className="text-lg"><strong>{formatKg(last.payload.weightGrams)}</strong> · <strong className="text-rose-800">{moneyText(last.payload.totalCents)}</strong></p>
-      <p className="text-xs text-stone-500">{new Date(last.payload.createdAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: model.timezone })} · lote {last.payload.lot}</p>
+      <p className="text-xs text-stone-500">{new Date(last.payload.createdAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: model.timezone })} · lote {last.payload.lot}{last.payload.logisticCode ? <> · ID logístico <span className="font-mono">{last.payload.logisticCode}</span></> : null}</p>
       <p className="mt-2 flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-900">✓ Registrado</span>
         <span className={`rounded-full px-3 py-1 ${failed ? "bg-red-100 text-red-900" : printed ? "bg-emerald-100 text-emerald-900" : "bg-amber-100 text-amber-900"}`}>{failed ? "✕ Impresión fallida" : printed ? "✓ Etiquetas enviadas" : "Etiquetas sin imprimir"}</span></p>
       <div className="mt-3 flex flex-wrap gap-2">

@@ -107,6 +107,8 @@ export function VacuumStationSettings({ model, branches, onClose }: { model: Vac
             </select>
           </label>
         </div>
+        <label className="flex items-start gap-2 text-sm"><input checked={config.print.logisticLabel} data-testid="logistic-label" onChange={(event) => { updateConfig((current) => ({ ...current, print: { ...current.print, logisticLabel: event.target.checked } })); }} type="checkbox" />
+          <span><strong>Imprimir también la etiqueta logística cuando el código no entre en la informativa.</strong><br /><span className="text-xs text-stone-500">Necesaria para distribuir a supermercados: identifica cada paquete (entregas, devoluciones, trazabilidad). Con etiquetas de 55 × 44 mm el código no entra en la informativa sin achicar la letra.</span></span></label>
         <p className="text-xs text-stone-500">Medidas actuales de la etiqueta (se cambian en Envasados → Configuración): {model.dims.widthMm} × {model.dims.infoHeightMm} mm informativa · {model.dims.widthMm} × {model.dims.priceHeightMm} mm precio. Cambiar el giro obliga a repetir la prueba.</p>
 
         <div className="grid gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4">

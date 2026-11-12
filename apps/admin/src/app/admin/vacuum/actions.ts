@@ -83,7 +83,7 @@ export async function getVacuumPackageAction(packageId: string): Promise<{ ok: t
 /** Deja constancia de una impresión o reimpresión de etiquetas (el mismo registro que escribe el módulo manual al imprimir). */
 export async function recordVacuumPrintAction(packageId: string, kind: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    if (!isUuid(packageId) || !isVacuumPrintKind(kind)) throw new Error("Pedido inválido");
+    if (!isUuid(packageId) || !(isVacuumPrintKind(kind) || kind === "LOGISTIC")) throw new Error("Pedido inválido");
     await rpc("record_vacuum_print", { p_package_id: packageId, p_kind: kind });
     return { ok: true };
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo registrar la impresión" }; }

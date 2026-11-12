@@ -1,8 +1,10 @@
 import { capHeightEm, textWidthPt, toLabelText, type LabelFontStyle } from "./label-font";
 import type { LabelRect, LabelRule, LabelText, LabelTextAnchor } from "./label-layout";
+import { code128ModuleCount, code128Modules } from "./distribution/code128";
+import { formatLogisticCode, isValidLogisticCode } from "./distribution/logistic-code";
 import { EAN13_MODULE_COUNT, ean13Modules, isValidEan13, modulesToRuns } from "./vacuum-ean";
 import {
-  MM_PER_PT, VACUUM_FIT_STEP, VACUUM_GAPS_MM, VACUUM_INFO_TYPE, VACUUM_LABEL_PAD, VACUUM_MIN_FIT, VACUUM_PRICE_TYPE, type VacuumLabelDims
+  MM_PER_PT, VACUUM_FIT_STEP, VACUUM_GAPS_MM, VACUUM_INFO_TYPE, VACUUM_LABEL_PAD, VACUUM_LOGISTIC, VACUUM_LOGISTIC_TYPE, VACUUM_MIN_FIT, VACUUM_PRICE_TYPE, type VacuumLabelDims
 } from "./vacuum-label-spec";
 import { formatIsoDate, moneyText, weightText, type VacuumPackage } from "./vacuum";
 
@@ -14,7 +16,7 @@ import { formatIsoDate, moneyText, weightText, type VacuumPackage } from "./vacu
  * Los datos de entrada son el SNAPSHOT del paquete (o un borrador en pantalla): nunca precios, textos ni esquemas actuales.
  */
 
-export type VacuumLabelKind = "INFO" | "PRICE";
+export type VacuumLabelKind = "INFO" | "PRICE" | "LOGISTIC";
 
 /** Barra del código (mm desde la esquina superior izquierda de la etiqueta). */
 export interface VacuumBar {
@@ -34,6 +36,10 @@ export interface VacuumLabelLayout {
   bars: VacuumBar[];
   /** true si el contenido no entra en el alto configurado ni con la tipografía mínima: hay que aumentar el alto de la etiqueta. */
   overflow: boolean;
+  /** Escala de tipografía con la que quedó (1 = tamaños de diseño). */
+  fitScale: number;
+  /** true si el paquete tiene código logístico pero NO entró en esta etiqueta informativa (se imprime la etiqueta logística aparte). */
+  logisticOmitted: boolean;
 }
 
 /** Datos mínimos para dibujar las etiquetas (los del paquete registrado, o los del borrador del formulario). */
@@ -48,6 +54,8 @@ export interface VacuumLabelData {
   lot: string | null;
   /** null = sin esquema EAN configurado (se dibuja un aviso en lugar de las barras). */
   ean13: string | null;
+  /** Identificador logístico del paquete (null = el borrador todavía no lo tiene: lo asigna la base al registrar). */
+  logisticCode: string | null;
   conservationText: string | null;
   businessName: string | null;
   address: string | null;
@@ -58,7 +66,7 @@ export interface VacuumLabelData {
 export function packageToLabelData(pkg: VacuumPackage): VacuumLabelData {
   return {
     productName: pkg.productName, weightGrams: pkg.weightGrams, pricePerKgCents: pkg.pricePerKgCents, totalCents: pkg.totalCents,
-    packedOn: pkg.packedOn, expiresOn: pkg.expiresOn, lot: pkg.lot, ean13: pkg.ean13, conservationText: pkg.conservationText,
+    packedOn: pkg.packedOn, expiresOn: pkg.expiresOn, lot: pkg.lot, ean13: pkg.ean13, logisticCode: pkg.logisticCode, conservationText: pkg.conservationText,
     businessName: pkg.businessName, address: pkg.address, establishmentInfo: pkg.establishmentInfo, extraText: pkg.extraText
   };
 }
@@ -144,12 +152,14 @@ function composeFit(kind: VacuumLabelKind, widthMm: number, heightMm: number, bu
   const limit = heightMm - VACUUM_LABEL_PAD.bottomMm;
   let result = build(1);
   let overflow = result.bottom > limit;
+  let fitScale = 1;
   for (let scale = 1 - VACUUM_FIT_STEP; overflow && scale >= VACUUM_MIN_FIT - 1e-9; scale -= VACUUM_FIT_STEP) {
     result = build(scale);
+    fitScale = scale;
     overflow = result.bottom > limit;
   }
   const { stack } = result;
-  return { kind, widthMm, heightMm, texts: stack.texts, rules: stack.rules, rects: stack.rects, bars: stack.bars, overflow };
+  return { kind, widthMm, heightMm, texts: stack.texts, rules: stack.rules, rects: stack.rects, bars: stack.bars, overflow, fitScale: Math.round(fitScale * 1000) / 1000, logisticOmitted: false };
 }
 
 const emHeight = (pt: number, lineHeightEm: number) => pt * MM_PER_PT * lineHeightEm;
@@ -163,6 +173,17 @@ const emHeight = (pt: number, lineHeightEm: number) => pt * MM_PER_PT * lineHeig
  * No afirma ningún cumplimiento regulatorio: sólo imprime lo que la organización cargó.
  */
 export function buildInfoLabelLayout(data: VacuumLabelData, dims: VacuumLabelDims): VacuumLabelLayout {
+  const code = data.logisticCode;
+  if (code === null || !isValidLogisticCode(code)) return buildInfoBase(data, dims, null);
+  const inner = dims.widthMm - 2 * VACUUM_LABEL_PAD.xMm;
+  if (code128ModuleCount(code.length) * VACUUM_LOGISTIC.moduleMm > inner) return { ...buildInfoBase(data, dims, null), logisticOmitted: true };
+  const withCode = buildInfoBase(data, dims, code);
+  if (!withCode.overflow && withCode.fitScale >= VACUUM_LOGISTIC.minFit) return withCode;
+  // No entra con holgura: la informativa queda exactamente como era (sin achicar nada por culpa del código nuevo).
+  return { ...buildInfoBase(data, dims, null), logisticOmitted: true };
+}
+
+function buildInfoBase(data: VacuumLabelData, dims: VacuumLabelDims, logisticCode: string | null): VacuumLabelLayout {
   const T = VACUUM_INFO_TYPE;
   const { widthMm, infoHeightMm } = dims;
   const left = VACUUM_LABEL_PAD.xMm;
@@ -207,6 +228,11 @@ export function buildInfoLabelLayout(data: VacuumLabelData, dims: VacuumLabelDim
         stack.text(`conservation-${String(index + 1)}`, line, T.body.pt * scale, T.body.style, "start", left);
         stack.advance(emHeight(T.body.pt * scale, T.body.lineHeightEm));
       });
+    }
+
+    if (logisticCode !== null) {
+      stack.advance(VACUUM_GAPS_MM.section * 0.6);
+      drawLogisticCode(stack, logisticCode, widthMm, VACUUM_LOGISTIC.moduleMm, VACUUM_LOGISTIC.barHeightMm, VACUUM_LOGISTIC.textPt * scale, VACUUM_LOGISTIC.gapMm);
     }
 
     const footerParts: { id: string; text: string; style: LabelFontStyle; pt: number }[] = [];
@@ -323,6 +349,91 @@ function drawBarcode(stack: Stack, ean13: string, widthMm: number, left: number,
   stack.y = baseline + 0.3;
 }
 
+/**
+ * Code 128 centrado + el código legible debajo («ID LOGÍSTICO 7K3M-9QX4-S»). Las barras NO se escalan con la tipografía: un módulo más fino que 0,25 mm
+ * dejaría de ser nítido en una térmica de 203 dpi.
+ */
+function drawLogisticCode(stack: Stack, code: string, widthMm: number, moduleMm: number, barHeightMm: number, textPt: number, gapMm: number): void {
+  const modules = code128Modules(code);
+  const barsWidth = modules.length * moduleMm;
+  const startX = widthMm / 2 - barsWidth / 2;
+  const top = stack.y;
+  for (const run of modulesToRuns(modules)) {
+    stack.bars.push({ x: Math.round((startX + run.start * moduleMm) * 1000) / 1000, y: top, width: Math.round(run.width * moduleMm * 1000) / 1000, height: barHeightMm });
+  }
+  stack.advance(barHeightMm + gapMm * 0.6);
+  stack.text("logistic-code", `ID LOGÍSTICO ${formatLogisticCode(code)}`, textPt, "bold", "middle", widthMm / 2);
+  stack.advance(emHeight(textPt, 1.1) + gapMm);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Etiqueta C — LOGÍSTICA (adicional)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Etiqueta de trazabilidad interna: el código logístico grande, con el corte, lote, peso y fechas para identificar el paquete en una caja. No es el código
+ * de venta. Usa el alto de la etiqueta informativa (es el mismo papel). Si el paquete todavía no tiene código se dibuja un aviso, nunca uno inventado.
+ */
+export function buildLogisticLabelLayout(data: VacuumLabelData, dims: VacuumLabelDims): VacuumLabelLayout {
+  const T = VACUUM_LOGISTIC_TYPE;
+  const { widthMm, infoHeightMm } = dims;
+  const left = VACUUM_LABEL_PAD.xMm;
+  const right = widthMm - VACUUM_LABEL_PAD.xMm;
+  const inner = right - left;
+  const center = widthMm / 2;
+  const code = data.logisticCode !== null && isValidLogisticCode(data.logisticCode) ? data.logisticCode : null;
+
+  return composeFit("LOGISTIC", widthMm, infoHeightMm, (scale) => {
+    const stack = new Stack(VACUUM_LABEL_PAD.topMm);
+    stack.text("title", "TRAZABILIDAD INTERNA", T.title.pt * scale, T.title.style, "middle", center);
+    stack.advance(emHeight(T.title.pt * scale, 1.2) + VACUUM_GAPS_MM.line);
+    const name = toLabelText(data.productName);
+    const namePt = fitNamePt(name, inner, T.name.maxPt * scale, T.name.minPt * scale, T.name.maxLines, T.name.style);
+    wrapText(name, inner, namePt, T.name.style, T.name.maxLines).forEach((line, index) => {
+      stack.text(`name-${String(index + 1)}`, line, namePt, T.name.style, "middle", center);
+      stack.advance(emHeight(namePt, T.name.lineHeightEm));
+    });
+    stack.advance(VACUUM_GAPS_MM.section);
+
+    if (code !== null) {
+      const moduleMm = Math.min(T.barcode.moduleMm, inner / code128ModuleCount(code.length));
+      const modules = code128Modules(code);
+      const startX = center - (modules.length * moduleMm) / 2;
+      for (const run of modulesToRuns(modules)) {
+        stack.bars.push({ x: Math.round((startX + run.start * moduleMm) * 1000) / 1000, y: stack.y, width: Math.round(run.width * moduleMm * 1000) / 1000, height: T.barcode.barHeightMm });
+      }
+      stack.advance(T.barcode.barHeightMm + VACUUM_GAPS_MM.line);
+      const label = fitOneLine(formatLogisticCode(code), inner, T.code.maxPt * scale, T.code.minPt * scale, T.code.style);
+      stack.text("logistic-code", label.text, label.pt, T.code.style, "middle", center);
+      stack.advance(emHeight(label.pt, 1.15) + VACUUM_GAPS_MM.section);
+    } else {
+      stack.rects.push({ id: "logistic-missing-box", x: left, y: stack.y, width: inner, height: T.barcode.barHeightMm, fill: false, strokeMm: 0.2 });
+      const notice = fitOneLine("SIN CÓDIGO LOGÍSTICO", inner - 2, 8 * scale, 5, "bold");
+      stack.text("logistic-missing", notice.text, notice.pt, "bold", "middle", center);
+      stack.advance(T.barcode.barHeightMm + VACUUM_GAPS_MM.section);
+    }
+
+    stack.rule("rule-detail", left, right, 0.15);
+    stack.advance(VACUUM_GAPS_MM.section);
+    const lines = [
+      `Lote ${data.lot ?? "—"} · ${weightText(data.weightGrams)}`,
+      `Elab. ${formatIsoDate(data.packedOn)} · Venc. ${formatIsoDate(data.expiresOn)}`
+    ];
+    lines.forEach((line, index) => {
+      const fit = fitOneLine(toLabelText(line), inner, T.detail.pt * scale, T.detail.pt * scale * 0.6, T.detail.style);
+      stack.text(`detail-${String(index + 1)}`, fit.text, fit.pt, T.detail.style, "middle", center);
+      stack.advance(emHeight(fit.pt, T.detail.lineHeightEm));
+    });
+    stack.advance(VACUUM_GAPS_MM.section);
+    const footer = fitOneLine("Uso interno · no es el código de venta", inner, T.footer.pt * scale, T.footer.pt * scale * 0.7, T.footer.style);
+    stack.text("footer", footer.text, footer.pt, T.footer.style, "middle", center);
+    stack.advance(emHeight(footer.pt, 1.2));
+    return { stack, bottom: stack.y };
+  });
+}
+
 export function buildVacuumLabelLayout(kind: VacuumLabelKind, data: VacuumLabelData, dims: VacuumLabelDims): VacuumLabelLayout {
-  return kind === "INFO" ? buildInfoLabelLayout(data, dims) : buildPriceLabelLayout(data, dims);
+  if (kind === "INFO") return buildInfoLabelLayout(data, dims);
+  if (kind === "LOGISTIC") return buildLogisticLabelLayout(data, dims);
+  return buildPriceLabelLayout(data, dims);
 }

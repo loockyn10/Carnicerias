@@ -222,7 +222,9 @@ export const MOVEMENT_TYPE_LABELS: Readonly<Record<StockMovementType, string>> =
   ADJUSTMENT_NEGATIVE: "Ajuste (−)",
   PRODUCTION_YIELD: "Producción de desposte",
   PRODUCTION_CONSUME: "Consumo en desposte",
-  OPENING_BALANCE: "Saldo inicial"
+  OPENING_BALANCE: "Saldo inicial",
+  DISTRIBUTION_OUT: "Entrega a supermercado",
+  DISTRIBUTION_RETURN: "Reingreso de paquete devuelto"
 };
 
 export function movementTypeLabel(type: string): string {
@@ -240,10 +242,12 @@ const AUDIT_GROUPS: readonly AuditGroupDefinition[] = [
   { key: "RECEPTIONS", label: "Ingresos / recepciones", types: ["PURCHASE"], sign: "+", always: true },
   { key: "PRODUCTION_YIELD", label: "Producción de desposte", types: ["PRODUCTION_YIELD"], sign: "+", always: false },
   { key: "OPENING_BALANCE", label: "Saldo inicial migrado", types: ["OPENING_BALANCE"], sign: "+", always: false },
+  { key: "DISTRIBUTION_RETURN", label: "Reingresos de paquetes devueltos", types: ["DISTRIBUTION_RETURN"], sign: "+", always: false },
   { key: "TRANSFERS_IN", label: "Transferencias recibidas", types: ["TRANSFER_IN"], sign: "+", always: true },
   { key: "RETURNS", label: "Devoluciones / anulaciones de venta", types: ["RETURN"], sign: "+", always: true },
   { key: "SALES", label: "Ventas", types: ["SALE"], sign: "−", always: true },
   { key: "TRANSFERS_OUT", label: "Transferencias enviadas", types: ["TRANSFER_OUT"], sign: "−", always: true },
+  { key: "DISTRIBUTION_OUT", label: "Entregas a supermercados", types: ["DISTRIBUTION_OUT"], sign: "−", always: false },
   { key: "WASTE", label: "Mermas", types: ["WASTE"], sign: "−", always: true },
   { key: "PRODUCTION_CONSUME", label: "Consumo en desposte", types: ["PRODUCTION_CONSUME"], sign: "−", always: false },
   { key: "ADJUSTMENT_POSITIVE", label: "Ajustes de conteo (+)", types: ["ADJUSTMENT_POSITIVE"], sign: "+", always: true },
@@ -269,7 +273,7 @@ export function groupAuditMovements(byType: readonly AuditTypeTotal[]): AuditGro
 }
 
 /** Entradas «reales» de mercadería: las que definen el ancla de «Desde el último ingreso». */
-export const INBOUND_TYPES: readonly string[] = ["PURCHASE", "TRANSFER_IN", "PRODUCTION_YIELD", "OPENING_BALANCE"];
+export const INBOUND_TYPES: readonly string[] = ["PURCHASE", "TRANSFER_IN", "PRODUCTION_YIELD", "OPENING_BALANCE", "DISTRIBUTION_RETURN"];
 
 export interface AuditQuickSummary {
   /** Lo que entró (recepciones, transferencias recibidas, producción, saldo inicial). */
@@ -325,6 +329,8 @@ export function describeMovementReference(movement: AuditMovement): string {
     case "TRANSFER_IN": return movement.counterpartBranchName ? `Desde ${movement.counterpartBranchName}` : "Transferencia";
     case "TRANSFER_OUT": return movement.counterpartBranchName ? `Hacia ${movement.counterpartBranchName}` : "Transferencia";
     case "PURCHASE": return [movement.supplier ? `Proveedor ${movement.supplier}` : null, movement.reason].filter(Boolean).join(" · ");
+    case "DISTRIBUTION_OUT":
+    case "DISTRIBUTION_RETURN": return movement.reason ?? "Distribución a supermercados";
     case "PRODUCTION_YIELD":
     case "PRODUCTION_CONSUME": return movement.productionBatchId ? `Desposte ${movement.productionBatchId.slice(0, 8)}` : "Desposte";
     default: return movement.reason ?? "";

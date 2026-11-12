@@ -122,7 +122,7 @@ export function useVacuumStation(props: UseVacuumStationProps) {
       print: async (packageId, pkg, kind): Promise<PrintResult> => {
         const { config: currentConfig } = live.current;
         const chosen: StationPrintKind = kind ?? currentConfig.print.kind;
-        const outcome = await printJobs(buildPackageJobs(pkg, chosen, currentConfig.print.rotation));
+        const outcome = await printJobs(buildPackageJobs(pkg, chosen, currentConfig.print.rotation, { logisticLabel: currentConfig.print.logisticLabel }));
         setPrintNotice({ dialogShown: outcome.dialogShown, lastError: outcome.error });
         if (!outcome.ok) return { ok: false, error: outcome.error ?? "No se pudo imprimir" };
         // La constancia de impresión es auxiliar: si falla no se da la impresión por mala (la etiqueta ya salió).

@@ -5469,6 +5469,237 @@ export type Database = {
         }
         Returns: Json
       }
+      add_delivery_package_by_code: {
+        Args: {
+          p_delivery_id: string
+          p_code: string
+        }
+        Returns: Json
+      }
+      add_delivery_packages: {
+        Args: {
+          p_delivery_id: string
+          p_package_ids: string[]
+        }
+        Returns: Json
+      }
+      add_delivery_packages_by_quantity: {
+        Args: {
+          p_delivery_id: string
+          p_items: Json
+        }
+        Returns: Json
+      }
+      cancel_distribution_delivery: {
+        Args: {
+          p_delivery_id: string
+          p_reason?: string
+        }
+        Returns: Json
+      }
+      close_delivery_reconciliation: {
+        Args: {
+          p_delivery_id: string
+          p_note?: string
+        }
+        Returns: Json
+      }
+      confirm_distribution_delivery: {
+        Args: {
+          p_delivery_id: string
+        }
+        Returns: Json
+      }
+      create_distribution_delivery: {
+        Args: {
+          p_delivery_date: string
+          p_notes?: string
+          p_origin_branch_id?: string
+          p_reference_delivery_id?: string
+          p_request_key?: string
+          p_site_id: string
+        }
+        Returns: Json
+      }
+      decide_distribution_return: {
+        Args: {
+          p_conservation_note?: string
+          p_conservation_verified?: boolean
+          p_decision: string
+          p_packaging_state?: string
+          p_reason: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
+      find_vacuum_package_by_code: {
+        Args: {
+          p_code: string
+        }
+        Returns: Json
+      }
+      get_delivery_reconciliation: {
+        Args: {
+          p_delivery_id: string
+        }
+        Returns: Json
+      }
+      get_distribution_available_summary: {
+        Args: {
+          p_branch_id: string
+          p_delivery_date?: string
+        }
+        Returns: Json
+      }
+      get_distribution_delivery: {
+        Args: {
+          p_delivery_id: string
+        }
+        Returns: Json
+      }
+      get_distribution_stats: {
+        Args: {
+          p_category_id?: string
+          p_client_id?: string
+          p_from?: string
+          p_product_id?: string
+          p_site_id?: string
+          p_to?: string
+        }
+        Returns: Json
+      }
+      get_site_reference_delivery: {
+        Args: {
+          p_site_id: string
+        }
+        Returns: Json
+      }
+      get_site_replenishment_history: {
+        Args: {
+          p_limit?: number
+          p_site_id: string
+        }
+        Returns: Json
+      }
+      list_distributable_packages: {
+        Args: {
+          p_branch_id: string
+          p_delivery_date?: string
+          p_limit?: number
+          p_offset?: number
+          p_product_id?: string
+          p_search?: string
+        }
+        Returns: Json
+      }
+      list_distribution_clients: {
+        Args: never
+        Returns: Json
+      }
+      list_distribution_deliveries: {
+        Args: {
+          p_client_id?: string
+          p_from?: string
+          p_limit?: number
+          p_offset?: number
+          p_site_id?: string
+          p_status?: string
+          p_to?: string
+        }
+        Returns: Json
+      }
+      list_distribution_returns: {
+        Args: {
+          p_delivery_id?: string
+          p_limit?: number
+          p_offset?: number
+          p_site_id?: string
+          p_status?: string
+        }
+        Returns: Json
+      }
+      receive_distribution_returns: {
+        Args: {
+          p_items: Json
+        }
+        Returns: Json
+      }
+      register_distribution_returns: {
+        Args: {
+          p_delivery_id: string
+          p_items: Json
+          p_request_key?: string
+          p_returned_on?: string
+        }
+        Returns: Json
+      }
+      remove_delivery_packages: {
+        Args: {
+          p_delivery_id: string
+          p_package_ids: string[]
+        }
+        Returns: Json
+      }
+      report_delivery_quantity_sales: {
+        Args: {
+          p_delivery_id: string
+          p_items: Json
+          p_note?: string
+          p_reported_on?: string
+          p_request_key?: string
+        }
+        Returns: Json
+      }
+      report_delivery_sales: {
+        Args: {
+          p_delivery_id: string
+          p_package_ids: string[]
+          p_sold_on?: string
+        }
+        Returns: Json
+      }
+      report_delivery_sales_by_codes: {
+        Args: {
+          p_codes: string[]
+          p_delivery_id: string
+          p_sold_on?: string
+        }
+        Returns: Json
+      }
+      save_distribution_client: {
+        Args: {
+          p_active?: boolean
+          p_commercial_mode?: string
+          p_id?: string
+          p_legal_name?: string
+          p_notes?: string
+          p_tax_id?: string
+          p_trade_name?: string
+        }
+        Returns: Json
+      }
+      save_distribution_site: {
+        Args: {
+          p_active?: boolean
+          p_address?: string
+          p_city?: string
+          p_client_id?: string
+          p_commercial_mode?: string
+          p_contact_name?: string
+          p_id?: string
+          p_name?: string
+          p_notes?: string
+          p_phone?: string
+          p_restock_weekday?: number
+        }
+        Returns: Json
+      }
+      start_return_inspection: {
+        Args: {
+          p_return_id: string
+        }
+        Returns: Json
+      }
       get_vacuum_package: {
         Args: {
           p_package_id: string
@@ -6568,6 +6799,8 @@ export type Database = {
         | "PRODUCTION_CONSUME"
         | "PRODUCTION_YIELD"
         | "OPENING_BALANCE"
+        | "DISTRIBUTION_OUT"
+        | "DISTRIBUTION_RETURN"
       stock_operation_type: "PURCHASE" | "WASTE" | "ADJUSTMENT"
       time_event_action: "CLOCK_IN" | "CLOCK_OUT"
       time_event_source: "ONLINE" | "OFFLINE" | "ADMIN_CORRECTION"
@@ -6739,6 +6972,8 @@ export const Constants = {
         "PRODUCTION_CONSUME",
         "PRODUCTION_YIELD",
         "OPENING_BALANCE",
+        "DISTRIBUTION_OUT",
+        "DISTRIBUTION_RETURN",
       ],
       stock_operation_type: ["PURCHASE", "WASTE", "ADJUSTMENT"],
       time_event_action: ["CLOCK_IN", "CLOCK_OUT"],

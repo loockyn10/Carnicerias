@@ -1261,3 +1261,15 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 **Impresión.** Cada etiqueta se imprime como su propio documento HTML/SVG con `@page { size }` exacto en vez de un PDF en el visor del navegador (que decide hoja, giro y escala por su cuenta); hay un giro de calibración por equipo. `window.print()` no es silencioso: la impresión sin diálogo requiere abrir Chrome/Edge con `--kiosk-printing`, y el navegador no puede confirmar que la etiqueta salió. La impresión automática sólo se habilita tras aprobar una prueba para las medidas y el giro vigentes.
 
 **Alcance.** Sólo web/PWA con Web Serial (Chrome/Edge de escritorio, https): sin Tauri, sin servicio local, sin offline completo (la lectura de la balanza es local pero no se emiten etiquetas de paquetes no registrados). Detalle en `docs/VACUUM_STATION.md`.
+
+## D-093 — Distribución de envasados a supermercados: un estado por paquete, un ledger, devoluciones siempre en cuarentena
+
+**Status:** Active — implementado 2026-11-12; migraciones `202611120097` y `202611120098` sin aplicar. Extiende D-090/D-091/D-092 sin reconstruirlos.
+
+**Inventario.** Una sola contabilidad: la ubicación física de cada paquete es `vacuum_package_state` (estados nuevos RESERVED, DISPATCHED, SOLD_EXTERNAL, QUARANTINE, DISCARDED: un paquete, un estado) y las cantidades siguen en `stock_movements` (`DISTRIBUTION_OUT` al confirmar una entrega, uno por producto con índice único; `DISTRIBUTION_RETURN` sólo en un reingreso aprobado). Movimiento físico, venta comercial, facturación y cobranza se mantienen separados: sólo se modelan los dos primeros. Mayorista firme = la operación comercial ocurre al despachar; consignación = despachar no es vender. Los valores son el precio comercial de góndola del paquete; no hay facturación ni cobranza ni precio mayorista.
+
+**Identificación.** Código logístico propio por paquete (9 caracteres con control, Code 128 B), único por organización y vinculado 1 a 1 al UUID; el EAN-13 comercial no cambia y no identifica paquetes. En 55 × 44 mm el código no entra en la informativa sin achicar la letra un 12 % (tope 8 %): va en una etiqueta logística adicional.
+
+**Devoluciones.** Un paquete devuelto entra en cuarentena y NUNCA vuelve solo a estar disponible: sólo una decisión explícita con `distribution.approve_reentry` (motivo, usuario y fecha), con envase intacto, conservación verificada y sin vencer (validado en la función y garantizado por un check de la tabla). Rechazar o descartar no mueve stock. Las fechas del paquete no se modifican.
+
+**Conciliación.** Ventas informadas por el supermercado se registran por paquete identificado o sólo por cantidad (estimación, sin marcar paquetes); las estadísticas muestran lo confirmado y lo estimado por separado. Sin integración con POS externos. Detalle en `docs/VACUUM_DISTRIBUTION.md`.

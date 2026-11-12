@@ -39,6 +39,8 @@ export interface StationConfig {
     /** Imprimir las etiquetas solas al registrar. Sólo puede estar activa si la prueba de impresión vigente salió bien. */
     auto: boolean;
     kind: StationPrintKind;
+    /** Imprimir además la etiqueta LOGÍSTICA cuando el código logístico no entra en la informativa (hace falta para distribuir a supermercados). */
+    logisticLabel: boolean;
     /** Giro del contenido de la etiqueta (calibración de orientación): el controlador de la impresora decide cómo entra el papel. */
     rotation: LabelRotation;
     /** Firma de medidas + giro con los que se aprobó la prueba de impresión; si cambian, la prueba deja de valer. */
@@ -54,7 +56,7 @@ export const DEFAULT_STATION_CONFIG: StationConfig = {
   branchId: null,
   scale: { protocol: "KRETZ_STX_CR", params: KRETZ_SERIAL_PARAMS, autoReconnect: true, port: null },
   tuning: DEFAULT_STATION_TUNING,
-  print: { auto: false, kind: "BOTH", rotation: 0, testPassedSignature: null, testPassedAt: null },
+  print: { auto: false, kind: "BOTH", logisticLabel: false, rotation: 0, testPassedSignature: null, testPassedAt: null },
   favorites: []
 };
 
@@ -132,7 +134,7 @@ export function normalizeStationConfig(raw: unknown): StationConfig {
     tuning: normalizeTuning(source.tuning),
     print: {
       auto: print.auto === true && signature !== null,
-      kind, rotation, testPassedSignature: signature,
+      kind, logisticLabel: print.logisticLabel === true, rotation, testPassedSignature: signature,
       testPassedAt: typeof print.testPassedAt === "string" ? print.testPassedAt : null
     },
     favorites: [...new Set(favorites)]

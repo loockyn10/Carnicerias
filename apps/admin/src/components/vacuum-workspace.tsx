@@ -75,7 +75,7 @@ export function VacuumWorkspace({ branches, defaultBranchId, initialProducts, se
 
   const draftData: VacuumLabelData | null = useMemo(() => product && draft.weightGrams !== null && draft.totalCents !== null && product.pricePerKgCents !== null ? {
     productName: product.name, weightGrams: draft.weightGrams, pricePerKgCents: product.pricePerKgCents, totalCents: draft.totalCents, packedOn, expiresOn: effectiveExpiry,
-    lot: lot.trim() || null, ean13: draft.ean?.ok ? draft.ean.ean13 : null, conservationText: product.conservationText ?? settings.defaultConservationText,
+    lot: lot.trim() || null, ean13: draft.ean?.ok ? draft.ean.ean13 : null, logisticCode: null, conservationText: product.conservationText ?? settings.defaultConservationText,
     businessName: settings.businessName, address: settings.address, establishmentInfo: settings.establishmentInfo, extraText: settings.extraText
   } : null, [product, draft, packedOn, effectiveExpiry, lot, settings]);
 

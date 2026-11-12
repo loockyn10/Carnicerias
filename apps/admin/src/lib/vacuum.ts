@@ -114,6 +114,8 @@ export interface VacuumPackage {
   createdAt: string;
   createdBy: string | null;
   printCount: number;
+  /** Identificador logístico del paquete (null en registros anteriores a la migración o si el servidor todavía no lo informa). */
+  logisticCode: string | null;
 }
 
 export function parseVacuumPackage(value: unknown): VacuumPackage | null {
@@ -128,7 +130,7 @@ export function parseVacuumPackage(value: unknown): VacuumPackage | null {
     businessName: strOrNull(label.businessName), address: strOrNull(label.address), establishmentInfo: strOrNull(label.establishmentInfo),
     extraText: strOrNull(label.extraText),
     dims: { widthMm: numberOrNull(label.labelWidthMm), infoHeightMm: numberOrNull(label.infoHeightMm), priceHeightMm: numberOrNull(label.priceHeightMm) },
-    createdAt: str(record.createdAt), createdBy: strOrNull(record.createdBy), printCount: int(record.printCount)
+    createdAt: str(record.createdAt), createdBy: strOrNull(record.createdBy), printCount: int(record.printCount), logisticCode: strOrNull(record.logisticCode)
   };
 }
 
@@ -154,9 +156,12 @@ export interface VacuumPackageRow {
   currentBranchName: string | null;
 }
 
-export const VACUUM_PACKAGE_STATUSES = ["AVAILABLE", "SOLD", "VOIDED"] as const;
+export const VACUUM_PACKAGE_STATUSES = ["AVAILABLE", "SOLD", "VOIDED", "RESERVED", "DISPATCHED", "SOLD_EXTERNAL", "QUARANTINE", "DISCARDED"] as const;
 export type VacuumPackageStatus = (typeof VACUUM_PACKAGE_STATUSES)[number];
-export const VACUUM_PACKAGE_STATUS_LABELS: Record<VacuumPackageStatus, string> = { AVAILABLE: "Disponible", SOLD: "Vendido", VOIDED: "Anulado" };
+export const VACUUM_PACKAGE_STATUS_LABELS: Record<VacuumPackageStatus, string> = {
+  AVAILABLE: "Disponible", SOLD: "Vendido", VOIDED: "Anulado", RESERVED: "Reservado para una entrega", DISPATCHED: "Despachado a un supermercado",
+  SOLD_EXTERNAL: "Vendido por el supermercado", QUARANTINE: "En cuarentena (devuelto)", DISCARDED: "Descartado"
+};
 
 function packageStatus(value: unknown): VacuumPackageStatus {
   return (VACUUM_PACKAGE_STATUSES as readonly unknown[]).includes(value) ? (value as VacuumPackageStatus) : "AVAILABLE";
@@ -187,7 +192,8 @@ export const VACUUM_CONFLICT_REASON_LABELS: Record<string, string> = {
   ALREADY_SOLD: "El paquete ya estaba vendido",
   VOIDED: "El paquete estaba anulado",
   WRONG_BRANCH: "El paquete estaba en otra sucursal",
-  RESTORE_UNAVAILABLE: "Se restableció una venta cuyo paquete ya no estaba disponible"
+  RESTORE_UNAVAILABLE: "Se restableció una venta cuyo paquete ya no estaba disponible",
+  DISTRIBUTED: "El paquete estaba reservado, despachado a un supermercado o en cuarentena"
 };
 
 /** Una venta (offline) que reclamó un paquete que el servidor ya tenía vendido, anulado o en otra sucursal. La venta SÍ quedó registrada. */
