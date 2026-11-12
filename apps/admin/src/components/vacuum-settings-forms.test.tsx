@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { parseVacuumConfigPage, parseVacuumSettings } from "../lib/vacuum";
+import { parseVacuumConfigPage, parseVacuumSettings, shelfLifeSummary } from "../lib/vacuum";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("../app/admin/vacuum/actions", () => ({
@@ -9,7 +9,7 @@ vi.mock("../app/admin/vacuum/actions", () => ({
   saveVacuumSettingsAction: vi.fn(), setVacuumProductEnabledAction: vi.fn()
 }));
 
-const { shelfLifeSummary, VacuumCutToggle, VacuumDefaultShelfLifeForm } = await import("./vacuum-settings-forms");
+const { VacuumCutToggle, VacuumDefaultShelfLifeForm } = await import("./vacuum-settings-forms");
 
 describe("configuración de Envasados: vencimiento general y corte en un clic", () => {
   it("el vencimiento general vale 14 días si el servidor todavía no lo informa", () => {

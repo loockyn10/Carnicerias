@@ -2,11 +2,11 @@ import Link from "next/link";
 
 import { StatusBadge } from "../../../../components/admin-ui";
 import { SectionTabs } from "../../../../components/section-tabs";
-import { shelfLifeSummary, VacuumCutToggle, VacuumDefaultShelfLifeForm, VacuumEanSchemeForm, VacuumEstablishmentForm, VacuumProductConfigModal } from "../../../../components/vacuum-settings-forms";
+import { VacuumCutToggle, VacuumDefaultShelfLifeForm, VacuumEanSchemeForm, VacuumEstablishmentForm, VacuumProductConfigModal } from "../../../../components/vacuum-settings-forms";
 import { requireAdminContext } from "../../../../lib/admin";
 import { createPerfLogger } from "../../../../lib/perf";
 import { createClient } from "../../../../lib/supabase/server";
-import { parseVacuumConfigPage, parseVacuumSettings } from "../../../../lib/vacuum";
+import { parseVacuumConfigPage, parseVacuumSettings, shelfLifeSummary } from "../../../../lib/vacuum";
 import { VACUUM_TABS } from "../../../../lib/vacuum-tabs";
 
 const input = "rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm";

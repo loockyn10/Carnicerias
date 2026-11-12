@@ -242,6 +242,16 @@ export interface VacuumConfigRow {
   conservationText: string | null;
 }
 
+/**
+ * Vencimiento de un corte: el efectivo y de dónde sale («General» o «Personalizado»). Vive acá y NO en un componente: la página de configuración (Server
+ * Component) la llama, y una función exportada desde un módulo "use client" no se puede invocar desde el servidor.
+ */
+export function shelfLifeSummary(row: Pick<VacuumConfigRow, "shelfLifeDays" | "customShelfLifeDays">): { text: string; custom: boolean } {
+  const days = row.shelfLifeDays;
+  const text = days === null ? "—" : `${String(days)} ${days === 1 ? "día" : "días"}`;
+  return { text, custom: row.customShelfLifeDays !== null };
+}
+
 export function parseVacuumConfigPage(value: unknown): { total: number; defaultShelfLifeDays: number; rows: VacuumConfigRow[] } {
   const record = asRecord(value);
   return {

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useActionState, useMemo, useRef, useState, useTransition } from "react";
 
 import { saveVacuumDefaultShelfLifeAction, saveVacuumEanSchemeAction, saveVacuumProductOverridesAction, saveVacuumSettingsAction, setVacuumProductEnabledAction, type VacuumFormState } from "../app/admin/vacuum/actions";
-import type { VacuumConfigRow, VacuumSettings } from "../lib/vacuum";
+import { shelfLifeSummary, type VacuumConfigRow, type VacuumSettings } from "../lib/vacuum";
 import { buildEan13, EAN_SCHEME_LABELS, EAN_SCHEMES, validateEanSchemeConfig, type EanScheme } from "../lib/vacuum-ean";
 import { VACUUM_LABEL_DEFAULTS } from "../lib/vacuum-label-spec";
 import { fieldInput, fieldLabel, FormModal, optionalHint } from "./form-modal";
@@ -138,13 +138,6 @@ export function VacuumCutToggle({ productId, enabled }: { productId: string; ena
     >{pending ? "Guardando…" : enabled ? "✕ Deshabilitar" : "✓ Habilitar"}</button>
     {error ? <span className="max-w-56 text-right text-xs text-red-700" role="alert">{error}</span> : null}
   </span>;
-}
-
-/** Vencimiento de un corte: el efectivo y de dónde sale («General» o «Personalizado»). */
-export function shelfLifeSummary(row: Pick<VacuumConfigRow, "shelfLifeDays" | "customShelfLifeDays">): { text: string; custom: boolean } {
-  const days = row.shelfLifeDays;
-  const text = days === null ? "—" : `${String(days)} ${days === 1 ? "día" : "días"}`;
-  return { text, custom: row.customShelfLifeDays !== null };
 }
 
 /** Configuración individual de un corte: vencimiento general o propio y texto de conservación. El PLU no se edita acá. */
