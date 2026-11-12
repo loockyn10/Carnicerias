@@ -1,7 +1,7 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont } from "pdf-lib";
 
 import { toLabelText, type LabelFontStyle } from "./label-font";
-import { buildVacuumLabelLayout, packageToLabelData, type VacuumLabelKind, type VacuumLabelLayout } from "./vacuum-label-layout";
+import { assertLabelDates, buildVacuumLabelLayout, packageToLabelData, VacuumLabelError, type VacuumLabelKind, type VacuumLabelLayout } from "./vacuum-label-layout";
 import { isValidEan13 } from "./vacuum-ean";
 import { PT_PER_MM, type VacuumLabelDims } from "./vacuum-label-spec";
 import { vacuumDims, type VacuumPackage, type VacuumPrintKind } from "./vacuum";
@@ -47,7 +47,7 @@ function drawLayout(page: ReturnType<PDFDocument["addPage"]>, fonts: Fonts, layo
   }
 }
 
-export class VacuumLabelError extends Error {}
+export { VacuumLabelError };
 
 export interface VacuumLabelPdfResult {
   pdf: Uint8Array;
@@ -65,6 +65,7 @@ export async function renderVacuumLabelsPdf(pkg: VacuumPackage, kind: VacuumPrin
   if (!isValidEan13(pkg.ean13)) throw new VacuumLabelError("El EAN-13 del paquete es inválido: no se imprime");
   const dims = dimsOverride ?? vacuumDims({ labelWidthMm: pkg.dims.widthMm, infoHeightMm: pkg.dims.infoHeightMm, priceHeightMm: pkg.dims.priceHeightMm });
   const data = packageToLabelData(pkg);
+  assertLabelDates(data);
   const layouts = kindsFor(kind).map((labelKind) => buildVacuumLabelLayout(labelKind, data, dims));
 
   const doc = await PDFDocument.create();

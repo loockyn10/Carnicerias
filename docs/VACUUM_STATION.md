@@ -1,6 +1,6 @@
 # Estación de producción de Envasados
 
-Pantalla `Admin → Envasados → Estación de producción` (`/admin/vacuum/station`). Pensada para envasar durante horas con la menor intervención posible: se elige el corte una vez, se apoya el paquete en la balanza y la estación **detecta el peso estable, registra el paquete, imprime las dos etiquetas y espera el retiro** antes de aceptar el siguiente. Es la misma aplicación web (sin Tauri, sin servicio local, sin otra base): registra EXACTAMENTE el mismo paquete que el formulario manual (`create_vacuum_package`, tabla `vacuum_packages`, misma configuración EAN, PLU, vida útil, precio vigente y permisos). El formulario manual sigue funcionando.
+Pantalla `Admin → Envasados → Estación de producción` (`/admin/vacuum/station`). Pensada para envasar durante horas con la menor intervención posible: se elige el corte una vez, se apoya el paquete en la balanza y la estación **detecta el peso estable, registra el paquete, imprime la(s) etiqueta(s) configuradas (hoy sólo la comercial) y espera el retiro** antes de aceptar el siguiente. Es la misma aplicación web (sin Tauri, sin servicio local, sin otra base): registra EXACTAMENTE el mismo paquete que el formulario manual (`create_vacuum_package`, tabla `vacuum_packages`, misma configuración EAN, PLU, vida útil, precio vigente y permisos). El formulario manual sigue funcionando.
 
 ## Flujo y estados
 
@@ -47,10 +47,18 @@ Además hay un **giro de calibración** (0°/90°/180°/270°) por equipo: como 
 ### Configurar la impresora (una vez, en la computadora de producción)
 
 1. Instalar el driver del fabricante y poner la impresora como **predeterminada** de Windows.
-2. En «Preferencias de impresión» crear o elegir un tamaño de papel **exactamente igual a la etiqueta** (por defecto 58 × 40 mm) y tipo de papel **etiquetas con separación (gap)** si el rollo las tiene.
+2. En «Preferencias de impresión» crear o elegir un tamaño de papel **exactamente igual a la etiqueta** (por defecto 55 × 44 mm) y tipo de papel **etiquetas con separación (gap)** si el rollo las tiene.
 3. **Calibrar el sensor de etiquetas** con la autocalibración de la impresora (cada fabricante tiene la suya). Un avance largo antes de imprimir casi siempre es sensor sin calibrar o papel «continuo».
 4. En la estación: **Dispositivos → Imprimir etiqueta de prueba**. Se imprime el borde exacto, una regla (marcas cada 5 mm), los lados IZQ/DER y una flecha hacia ARRIBA. Verificar: borde completo, flecha hacia arriba, la regla mide lo que dice, el papel avanza una etiqueta. Si sale girada, cambiar el **giro** y repetir.
 5. Tocar **La etiqueta salió bien**: se guarda la aprobación para esas medidas y ese giro.
+
+### Etiqueta comercial 55 × 44 mm (D-095)
+
+La operatoria actual imprime **sólo la etiqueta comercial** (Dispositivos → «Etiquetas que se imprimen por paquete» = «Sólo comercial»; es el valor por defecto de un equipo nuevo, un equipo que ya tenía «Ambas» guardado la conserva hasta cambiarla). La informativa sigue existiendo y se imprime a pedido («Ambas», «Sólo informativa» o los botones de reimpresión). Papel por defecto: **55 × 44 mm** (`VACUUM_LABEL_DEFAULTS`; la organización puede sobrescribirlo en Configuración y cada paquete conserva las medidas con las que se envasó).
+
+Contenido, de arriba hacia abajo: corte · **precio total** (lo más grande) · peso neto (izq.) y precio/kg (der.) en una fila · `ELAB: DD/MM/AAAA` (izq.) y `VENCE: DD/MM/AAAA` (der.) en una fila, mismo tamaño, 8 → 6 pt como mínimo (si no entran en una fila se apilan; no se recortan) · EAN-13 con sus 13 dígitos. El EAN-13 no se modifica (mismo código, misma estructura); sólo se dibuja con el módulo en **puntos enteros de 203 dpi** (3 puntos ≈ 0,375 mm, mismo grosor en todas las barras), alto de 9 mm que crece hasta 11 mm con el espacio libre, y respeta las zonas de silencio (11 módulos a la izquierda y 7 a la derecha). El margen lateral de 4,5 mm deja el contenido dentro de los 48 mm imprimibles de una térmica de 58 mm.
+
+**Las fechas no se generan al imprimir**: salen de `packed_on`/`expires_on` del paquete registrado (registro manual, estación semiautomática, impresión automática y reimpresión desde el historial usan el mismo snapshot), así que una reimpresión es idéntica a la original aunque hoy cambie la vida útil del corte. Si falta una fecha o no es válida (o el vencimiento es anterior a la elaboración) no se imprime nada y se muestra el motivo (`assertLabelDates`). La vista previa de un borrador sin fecha deja `--/--/----`. Una etiqueta = una página/un trabajo de impresión.
 
 ### Impresión automática y sin diálogo
 

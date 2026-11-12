@@ -127,8 +127,8 @@ describe("lectura de las RPC", () => {
   });
 
   it("calcula las medidas de etiqueta desde la configuración", () => {
-    expect(vacuumDims(null)).toEqual({ widthMm: 58, infoHeightMm: 40, priceHeightMm: 40 });
-    expect(vacuumDims({ labelWidthMm: 58, infoHeightMm: 50, priceHeightMm: null })).toEqual({ widthMm: 58, infoHeightMm: 50, priceHeightMm: 40 });
+    expect(vacuumDims(null)).toEqual({ widthMm: 55, infoHeightMm: 44, priceHeightMm: 44 });
+    expect(vacuumDims({ labelWidthMm: 58, infoHeightMm: 50, priceHeightMm: null })).toEqual({ widthMm: 58, infoHeightMm: 50, priceHeightMm: 44 });
   });
 
   it("lee los cortes con precio nulo y en centavos como texto", () => {

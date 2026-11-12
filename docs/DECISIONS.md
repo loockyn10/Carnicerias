@@ -1276,6 +1276,10 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 
 ---
 
+## D-095 — Envasados: etiqueta comercial 55 × 44 mm con elaboración y vencimiento
+
+**Status:** Active (2026-11-12; sin migraciones). Ajuste puntual de D-090/D-092: la etiqueta comercial (precio) suma `ELAB` y `VENCE` en una fila; el papel por defecto pasa de 58 × 40 a **55 × 44 mm** (`VACUUM_LABEL_DEFAULTS`, sobrescribible por organización; cada paquete conserva sus medidas). Las fechas salen SIEMPRE del paquete registrado (nunca se calculan ni se generan al imprimir) y si falta alguna no se imprime. La estación nueva imprime sólo la comercial por defecto; la informativa y «Ambas» se conservan. El EAN-13, los precios y los registros históricos no cambian (el EAN sólo se dibuja con módulo de puntos enteros a 203 dpi). Detalle en `VACUUM_STATION.md`.
+
 ## D-094 — Envasados: PLU automático, vencimiento general por organización y reconocimiento del EAN en el POS
 
 **Status:** Active (2026-11-12; migración `202611120099` sin aplicar)

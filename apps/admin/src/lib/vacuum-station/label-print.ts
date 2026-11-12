@@ -1,6 +1,6 @@
 import type { LabelRotation, StationPrintKind } from "./config";
 import { MM_PER_PT, type VacuumLabelDims } from "../vacuum-label-spec";
-import { buildVacuumLabelLayout, packageToLabelData, type VacuumLabelKind, type VacuumLabelLayout } from "../vacuum-label-layout";
+import { assertLabelDates, buildVacuumLabelLayout, packageToLabelData, type VacuumLabelKind, type VacuumLabelLayout } from "../vacuum-label-layout";
 import { vacuumDims, type VacuumPackage } from "../vacuum";
 
 /**
@@ -109,6 +109,8 @@ export interface LabelJob {
 export function buildPackageJobs(pkg: VacuumPackage, kind: PackagePrintKind, rotation: LabelRotation, options: { logisticLabel: boolean } = { logisticLabel: false }): LabelJob[] {
   const dims = vacuumDims({ labelWidthMm: pkg.dims.widthMm, infoHeightMm: pkg.dims.infoHeightMm, priceHeightMm: pkg.dims.priceHeightMm });
   const data = packageToLabelData(pkg);
+  // Las fechas son las del registro del paquete; si falta alguna se corta acá con un error claro (quien llama lo muestra y no imprime nada).
+  assertLabelDates(data);
   const jobs: LabelJob[] = [];
   const push = (labelKind: VacuumLabelKind): VacuumLabelLayout => {
     const layout = buildVacuumLabelLayout(labelKind, data, dims);

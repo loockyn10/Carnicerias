@@ -34,7 +34,7 @@ describe("PDF de etiquetas de envasado", () => {
     expect(pageCount).toBe(2);
     const pages = await inspectPdf(pdf);
     expect(pages).toHaveLength(2);
-    for (const page of pages) { expect(mmOf(page.widthPt)).toBeCloseTo(58, 1); expect(mmOf(page.heightPt)).toBeCloseTo(40, 1); }
+    for (const page of pages) { expect(mmOf(page.widthPt)).toBeCloseTo(55, 1); expect(mmOf(page.heightPt)).toBeCloseTo(44, 1); }
     expect((await textsOf(pdf, 0)).join(" ")).toContain("ELABORACI");
     expect(await textsOf(pdf, 1)).toContain("$18.052,50");
   });
@@ -92,6 +92,35 @@ describe("PDF de etiquetas de envasado", () => {
     expect(cheaper.ean13).toHaveLength(13);
   });
 
+  it("la etiqueta comercial es UNA sola página de 55 × 44 mm con producto, peso, precio/kg, precio, elaboración, vencimiento y EAN-13", async () => {
+    const { pdf, pageCount, overflow } = await renderVacuumLabelsPdf(samplePackage(), "PRICE");
+    expect(pageCount).toBe(1);
+    expect(overflow).toEqual([]);
+    const pages = await inspectPdf(pdf);
+    expect(pages).toHaveLength(1);
+    expect(mmOf(pages[0]?.widthPt ?? 0)).toBeCloseTo(55, 1);
+    expect(mmOf(pages[0]?.heightPt ?? 0)).toBeCloseTo(44, 1);
+    const texts = await textsOf(pdf, 0);
+    expect(texts).toEqual(expect.arrayContaining(["Vacío", "$18.052,50", "1,245 kg", "$14.500/kg", "ELAB: 01/11/2026", "VENCE: 08/11/2026"]));
+    expect(texts.join("")).toContain("000718");
+  });
+
+  it("la reimpresión conserva las fechas del registro original aunque hoy la vida útil del corte sea otra", async () => {
+    // Registrado el 01/11 con vencimiento 08/11. Si se recalculara con otra vida útil (30 días) daría 01/12: no debe pasar.
+    const original = samplePackage({ packedOn: "2026-11-01", expiresOn: "2026-11-08", shelfLifeDays: 30 });
+    const first = await textsOf((await renderVacuumLabelsPdf(original, "PRICE")).pdf, 0);
+    const reprint = await textsOf((await renderVacuumLabelsPdf({ ...original, printCount: 4, shelfLifeDays: 3 }, "PRICE")).pdf, 0);
+    expect(reprint).toEqual(first);
+    expect(reprint).toContain("ELAB: 01/11/2026");
+    expect(reprint).toContain("VENCE: 08/11/2026");
+  });
+
+  it("si falta una fecha obligatoria se niega a imprimir con un error claro (no inventa una)", async () => {
+    await expect(renderVacuumLabelsPdf(samplePackage({ expiresOn: "" }), "PRICE")).rejects.toThrow(/fecha de vencimiento/);
+    await expect(renderVacuumLabelsPdf(samplePackage({ packedOn: "" }), "BOTH")).rejects.toThrow(/fecha de elaboración/);
+    await expect(renderVacuumLabelsPdf(samplePackage({ packedOn: "" }), "INFO")).rejects.toBeInstanceOf(VacuumLabelError);
+  });
+
   it("nombra el archivo con el lote", () => {
     expect(vacuumLabelFilename({ lot: "A1-261101-0001" }, "BOTH")).toBe("envasado-A1-261101-0001-etiquetas.pdf");
     expect(vacuumLabelFilename({ lot: "LOTE ESPECIAL/7" }, "PRICE")).toBe("envasado-LOTE_ESPECIAL_7-precio.pdf");
@@ -122,6 +151,24 @@ describe("impresión de un paquete registrado", () => {
     expect(result.pageCount).toBe(2);
     expect(result.filename).toBe("envasado-A1-261101-0001-etiquetas.pdf");
     expect(calls).toEqual([{ id: PACKAGE_ID, kind: "BOTH" }]);
+  });
+
+  it("sin fecha de vencimiento en el registro da 422 con el motivo y no registra una impresión", async () => {
+    const { value, calls } = deps(rpcJson(samplePackage({ expiresOn: "" })));
+    const failure = await executeVacuumPrint(value, { packageId: PACKAGE_ID, kind: "PRICE" }).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(VacuumPrintError);
+    expect(failure).toMatchObject({ status: 422 });
+    expect(failure instanceof Error ? failure.message : "").toMatch(/fecha de vencimiento/);
+    expect(calls).toEqual([]);
+  });
+
+  it("la reimpresión desde el historial usa las fechas guardadas en el paquete", async () => {
+    const { value } = deps(rpcJson(samplePackage({ packedOn: "2026-10-20", expiresOn: "2026-12-31" })));
+    const result = await executeVacuumPrint(value, { packageId: PACKAGE_ID, kind: "PRICE" });
+    expect(result.pageCount).toBe(1);
+    const texts = await textsOf(result.pdf, 0);
+    expect(texts).toContain("ELAB: 20/10/2026");
+    expect(texts).toContain("VENCE: 31/12/2026");
   });
 
   it("un paquete inexistente (u otra organización/sucursal) da 404 y no registra nada", async () => {

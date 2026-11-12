@@ -36,7 +36,7 @@ export function VacuumEstablishmentForm({ settings }: { settings: VacuumSettings
       <label className={fieldLabel}>Ancho<input className={fieldInput} defaultValue={mmText(settings.labelWidthMm)} inputMode="decimal" name="label_width_mm" placeholder={String(VACUUM_LABEL_DEFAULTS.widthMm)} /></label>
       <label className={fieldLabel}>Alto informativa<input className={fieldInput} defaultValue={mmText(settings.infoHeightMm)} inputMode="decimal" name="info_height_mm" placeholder={String(VACUUM_LABEL_DEFAULTS.infoHeightMm)} /></label>
       <label className={fieldLabel}>Alto precio<input className={fieldInput} defaultValue={mmText(settings.priceHeightMm)} inputMode="decimal" name="price_height_mm" placeholder={String(VACUUM_LABEL_DEFAULTS.priceHeightMm)} /></label>
-      <p className="text-xs text-stone-500 sm:col-span-3">Vacío = medida por defecto ({VACUUM_LABEL_DEFAULTS.widthMm} × {VACUUM_LABEL_DEFAULTS.infoHeightMm} mm). Para pasar a 58 × 50, poné 50 en el alto. Los paquetes ya envasados se reimprimen con las medidas que tenían.</p>
+      <p className="text-xs text-stone-500 sm:col-span-3">Vacío = medida por defecto ({VACUUM_LABEL_DEFAULTS.widthMm} × {VACUUM_LABEL_DEFAULTS.infoHeightMm} mm). Para pasar a 55 × 50, poné 50 en el alto. Los paquetes ya envasados se reimprimen con las medidas que tenían.</p>
     </fieldset>
     <Feedback state={state} />
     <div className="flex justify-end"><button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Guardando…" : "Guardar"}</button></div>

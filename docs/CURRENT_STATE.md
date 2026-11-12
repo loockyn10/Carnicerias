@@ -2,6 +2,11 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## Envasados: etiqueta comercial 55 × 44 mm con elaboración y vencimiento — implementado 2026-11-12 (D-095; sin migraciones)
+
+- La etiqueta comercial lleva `ELAB: DD/MM/AAAA` y `VENCE: DD/MM/AAAA` (una fila) con las fechas del paquete registrado; papel por defecto 55 × 44 mm; estación nueva imprime sólo la comercial (un equipo con «Ambas» ya guardado hay que cambiarlo en Dispositivos). Sin fecha válida no se imprime.
+- Validado: tests de layout (cinco casos de texto/precio, sin desborde ni superposición, EAN a puntos enteros con zonas de silencio), PDF de una página de 55 × 44, reimpresión con fechas idénticas y error por fecha faltante; revisión visual del SVG en el navegador. **No se probó en la térmica física** (203 dpi, lectura del EAN, giro/avance).
+
 ## Envasados: PLU automático y reconocimiento del EAN en el POS — implementado 2026-11-12 (D-094; migración `202611120099` **sin aplicar**)
 
 - Causa verificada del fallo del POS de escritorio: la caja instalada era una compilación del 22 de octubre (sin Envasados: su SQLite estaba en la migración 21 y el ejecutable no contenía `vacuum_scheme`), y todos los instaladores se llaman 0.1.0. Con ese POS un EAN de Envasados es un código desconocido → alta rápida. El código nuevo además cierra los huecos que quedaban con una caja actual: verificador incorrecto y caja sin sincronizar caían igual al alta rápida, y el error de `get_pos_vacuum_state` se tragaba en silencio.

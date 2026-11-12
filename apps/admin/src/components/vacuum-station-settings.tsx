@@ -98,7 +98,7 @@ export function VacuumStationSettings({ model, branches, onClose }: { model: Vac
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={label}>Etiquetas que se imprimen por paquete
             <select className={`${field} font-normal`} onChange={(event) => { updateConfig((current) => ({ ...current, print: { ...current.print, kind: event.target.value as StationPrintKind } })); }} value={config.print.kind}>
-              <option value="BOTH">Ambas (informativa y precio)</option><option value="INFO">Sólo informativa</option><option value="PRICE">Sólo precio</option>
+              <option value="PRICE">Sólo comercial (precio, fechas y EAN)</option><option value="INFO">Sólo informativa</option><option value="BOTH">Ambas (informativa y comercial)</option>
             </select>
           </label>
           <label className={label}>Giro del contenido

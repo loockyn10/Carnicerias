@@ -9,7 +9,7 @@ const pkg: VacuumPackage = {
   id: "11111111-1111-4111-8111-111111111111", branchId: "b", branchName: "Central", productId: "p", productName: "Vacío de cerdo & más", productSku: "VAC",
   weightGrams: 750, pricePerKgCents: 1_500_000n, totalCents: 1_125_000n, packedOn: "2026-11-07", expiresOn: "2026-11-21", lot: "CEN-261107-0001", ean13: "2000120112506",
   shelfLifeDays: 14, conservationText: "Conservar entre 0 y 4 °C", businessName: "Carnicerías Fran", address: "Calle 1", establishmentInfo: null, extraText: null,
-  dims: { widthMm: 58, infoHeightMm: 40, priceHeightMm: 40 }, createdAt: "2026-11-07T12:00:00Z", createdBy: null, printCount: 0, logisticCode: "7K3M9QX4S"
+  dims: { widthMm: 55, infoHeightMm: 44, priceHeightMm: 44 }, createdAt: "2026-11-07T12:00:00Z", createdBy: null, printCount: 0, logisticCode: "7K3M9QX4S"
 };
 
 describe("documento de impresión de una etiqueta", () => {
@@ -17,9 +17,9 @@ describe("documento de impresión de una etiqueta", () => {
 
   it("declara la hoja del tamaño exacto de la etiqueta, sin márgenes", () => {
     const html = buildLabelDocument(buildLabelPage(layout, 0), "x");
-    expect(html).toContain("@page{size:58mm 40mm;margin:0}");
+    expect(html).toContain("@page{size:55mm 44mm;margin:0}");
     expect(html).toContain("<svg");
-    expect(html).toContain('width="58mm" height="40mm" viewBox="0 0 58 40"');
+    expect(html).toContain('width="55mm" height="44mm" viewBox="0 0 55 44"');
   });
 
   it("es UNA sola página: no hay saltos de página ni más contenido que el dibujo", () => {
@@ -47,16 +47,16 @@ describe("documento de impresión de una etiqueta", () => {
 
   it("giro de 90° y 270°: la hoja se declara con el ancho y el alto intercambiados", () => {
     const rotated = buildLabelPage(layout, 90);
-    expect([rotated.pageWidthMm, rotated.pageHeightMm]).toEqual([40, 58]);
-    expect(buildLabelDocument(rotated, "x")).toContain("@page{size:40mm 58mm;margin:0}");
-    expect(rotated.svg).toContain('transform="matrix(0 1 -1 0 40 0)"');
-    expect(buildLabelPage(layout, 270).svg).toContain('transform="matrix(0 -1 1 0 0 58)"');
+    expect([rotated.pageWidthMm, rotated.pageHeightMm]).toEqual([44, 55]);
+    expect(buildLabelDocument(rotated, "x")).toContain("@page{size:44mm 55mm;margin:0}");
+    expect(rotated.svg).toContain('transform="matrix(0 1 -1 0 44 0)"');
+    expect(buildLabelPage(layout, 270).svg).toContain('transform="matrix(0 -1 1 0 0 55)"');
   });
 
   it("giro de 180°: mismo tamaño de hoja, contenido invertido", () => {
     const rotated = buildLabelPage(layout, 180);
-    expect([rotated.pageWidthMm, rotated.pageHeightMm]).toEqual([58, 40]);
-    expect(rotated.svg).toContain('transform="matrix(-1 0 0 -1 58 40)"');
+    expect([rotated.pageWidthMm, rotated.pageHeightMm]).toEqual([55, 44]);
+    expect(rotated.svg).toContain('transform="matrix(-1 0 0 -1 55 44)"');
   });
 
   it("sin giro no agrega ninguna transformación", () => {
@@ -64,10 +64,10 @@ describe("documento de impresión de una etiqueta", () => {
   });
 
   it("el giro mantiene el contenido dentro de la hoja (la esquina del dibujo cae en una esquina de la hoja)", () => {
-    // matrix(0 1 -1 0 h 0): (x, y) → (h - y, x). El punto (0, 0) va a (40, 0) y (58, 40) va a (0, 58): ambos dentro de la hoja 40 × 58.
+    // matrix(0 1 -1 0 h 0): (x, y) → (h - y, x). El punto (0, 0) va a (44, 0) y (55, 44) va a (0, 55): ambos dentro de la hoja 44 × 55.
     const apply = (x: number, y: number, h: number) => [h - y, x];
-    expect(apply(0, 0, 40)).toEqual([40, 0]);
-    expect(apply(58, 40, 40)).toEqual([0, 58]);
+    expect(apply(0, 0, 44)).toEqual([44, 0]);
+    expect(apply(55, 44, 44)).toEqual([0, 55]);
   });
 });
 
@@ -75,7 +75,7 @@ describe("etiquetas de un paquete registrado", () => {
   it("«Ambas» son dos trabajos, la informativa primero, cada uno con su hoja", () => {
     const jobs = buildPackageJobs(pkg, "BOTH", 0);
     expect(jobs.map((job) => job.kind)).toEqual(["INFO", "PRICE"]);
-    expect(jobs.every((job) => job.html.includes("@page{size:58mm 40mm;margin:0}"))).toBe(true);
+    expect(jobs.every((job) => job.html.includes("@page{size:55mm 44mm;margin:0}"))).toBe(true);
   });
 
   it("respeta alturas distintas entre etiquetas (cada trabajo declara la suya)", () => {
@@ -91,6 +91,34 @@ describe("etiquetas de un paquete registrado", () => {
     expect(jobs[0]?.html).toContain("size:80mm 60mm");
   });
 
+  it("sólo la comercial: un único trabajo de 55 × 44 mm con las fechas del registro (estación, impresión automática y reimpresión)", () => {
+    const jobs = buildPackageJobs(pkg, "PRICE", 0);
+    expect(jobs).toHaveLength(1);
+    expect([jobs[0]?.widthMm, jobs[0]?.heightMm]).toEqual([55, 44]);
+    expect(jobs[0]?.html.match(/<svg/g)).toHaveLength(1);
+    expect(jobs[0]?.html).toContain(">ELAB: 07/11/2026<");
+    expect(jobs[0]?.html).toContain(">VENCE: 21/11/2026<");
+    expect(jobs[0]?.html).not.toContain("LOTE");
+  });
+
+  it("la reimpresión repite las fechas exactas del registro: no se recalcula el vencimiento con la vida útil actual", () => {
+    // Registrado con 14 días de vida útil (07/11 → 21/11); hoy el corte tiene 2 días: la etiqueta no cambia.
+    const first = buildPackageJobs(pkg, "PRICE", 0)[0]?.html;
+    const reprint = buildPackageJobs({ ...pkg, shelfLifeDays: 2, printCount: 5 }, "PRICE", 0)[0]?.html;
+    expect(reprint).toBe(first);
+  });
+
+  it("también la informativa conserva las fechas y la comercial las agrega: ambas siguen disponibles a pedido", () => {
+    const jobs = buildPackageJobs(pkg, "BOTH", 0);
+    expect(jobs.map((job) => job.kind)).toEqual(["INFO", "PRICE"]);
+    for (const job of jobs) expect(job.html).toContain("21/11/2026");
+  });
+
+  it("si falta una fecha obligatoria no arma ningún trabajo y explica el motivo", () => {
+    expect(() => buildPackageJobs({ ...pkg, expiresOn: "" }, "PRICE", 0)).toThrow(/fecha de vencimiento/);
+    expect(() => buildPackageJobs({ ...pkg, packedOn: "" }, "BOTH", 0)).toThrow(/fecha de elaboración/);
+  });
+
   it("kindsOf resuelve cada tipo", () => {
     expect(kindsOf("BOTH")).toEqual(["INFO", "PRICE"]);
     expect(kindsOf("INFO")).toEqual(["INFO"]);
@@ -101,13 +129,13 @@ describe("etiquetas de un paquete registrado", () => {
 describe("etiqueta de prueba", () => {
   it("tiene el tamaño de la etiqueta real y todo su contenido cabe dentro", () => {
     const layout = buildTestLayout("PRICE", VACUUM_LABEL_DEFAULTS, 0);
-    expect([layout.widthMm, layout.heightMm]).toEqual([58, 40]);
+    expect([layout.widthMm, layout.heightMm]).toEqual([55, 44]);
     for (const rule of layout.rules) {
       for (const value of [rule.x1, rule.x2]) expect(value).toBeGreaterThanOrEqual(0);
-      for (const value of [rule.x1, rule.x2]) expect(value).toBeLessThanOrEqual(58);
-      for (const value of [rule.y1, rule.y2]) expect(value).toBeLessThanOrEqual(40);
+      for (const value of [rule.x1, rule.x2]) expect(value).toBeLessThanOrEqual(55);
+      for (const value of [rule.y1, rule.y2]) expect(value).toBeLessThanOrEqual(44);
     }
-    expect(layout.texts.find((text) => text.id === "size")?.text).toBe("58 × 40 mm");
+    expect(layout.texts.find((text) => text.id === "size")?.text).toBe("55 × 44 mm");
   });
 
   it("indica que no es un paquete y el giro configurado", () => {

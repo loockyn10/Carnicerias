@@ -4,9 +4,26 @@ import { code128ModuleCount, code128Modules } from "./distribution/code128";
 import { formatLogisticCode, isValidLogisticCode } from "./distribution/logistic-code";
 import { EAN13_MODULE_COUNT, ean13Modules, isValidEan13, modulesToRuns } from "./vacuum-ean";
 import {
-  MM_PER_PT, VACUUM_FIT_STEP, VACUUM_GAPS_MM, VACUUM_INFO_TYPE, VACUUM_LABEL_PAD, VACUUM_LOGISTIC, VACUUM_LOGISTIC_TYPE, VACUUM_MIN_FIT, VACUUM_PRICE_TYPE, type VacuumLabelDims
+  MM_PER_PT, THERMAL_DOT_MM, VACUUM_FIT_STEP, VACUUM_GAPS_MM, VACUUM_INFO_TYPE, VACUUM_LABEL_PAD, VACUUM_LOGISTIC, VACUUM_LOGISTIC_TYPE, VACUUM_MIN_FIT, VACUUM_PRICE_TYPE, type VacuumLabelDims
 } from "./vacuum-label-spec";
+import { isIsoDate } from "./date-range";
 import { formatIsoDate, moneyText, weightText, type VacuumPackage } from "./vacuum";
+
+/** La etiqueta no se puede imprimir (dato obligatorio faltante o inválido): el mensaje se muestra tal cual al operario. */
+export class VacuumLabelError extends Error {}
+
+/**
+ * Las fechas de elaboración y vencimiento salen SIEMPRE del paquete registrado: no se generan ni se recalculan al imprimir. Si falta una o no es una fecha
+ * válida se corta la impresión con un error claro (nunca se inventa una fecha). Se llama antes de imprimir; el layout de un borrador en pantalla no la usa.
+ */
+export function assertLabelDates(data: Pick<VacuumLabelData, "packedOn" | "expiresOn">): void {
+  if (!isIsoDate(data.packedOn)) throw new VacuumLabelError("El paquete no tiene fecha de elaboración válida: no se imprime la etiqueta");
+  if (!isIsoDate(data.expiresOn)) throw new VacuumLabelError("El paquete no tiene fecha de vencimiento válida: no se imprime la etiqueta");
+  if (data.expiresOn < data.packedOn) throw new VacuumLabelError("El vencimiento del paquete es anterior a la elaboración: no se imprime la etiqueta");
+}
+
+/** «DD/MM/AAAA»; si el dato no es una fecha (borrador sin completar) deja el hueco a la vista en lugar de inventar una. */
+const dateOrBlank = (value: string) => (isIsoDate(value) ? formatIsoDate(value) : "--/--/----");
 
 /**
  * Geometría de las DOS etiquetas del envasado. Igual que la etiqueta de góndola (`label-layout.ts`), cada etiqueta es una lista de primitivas
@@ -270,7 +287,8 @@ function fitNamePt(name: string, maxMm: number, maxPt: number, minPt: number, ma
 // ---------------------------------------------------------------------------------------------------------------------
 
 /**
- * Jerarquía: corte, PRECIO FINAL (lo más grande), peso neto, precio por kg, código de barras y sus 13 dígitos. Sin información sanitaria.
+ * Etiqueta COMERCIAL. Jerarquía: corte, PRECIO FINAL (lo más grande), peso neto y precio por kg (una fila), fechas «ELAB» y «VENCE» (una fila), código
+ * de barras y sus 13 dígitos. Sin información sanitaria. Las fechas son las del paquete registrado (snapshot), formateadas, nunca recalculadas.
  * Si todavía no hay esquema EAN configurado (`ean13 === null`) en lugar de las barras se dibuja un aviso: jamás se inventa un código.
  */
 export function buildPriceLabelLayout(data: VacuumLabelData, dims: VacuumLabelDims): VacuumLabelLayout {
@@ -295,13 +313,47 @@ export function buildPriceLabelLayout(data: VacuumLabelData, dims: VacuumLabelDi
     stack.text("price", price.text, price.pt, T.price.style, "middle", center);
     stack.advance(capHeightEm(T.price.style) * price.pt * MM_PER_PT + VACUUM_GAPS_MM.section);
 
-    stack.text("weight", weightText(data.weightGrams), T.weight.pt * scale, T.weight.style, "middle", center);
-    stack.advance(emHeight(T.weight.pt * scale, 1.15));
-    const perKg = fitOneLine(`${moneyText(data.pricePerKgCents)}/kg`, inner, T.perKg.pt * scale, T.perKg.pt * scale * 0.6, T.perKg.style);
-    stack.text("per-kg", perKg.text, perKg.pt, T.perKg.style, "middle", center);
-    stack.advance(emHeight(perKg.pt, 1.15) + VACUUM_GAPS_MM.section);
+    // Peso neto (izquierda) y precio por kg (derecha) en UNA fila; si no entran lado a lado ni achicados hasta el 70 %, se apilan como antes.
+    const weightLabel = weightText(data.weightGrams);
+    const perKgLabel = `${moneyText(data.pricePerKgCents)}/kg`;
+    const sharedRow = sideBySide(
+      stack,
+      { id: "weight", text: weightLabel, pt: T.weight.pt * scale, style: T.weight.style },
+      { id: "per-kg", text: perKgLabel, pt: T.perKg.pt * scale, style: T.perKg.style },
+      left, right, T.dates.minGapMm, 0.7
+    );
+    if (!sharedRow) {
+      stack.text("weight", weightLabel, T.weight.pt * scale, T.weight.style, "middle", center);
+      stack.advance(emHeight(T.weight.pt * scale, 1.15));
+      const perKg = fitOneLine(perKgLabel, inner, T.perKg.pt * scale, T.perKg.pt * scale * 0.6, T.perKg.style);
+      stack.text("per-kg", perKg.text, perKg.pt, T.perKg.style, "middle", center);
+      stack.advance(emHeight(perKg.pt, 1.15));
+    }
+    stack.advance(VACUUM_GAPS_MM.section);
 
-    const barHeight = T.barcode.heightMm * scale;
+    // Fechas del paquete: «ELAB» a la izquierda y «VENCE» a la derecha, mismo tamaño. Tipografía propia (no baja con `scale`): son datos obligatorios.
+    const elab = `ELAB: ${dateOrBlank(data.packedOn)}`;
+    const vence = `VENCE: ${dateOrBlank(data.expiresOn)}`;
+    const dateRow = sideBySide(
+      stack,
+      { id: "elab", text: elab, pt: T.dates.maxPt, style: T.dates.style },
+      { id: "vence", text: vence, pt: T.dates.maxPt, style: T.dates.style },
+      left, right, T.dates.minGapMm, T.dates.minPt / T.dates.maxPt
+    );
+    if (!dateRow) {
+      // Rótulos muy angostos: dos filas centradas al tamaño mínimo legible, nunca recortadas.
+      stack.text("elab", elab, T.dates.minPt, T.dates.style, "middle", center);
+      stack.advance(emHeight(T.dates.minPt, 1.15));
+      stack.text("vence", vence, T.dates.minPt, T.dates.style, "middle", center);
+      stack.advance(emHeight(T.dates.minPt, 1.15));
+    }
+    stack.advance(VACUUM_GAPS_MM.section);
+
+    // El EAN-13 aprovecha el alto que sobra (hasta `maxHeightMm`): más alto = lectura más tolerante a un barrido inclinado. Nunca baja del 90 % del diseño.
+    const baseBarHeight = T.barcode.heightMm * Math.max(scale, T.barcode.minHeightScale);
+    const belowBars = T.barcode.digitsGapMm +capHeightEm("regular") * T.digits.pt * scale * MM_PER_PT + 0.55;
+    const room = priceHeightMm - VACUUM_LABEL_PAD.bottomMm - stack.y - belowBars;
+    const barHeight = Math.min(T.barcode.maxHeightMm, Math.max(baseBarHeight, room));
     if (data.ean13 !== null && isValidEan13(data.ean13)) {
       drawBarcode(stack, data.ean13, widthMm, left, right, barHeight, T.digits.pt * scale);
     } else {
@@ -315,16 +367,43 @@ export function buildPriceLabelLayout(data: VacuumLabelData, dims: VacuumLabelDi
   });
 }
 
+interface RowPart {
+  id: string;
+  text: string;
+  pt: number;
+  style: LabelFontStyle;
+}
+
+/**
+ * Dos textos en la MISMA línea base: `a` pegado al margen izquierdo y `b` al derecho. Prueba tamaños decrecientes (cada paso baja un 2 % ambos, hasta
+ * `minScale` del tamaño pedido) y dibuja en el primero donde entran con al menos `gapMm` de separación. Si no entran, no dibuja nada y devuelve false.
+ */
+function sideBySide(stack: Stack, a: RowPart, b: RowPart, left: number, right: number, gapMm: number, minScale: number): boolean {
+  for (let s = 1; s >= minScale - 1e-9; s -= 0.02) {
+    const aPt = a.pt * s;
+    const bPt = b.pt * s;
+    if (mmWidth(a.text, aPt, a.style) + mmWidth(b.text, bPt, b.style) + gapMm > right - left) continue;
+    const baseline = Math.round((stack.y + Math.max(capHeightEm(a.style) * aPt, capHeightEm(b.style) * bPt) * MM_PER_PT) * 1000) / 1000;
+    stack.texts.push({ id: a.id, text: a.text, x: left, y: baseline, sizePt: Math.round(aPt * 100) / 100, style: a.style, anchor: "start" });
+    stack.texts.push({ id: b.id, text: b.text, x: right, y: baseline, sizePt: Math.round(bPt * 100) / 100, style: b.style, anchor: "end" });
+    stack.advance(emHeight(Math.max(aPt, bPt), 1.15));
+    return true;
+  }
+  return false;
+}
+
 /**
  * Barras + dígitos. El primer dígito va a la izquierda de las barras (fuera de la guarda), los 6 siguientes bajo la mitad izquierda y los 6
- * últimos bajo la mitad derecha, como en cualquier EAN-13 impreso. El módulo se agranda hasta ocupar el ancho útil (máx. 0,5 mm).
+ * últimos bajo la mitad derecha, como en cualquier EAN-13 impreso. El módulo ocupa un número ENTERO de puntos de la térmica (203 dpi), el mayor que
+ * entra en el ancho útil (máx. 4 puntos = 0,5 mm): así todas las barras salen del mismo grosor. Sólo si ni 1 punto entra se usa el ancho útil.
  */
 function drawBarcode(stack: Stack, ean13: string, widthMm: number, left: number, right: number, barHeight: number, digitsPt: number): void {
   const T = VACUUM_PRICE_TYPE.barcode;
   const digitsHeight = capHeightEm("regular") * digitsPt * MM_PER_PT;
   const firstDigitSpace = mmWidth("0", digitsPt, "regular") + 0.8;
   const usable = right - left - firstDigitSpace - T.quietZoneMm;
-  const moduleMm = Math.min(0.5, usable / EAN13_MODULE_COUNT);
+  const dots = Math.min(4, Math.floor(usable / EAN13_MODULE_COUNT / THERMAL_DOT_MM));
+  const moduleMm = dots >= 1 ? dots * THERMAL_DOT_MM : usable / EAN13_MODULE_COUNT;
   const barsWidth = moduleMm * EAN13_MODULE_COUNT;
   const startX = widthMm / 2 - barsWidth / 2 + firstDigitSpace / 2;
   const top = stack.y;

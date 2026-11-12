@@ -25,6 +25,14 @@ describe("configuración de la estación", () => {
     expect(config.print.auto).toBe(false);
   });
 
+  it("la estación imprime sólo la etiqueta comercial por defecto; informativa y ambas siguen eligiéndose y se conservan", () => {
+    expect(DEFAULT_STATION_CONFIG.print.kind).toBe("PRICE");
+    expect(normalizeStationConfig({}).print.kind).toBe("PRICE");
+    expect(normalizeStationConfig({ print: { kind: "valor viejo" } }).print.kind).toBe("PRICE");
+    expect(normalizeStationConfig({ print: { kind: "BOTH" } }).print.kind).toBe("BOTH");
+    expect(normalizeStationConfig({ print: { kind: "INFO" } }).print.kind).toBe("INFO");
+  });
+
   it("guarda y vuelve a leer lo mismo", () => {
     const storage = new MemoryStorage();
     const config = { ...DEFAULT_STATION_CONFIG, branchId: "b1", favorites: ["a", "b"], scale: { ...DEFAULT_STATION_CONFIG.scale, port: { usbVendorId: 6790, usbProductId: 29987 } } };

@@ -56,7 +56,7 @@ export const DEFAULT_STATION_CONFIG: StationConfig = {
   branchId: null,
   scale: { protocol: "KRETZ_STX_CR", params: KRETZ_SERIAL_PARAMS, autoReconnect: true, port: null },
   tuning: DEFAULT_STATION_TUNING,
-  print: { auto: false, kind: "BOTH", logisticLabel: false, rotation: 0, testPassedSignature: null, testPassedAt: null },
+  print: { auto: false, kind: "PRICE", logisticLabel: false, rotation: 0, testPassedSignature: null, testPassedAt: null },
   favorites: []
 };
 
@@ -119,7 +119,8 @@ export function normalizeStationConfig(raw: unknown): StationConfig {
   const scale = record(source.scale);
   const print = record(source.print);
   const rotation = LABEL_ROTATIONS.find((candidate) => candidate === print.rotation) ?? 0;
-  const kind: StationPrintKind = print.kind === "INFO" || print.kind === "PRICE" ? print.kind : "BOTH";
+  // Sin una elección guardada (equipo nuevo o valor corrupto) la estación imprime sólo la etiqueta comercial; «Ambas» y «Informativa» siguen disponibles.
+  const kind: StationPrintKind = print.kind === "INFO" || print.kind === "BOTH" ? print.kind : "PRICE";
   const favorites = Array.isArray(source.favorites) ? source.favorites.filter((entry): entry is string => typeof entry === "string").slice(0, 60) : [];
   const signature = typeof print.testPassedSignature === "string" && print.testPassedSignature !== "" ? print.testPassedSignature : null;
   return {
