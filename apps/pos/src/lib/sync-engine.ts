@@ -10,6 +10,7 @@ import {
 
 import { localDatabase, type LocalRuntime } from "./local-database";
 import { shouldRefreshQuickProductCreate, writeQuickProductCreate } from "./quick-product";
+import { parseTimekeepingCapability, shouldRefreshTimekeeping, writeTimekeepingEnabled } from "./timekeeping";
 import { classifyAuthFailure } from "./session-recovery";
 import { supabase } from "./supabase";
 
@@ -112,13 +113,16 @@ async function refreshVacuumState(runtime: LocalRuntime): Promise<string | null>
  */
 async function refreshDeviceCapabilities(runtime: LocalRuntime): Promise<void> {
   const branchId = runtime.branchId;
-  if (!branchId || !shouldRefreshQuickProductCreate(branchId)) return;
+  if (!branchId || !(shouldRefreshQuickProductCreate(branchId) || shouldRefreshTimekeeping(branchId))) return;
   try {
     const { data, error } = await supabase.rpc("get_pos_device_capabilities", { p_device_id: runtime.deviceId });
     if (error) throw error;
-    const capabilities = data as { branchId?: unknown; quickProductCreate?: unknown } | null;
+    const capabilities = data as { branchId?: unknown; quickProductCreate?: unknown; timekeepingEnabled?: unknown } | null;
     if (capabilities?.branchId !== branchId || typeof capabilities.quickProductCreate !== "boolean") throw new Error("Invalid capabilities payload");
     writeQuickProductCreate(branchId, capabilities.quickProductCreate);
+    // Servidor anterior a la migración de fichaje por sucursal: no informa el campo y se conserva el comportamiento histórico (con fichaje).
+    const timekeepingEnabled = parseTimekeepingCapability(capabilities.timekeepingEnabled);
+    if (timekeepingEnabled !== null) writeTimekeepingEnabled(branchId, timekeepingEnabled);
   } catch (capabilityError) {
     console.warn("Device capabilities refresh skipped:", capabilityError);
   }

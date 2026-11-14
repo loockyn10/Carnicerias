@@ -41,13 +41,14 @@ import { DiscountChip } from "./DiscountChip";
 import { QuantityTierList } from "./QuantityTierList";
 import { PACK_PALETTE, tierPalette, tierPositionByMinimumUnits } from "./lib/discount-chips";
 import { ManualPriceModal } from "./ManualPriceModal";
-import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type LocalVacuumState, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
+import { isDesktopRuntime, localDatabase, type CloseActiveOperatorResult, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type LocalVacuumState, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
 import { mergeRecentSales, readRemoteRecentSales, readRemoteSaleReceipt, RECENT_SALES_LIMIT, type RecentSaleView } from "./lib/remote-recent-sales";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
 import { getClockSkewMs, supabase } from "./lib/supabase";
 import { classifyAuthFailure, describeClockSkew, recoverOnlineSession } from "./lib/session-recovery";
 import { authenticateOperatorPin, LOCAL_FALLBACK_NOTICE } from "./lib/pin-login";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
+import { clockInRequiredAfterLogin, operatorExitMode, readTimekeepingEnabled } from "./lib/timekeeping";
 import { isPriceMissing, NO_PRICE_OFFLINE_MESSAGE, parseSetPriceResult, resolveProductRequest } from "./lib/product-price";
 import { refreshVacuumStateNow, registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
 import { QuickProductModal } from "./QuickProductModal";
@@ -430,6 +431,10 @@ export default function App() {
   const [operator, setOperator] = useState<LocalOperator | null>(null);
   const [shift, setShift] = useState<LocalShift | null>(null);
   const [clockInRequired, setClockInRequired] = useState(false);
+  // Fichaje por sucursal (lib/timekeeping): sin dato recordado se asume que SÍ lleva fichaje. El ref lo lee el
+  // listener de cierre de ventana, que se registra una sola vez.
+  const [timekeepingEnabled, setTimekeepingEnabled] = useState(true);
+  const timekeepingEnabledRef = useRef(true);
   const [exitModalOpen, setExitModalOpen] = useState(false);
   const [cancelTicketModalOpen, setCancelTicketModalOpen] = useState(false);
   const [shiftNow, setShiftNow] = useState(() => Date.now());
@@ -499,6 +504,8 @@ export default function App() {
   const loadShift = useCallback(async (active: LocalOperator) => {
     const deviceId = localRuntime?.deviceId;
     if (!desktop || !deviceId) return;
+    // Sucursal sin fichaje: no se consulta ni se crea ningún turno (ni local ni en el servidor).
+    if (!timekeepingEnabledRef.current) { setShift(null); return null; }
     let current = await localDatabase.currentShift(active.profileId);
     if (navigator.onLine && !user?.offline && active.operatorToken) {
       const { data, error: shiftError } = await supabase.rpc("get_current_employee_shift", { p_device_id: deviceId, p_employee_id: active.profileId, p_operator_token: active.operatorToken });
@@ -767,6 +774,19 @@ export default function App() {
   useEffect(() => {
     setCentralPos(desktop && readQuickProductCreate(localRuntime?.branchId ?? null));
   }, [desktop, localRuntime?.branchId, localRuntime?.lastSuccessfulSyncAt]);
+  // Lo mismo para el fichaje: el sync refresca la capacidad, acá sólo se lee lo recordado (también sin conexión).
+  // Si una sucursal pasa a no llevar fichaje con un operador ya adentro, se descarta el estado de turno de la
+  // pantalla (no se exige entrada ni se hace salida); el turno histórico queda intacto en SQLite y el servidor.
+  useEffect(() => {
+    const enabled = readTimekeepingEnabled(localRuntime?.branchId ?? null);
+    timekeepingEnabledRef.current = enabled;
+    setTimekeepingEnabled(enabled);
+    if (!enabled) {
+      setShift(null);
+      setClockInRequired(false);
+      setExitModalOpen(false);
+    }
+  }, [localRuntime?.branchId, localRuntime?.lastSuccessfulSyncAt]);
   // El precio manual y el descuento general existen sólo en Central: se le informa a SQLite (que valida la
   // venta aunque no haya Internet) la misma capacidad que decide la UI, y el servidor la vuelve a verificar al sincronizar.
   useEffect(() => {
@@ -910,7 +930,9 @@ export default function App() {
         if (closeInFlight.current) return;
         closeInFlight.current = true;
         try {
-          await localDatabase.closeActiveOperatorShift();
+          // Sin fichaje en la sucursal sólo se suelta al operador: nunca se encola una salida sin turno.
+          if (operatorExitMode(timekeepingEnabledRef.current) === "CLOSE_SHIFT") await localDatabase.closeActiveOperatorShift();
+          else await localDatabase.clearActiveOperator();
           if (navigator.onLine) {
             await Promise.race([
               syncRunnerRef.current(),
@@ -2059,7 +2081,7 @@ export default function App() {
     try {
       const currentShift = await loadShift(active);
       setOperator(active);
-      setClockInRequired(!currentShift);
+      setClockInRequired(clockInRequiredAfterLogin(timekeepingEnabledRef.current, Boolean(currentShift)));
       if (loginNotice) setNotice(loginNotice);
     } catch (shiftError) {
       await localDatabase.clearActiveOperator().catch(() => undefined);
@@ -2074,7 +2096,9 @@ export default function App() {
     shiftInFlight.current = true;
     setError(null); setErrorDiagnostics(null);
     try {
-      const result = await runStage("LOCAL_SQLITE", "No se pudo finalizar la sesión del operador", () => localDatabase.closeActiveOperatorShift());
+      const result: CloseActiveOperatorResult = operatorExitMode(timekeepingEnabledRef.current) === "CLOSE_SHIFT"
+        ? await runStage("LOCAL_SQLITE", "No se pudo finalizar la sesión del operador", () => localDatabase.closeActiveOperatorShift())
+        : await runStage("LOCAL_SQLITE", "No se pudo finalizar la sesión del operador", async () => { await localDatabase.clearActiveOperator(); return { clockOutCreated: false, shift: null }; });
       setExitModalOpen(false);
       setClockInRequired(false);
       setOperator(null);
@@ -2104,6 +2128,7 @@ export default function App() {
   }
 
   async function recordTime(action: "CLOCK_IN" | "CLOCK_OUT"): Promise<LocalShift | null> {
+    if (!timekeepingEnabledRef.current) return null; // sucursal sin fichaje: nunca se registran entradas ni salidas
     if (!operator) { reportStageError("OPERATOR_CONTEXT", "No hay un operador con sesión activa", "No hay un operador con sesión activa"); return null; }
     if (!localRuntime) { reportStageError("DEVICE_CONTEXT", "No se pudo leer el contexto local del dispositivo (get_local_runtime)", "No se pudo leer el contexto del dispositivo"); return null; }
     if (shiftInFlight.current) return null;
@@ -2321,7 +2346,7 @@ export default function App() {
           {desktop && operator ? (
             <div className={`pos-operator min-w-32 rounded-xl px-3 py-2 text-right text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-300"}`}>
               <span className="font-black text-stone-100">{operator.displayName}</span>
-              <span className="pos-operator-shift">{shift?.status === "OPEN" ? ` · ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? " · A revisar" : " · Sin turno"}</span>
+              <span className="pos-operator-shift">{!timekeepingEnabled ? "" : shift?.status === "OPEN" ? ` · ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? " · A revisar" : " · Sin turno"}</span>
             </div>
           ) : (
             <div className="text-right text-xs text-stone-400"><p className="font-semibold text-stone-200">{roleName}</p><p>{user.email}</p></div>

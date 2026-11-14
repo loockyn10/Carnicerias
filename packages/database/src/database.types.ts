@@ -650,6 +650,7 @@ export type Database = {
           name: string
           organization_id: string
           phone: string | null
+          timekeeping_enabled: boolean
           updated_at: string
         }
         Insert: {
@@ -662,6 +663,7 @@ export type Database = {
           name: string
           organization_id: string
           phone?: string | null
+          timekeeping_enabled?: boolean
           updated_at?: string
         }
         Update: {
@@ -674,6 +676,7 @@ export type Database = {
           name?: string
           organization_id?: string
           phone?: string | null
+          timekeeping_enabled?: boolean
           updated_at?: string
         }
         Relationships: [

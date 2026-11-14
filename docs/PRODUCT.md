@@ -39,7 +39,7 @@ Debe poder:
 
 El empleado POS **no requiere una cuenta Supabase Auth individual** como modelo objetivo. La identidad operativa debe ser un empleado interno creado desde Admin con nombre, PIN, una o varias sucursales, tarifa histórica y estado.
 
-Después de validar el PIN, el POS recupera el turno vigente. Si no existe uno, exige marcar entrada antes de habilitar la operación normal. Salir termina el turno activo y vuelve al selector de operador; no cierra la sesión Supabase del dispositivo.
+Después de validar el PIN, el POS recupera el turno vigente. Si no existe uno, exige marcar entrada antes de habilitar la operación normal (salvo en una sucursal con el fichaje desactivado, como Central: allí el empleado vende de inmediato; ver D-096). Salir termina el turno activo y vuelve al selector de operador; no cierra la sesión Supabase del dispositivo.
 
 El acceso diario del empleado es únicamente selección de nombre y PIN. Supabase Auth identifica técnicamente al dispositivo y sólo puede aparecer dentro de una acción explícita de configuración administrativa; una caja sin autorización válida muestra un aviso para contactar al administrador, no un login operativo.
 

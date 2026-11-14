@@ -2,6 +2,14 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — POS: fichaje apagado en Central (acción del usuario)
+
+Implementado 2026-11-14 (D-096). **Migración pendiente: `202611140100_branch_timekeeping_toggle.sql`**: `supabase db push --dry-run` → `supabase db push`, y recién después instalar el POS nuevo (`pnpm build:pos:desktop`). Sin la migración el POS nuevo sigue fichando (no sabe que Central lo apagó). Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`) y, con Docker, `pnpm db:reset && pnpm db:test`.
+
+1. En Central: PIN → vende directo, sin «Marcar entrada»; cambiar de empleado y cerrar la ventana no muestran ni registran salida; el diagnóstico de sincronización no muestra P0001 y las ventas pendientes se sincronizan.
+2. En otra sucursal: sigue exigiendo entrada y registrando salida.
+3. Admin → Control horario: revisar los turnos de Central que hayan quedado abiertos o «A revisar» antes del cambio (se conservan; corregirlos con motivo si molestan en los informes).
+
 ## P0 — POS: generar instalador y probar la recuperación de sesión (acción del usuario)
 
 Implementado 2026-11-14 (`docs/offline-first.md` → «Sesión técnica vencida»). Sin migraciones ni cambios en Rust/SQLite. No se pudo generar el instalador en el entorno de desarrollo (sin Rust ni `apps/pos/.env.local`): `pnpm build:pos:desktop` en la PC de build, cerrar el POS antes.

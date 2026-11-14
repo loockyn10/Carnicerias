@@ -332,6 +332,8 @@ Una transferencia mueve stock ya existente de una sucursal origen a una sucursal
 
 ## Control horario
 
+**Por sucursal (D-096):** `branches.timekeeping_enabled` (default `true`). En una sucursal con el fichaje apagado —hoy Central, la sucursal productiva— el POS no exige «Marcar entrada», no consulta turnos, no hace heartbeat y «Salir»/cerrar la ventana sólo sueltan al operador (nunca encolan un CLOCK_OUT); el servidor responde con un no-op `{disabled:true}` a cualquier evento de turno de esa sucursal (sin turno, sin evento, sin auditoría, sin error), de modo que un evento viejo en la cola se descarta solo. El PIN, las ventas y la caja no dependen del fichaje. Sin dato recordado el POS asume que SÍ lleva fichaje. Las reglas de abajo rigen en las sucursales con fichaje.
+
 - el empleado marca entrada/salida;
 - después del PIN, un empleado sin turno debe marcar entrada antes de operar normalmente;
 - no escribe horas manualmente;
