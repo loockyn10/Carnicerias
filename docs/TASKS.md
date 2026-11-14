@@ -2,6 +2,15 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — POS: sincronización sin token de operador (acción del usuario)
+
+Implementado 2026-11-14 (D-097). **Migraciones pendientes, en este orden: `202611140100` (fichaje por sucursal, ver abajo) y `202611140101_pos_operator_identity_without_expiry.sql`**: `supabase db push --dry-run` → `supabase db push`, y recién después instalar el POS nuevo (`pnpm build:pos:desktop`; cerrar el POS antes). Con la migración aplicada, los pendientes con 42501 se sincronizan solos en el próximo reintento (≤ 5 min) o apenas se reinicia el POS nuevo.
+
+1. En la caja con «Online · 2 pendientes»: abrir el diagnóstico antes de actualizar y anotar «Último error»; después de migrar + instalar los pendientes deben pasar a 0 sin tocar nada y las ventas no deben duplicarse (Admin → ventas de la sucursal).
+2. Probar: vender sin Internet, apagar y cambiar de empleado, reconectar horas después: la venta debe aparecer una sola vez, atribuida al empleado que la hizo.
+3. Con Docker: `pnpm db:reset && pnpm db:test` (corre `pos_operator_sync_persistence.test.sql` y `branch_timekeeping_toggle.test.sql` contra Supabase real). Después `pnpm db:types`.
+4. Decidir si la ventana de 24 h para vender sin Internet (autorización local del dispositivo) es la que querés.
+
 ## P0 — POS: fichaje apagado en Central (acción del usuario)
 
 Implementado 2026-11-14 (D-096). **Migración pendiente: `202611140100_branch_timekeeping_toggle.sql`**: `supabase db push --dry-run` → `supabase db push`, y recién después instalar el POS nuevo (`pnpm build:pos:desktop`). Sin la migración el POS nuevo sigue fichando (no sabe que Central lo apagó). Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`) y, con Docker, `pnpm db:reset && pnpm db:test`.

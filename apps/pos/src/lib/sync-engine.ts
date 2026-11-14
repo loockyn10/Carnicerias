@@ -11,6 +11,7 @@ import {
 import { localDatabase, type LocalRuntime } from "./local-database";
 import { shouldRefreshQuickProductCreate, writeQuickProductCreate } from "./quick-product";
 import { parseTimekeepingCapability, shouldRefreshTimekeeping, writeTimekeepingEnabled } from "./timekeeping";
+import { outboxDueCutoff, pushOutbox } from "./outbox-push";
 import { classifyAuthFailure } from "./session-recovery";
 import { supabase } from "./supabase";
 
@@ -22,6 +23,9 @@ interface SyncUser {
 type StatusListener = (status: SyncStatusSnapshot) => void;
 
 export const BACKGROUND_SYNC_INTERVAL_MS = 60_000;
+
+// El primer ciclo tras arrancar ignora la espera de los eventos fallidos (ver lib/outbox-push).
+let outboxBackoffBypassed = false;
 
 export function startBackgroundSyncPolling(runSync: () => Promise<void>): () => void {
   void runSync();
@@ -178,7 +182,8 @@ export async function synchronizeDesktop(
   try {
     const pull = await applyPull(runtime, user);
     pullReceived = pull.catalog.length;
-    const due = await localDatabase.dueOutbox(new Date().toISOString());
+    const due = await localDatabase.dueOutbox(outboxDueCutoff(new Date(), !outboxBackoffBypassed));
+    outboxBackoffBypassed = true;
     if (due.length > 0) {
       listener({
         state: "syncing",
@@ -189,44 +194,46 @@ export async function synchronizeDesktop(
         lastError: null
       });
     }
-    for (const [index, event] of due.entries()) {
-      listener({
+    // Política de la cola en lib/outbox-push: un evento rechazado por el servidor no frena a los demás
+    // (las ventas legítimas nunca esperan detrás de uno trabado); conexión/sesión técnica cortan el ciclo.
+    const pushed = await pushOutbox(due, {
+      markSyncing: (eventId, attemptedAt) => localDatabase.markSyncing(eventId, attemptedAt),
+      markSynced: (eventId, syncedAt) => localDatabase.markSynced(eventId, syncedAt),
+      markFailed: (eventId, diagnostic, retryAt) => localDatabase.markFailed(eventId, diagnostic, retryAt),
+      push: async (event) => {
+        if (event.aggregateType === "SHIFT") {
+          return supabase.rpc("sync_offline_time_event", {
+            p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: event.payload as unknown as Json
+          });
+        }
+        const sale = event.payload as OfflineSalePayload;
+        // El servidor identifica al operador por dispositivo + organización (D-097): el token del payload ya no vence
+        // ni bloquea, así que una venta hecha hace horas o días sincroniza aunque ese token sea viejo o el empleado ya haya salido.
+        return sale.operatorToken
+          ? supabase.rpc("sync_pos_operator_offline_sale", {
+              p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json,
+              p_operator_profile_id: sale.profileId, p_operator_token: sale.operatorToken
+            })
+          : supabase.rpc("sync_offline_sale", { p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json });
+      },
+      describeError: describePushError,
+      classifyError: classifyAuthFailure,
+      nextAttemptAt,
+      now: () => new Date(),
+      onProgress: (current, total) => listener({
         state: "syncing",
         pendingCount: runtime.pendingCount,
-        syncingCurrent: index + 1,
-        syncingTotal: due.length,
+        syncingCurrent: current,
+        syncingTotal: total,
         lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
         lastError: null
-      });
-      const attemptedAt = new Date().toISOString();
-      await localDatabase.markSyncing(event.id, attemptedAt);
-      const syncResult = event.aggregateType === "SHIFT"
-        ? await supabase.rpc("sync_offline_time_event", {
-            p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: event.payload as unknown as Json
-          })
-        : (() => {
-            const sale = event.payload as OfflineSalePayload;
-            return sale.operatorToken
-              ? supabase.rpc("sync_pos_operator_offline_sale", {
-                  p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json,
-                  p_operator_profile_id: sale.profileId, p_operator_token: sale.operatorToken
-                })
-              : supabase.rpc("sync_offline_sale", { p_device_id: runtime.deviceId, p_event_id: event.id, p_payload: sale as unknown as Json });
-          })();
-      const { error } = await syncResult;
-      if (error) {
-        const diagnostic = describePushError(error);
-        await localDatabase.markFailed(
-          event.id,
-          diagnostic,
-          nextAttemptAt(event.attempts + 1)
-        );
-        pushFailed += 1;
-        throw new Error(diagnostic);
-      }
-      await localDatabase.markSynced(event.id, new Date().toISOString());
-      pushSucceeded += 1;
-    }
+      })
+    });
+    pushSucceeded = pushed.succeeded;
+    pushFailed = pushed.failed;
+    if (pushed.abortedBy !== null) throw pushed.abortedBy;
+    // Rechazo propio de un evento: el resto de la cola ya avanzó; se informa igual (estado «error») hasta que se resuelva.
+    if (pushed.firstFailure) throw pushed.firstFailure;
 
     await refreshBranchStock(runtime);
     const vacuumError = await refreshVacuumState(runtime);

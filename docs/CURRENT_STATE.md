@@ -2,6 +2,11 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## POS: la cola offline sincroniza sin token de operador vigente — implementado 2026-11-14 (D-097; migración `202611140101` **sin aplicar**)
+
+- Ventas y eventos de turno offline se aceptan por dispositivo + organización aunque el token del PIN haya vencido o se haya revocado; un evento rechazado ya no traba a los demás y el primer ciclo tras reiniciar reintenta todo lo fallido. Sin cambios en Rust/SQLite; los pendientes existentes no se tocan.
+- Validado: typecheck, lint, tests del POS (`outbox-push.test.ts`) y build web. **No validado:** `supabase/tests/pos_operator_sync_persistence.test.sql` (sin Docker/Supabase local), la migración contra la base real, ni los dos pendientes reales de la caja (no hay acceso a su SQLite).
+
 ## POS: fichaje por sucursal, apagado en Central — implementado 2026-11-14 (D-096; migración `202611140100` **sin aplicar**)
 
 - Central ingresa con PIN y vende sin «Marcar entrada», sin heartbeat y sin CLOCK_OUT al salir; el servidor ignora (no-op) los eventos de turno de esa sucursal, incluidos los que ya estaban en la cola. Otras sucursales conservan el fichaje. Turnos históricos intactos.
@@ -68,7 +73,7 @@ La tabla de esa pantalla compara `row.stock_status === "CRITICAL" | "LOW"`, pero
 - PIN servidor con bcrypt mediante `pgcrypto`.
 - Verifier offline Argon2 con salt; no existe PIN plaintext persistido.
 - Cinco fallos generan bloqueo de cinco minutos.
-- Los grants se ligan a dispositivo, sucursal y empleado, tienen vencimiento y se revocan al desactivar al empleado.
+- Los grants se ligan a dispositivo, sucursal y empleado y se revocan al cambiar el PIN o desactivar al empleado. **Desde D-097 el token no vence** (se emite por 365 días, informativo para el ingreso offline) y **la sincronización no lo usa**: ventas y eventos de turno offline identifican al operador por dispositivo + organización.
 - La desactivación conserva ventas, turnos y auditoría; no existe hard-delete en Admin.
 - El roster, PIN, grants y branch isolation aceptan identidades internas usando el mismo `profileId`; SQLite y el outbox no requieren cambios.
 - Ventas y movimientos quedan atribuidos al operador seleccionado.
