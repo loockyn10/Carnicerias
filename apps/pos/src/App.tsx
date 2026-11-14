@@ -44,7 +44,9 @@ import { ManualPriceModal } from "./ManualPriceModal";
 import { isDesktopRuntime, localDatabase, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type LocalVacuumState, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
 import { mergeRecentSales, readRemoteRecentSales, readRemoteSaleReceipt, RECENT_SALES_LIMIT, type RecentSaleView } from "./lib/remote-recent-sales";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
-import { supabase } from "./lib/supabase";
+import { getClockSkewMs, supabase } from "./lib/supabase";
+import { classifyAuthFailure, describeClockSkew, recoverOnlineSession } from "./lib/session-recovery";
+import { authenticateOperatorPin, LOCAL_FALLBACK_NOTICE } from "./lib/pin-login";
 import { parseQuickCreateResult, parseScanResolveResult, readQuickProductCreate, type QuickCatalogRow } from "./lib/quick-product";
 import { isPriceMissing, NO_PRICE_OFFLINE_MESSAGE, parseSetPriceResult, resolveProductRequest } from "./lib/product-price";
 import { refreshVacuumStateNow, registerDesktopDevice, startBackgroundSyncPolling, synchronizeDesktop } from "./lib/sync-engine";
@@ -128,6 +130,8 @@ const SHIFT_DURATION_REFRESH_MS = 60_000;
 const MP_RECONCILE_INTERVAL_MS = 60_000;
 const MP_ABANDONED_AFTER_MS = 12 * 60 * 60 * 1000;
 const SHIFT_HEARTBEAT_INTERVAL_MS = 30_000;
+// Cada cuánto una caja sin sesión en línea intenta recuperar la sesión técnica guardada si hay Internet.
+const SESSION_RECOVERY_INTERVAL_MS = 60_000;
 
 // Marks a failure already reported via reportStageError (message + diagnostics already set),
 // so an outer catch around a staged sequence doesn't overwrite it with a less specific message.
@@ -244,7 +248,7 @@ function DeviceSetupRequired({ onConfigure }: { onConfigure: () => void }) {
   );
 }
 
-function OperatorLogin({ operators, online, deviceId, onAuthenticated, onReconnect }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator) => Promise<void>; onReconnect?: (() => void) | undefined }) {
+function OperatorLogin({ operators, online, deviceId, onAuthenticated, onReconnect }: { operators: OperatorRosterRow[]; online: boolean; deviceId: string; onAuthenticated: (operator: LocalOperator, notice?: string) => Promise<void>; onReconnect?: (() => void) | undefined }) {
   const [selected, setSelected] = useState(operators[0]?.profileId ?? "");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -255,19 +259,27 @@ function OperatorLogin({ operators, online, deviceId, onAuthenticated, onReconne
     event.preventDefault(); setBusy(true); setError(null); setDiagnostics(null);
     try {
       if (!/^\d{4,6}$/.test(pin)) throw new Error("Ingresá un PIN de 4 a 6 dígitos");
-      if (online) {
-        const { data, error: verifyError } = await supabase.rpc("verify_pos_operator_pin", { p_device_id: deviceId, p_profile_id: selected, p_pin: pin });
-        if (verifyError) throw verifyError;
-        const verified = data as unknown as { ok: boolean; message?: string; profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string };
-        if (!verified.ok) throw new Error(verified.message ?? "PIN incorrecto");
-        await onAuthenticated(await localDatabase.cacheVerifiedOperator(verified, pin));
-      } else await onAuthenticated(await localDatabase.verifyLocalOperator(selected, pin));
+      // Servidor primero (el token vencido lo renueva el fetch de ./lib/supabase); si la infraestructura no
+      // responde (JWT irrenovable / sin conexión) se usa la autorización local ya existente. Ver ./lib/pin-login.
+      const result = await authenticateOperatorPin({
+        online,
+        verifyOnline: async () => {
+          const { data, error: verifyError } = await supabase.rpc("verify_pos_operator_pin", { p_device_id: deviceId, p_profile_id: selected, p_pin: pin });
+          if (verifyError) throw verifyError;
+          return data as unknown as { ok: boolean; message?: string; profileId: string; displayName: string; roleName: string; operatorToken: string; validUntil: string };
+        },
+        cacheVerified: (verified) => localDatabase.cacheVerifiedOperator(verified, pin),
+        verifyLocal: () => localDatabase.verifyLocalOperator(selected, pin)
+      });
+      if (result.fallbackReason) console.warn("[pos] pin_login_local_fallback", { reason: result.fallbackReason, profileId: selected, clockSkewMs: getClockSkewMs() });
+      await onAuthenticated(result.operator, result.fallbackReason ? LOCAL_FALLBACK_NOTICE : undefined);
       setPin("");
     } catch (loginError) {
       const caught = describeCaughtValue(loginError);
       console.error("[pos] pin_validation_failed", { online, profileId: selected, diagnostics: caught });
       setError(resolveErrorMessage(loginError, "No se pudo validar el PIN"));
-      setDiagnostics(formatDiagnostics(caught));
+      const skew = describeClockSkew(getClockSkewMs());
+      setDiagnostics(`${formatDiagnostics(caught)}${skew ? ` · ${skew}` : ""}`);
     }
     finally { setBusy(false); }
   }
@@ -490,14 +502,18 @@ export default function App() {
     let current = await localDatabase.currentShift(active.profileId);
     if (navigator.onLine && !user?.offline && active.operatorToken) {
       const { data, error: shiftError } = await supabase.rpc("get_current_employee_shift", { p_device_id: deviceId, p_employee_id: active.profileId, p_operator_token: active.operatorToken });
-      if (shiftError) throw shiftError;
-      if (data) {
-        const remote = data as unknown as Omit<LocalShift, "employeeId">;
-        current = { ...remote, employeeId: active.profileId };
-        await localDatabase.applyServerShift(current);
-      } else {
-        await localDatabase.clearReconciledShift(active.profileId);
-        current = await localDatabase.currentShift(active.profileId);
+      // Sólo lectura: si el servidor no está alcanzable o la sesión técnica venció, el turno local de SQLite manda
+      // (el empleado no queda bloqueado); cualquier otro error del servidor sigue siendo un error.
+      if (shiftError && classifyAuthFailure(shiftError) === "other") throw shiftError;
+      if (!shiftError) {
+        if (data) {
+          const remote = data as unknown as Omit<LocalShift, "employeeId">;
+          current = { ...remote, employeeId: active.profileId };
+          await localDatabase.applyServerShift(current);
+        } else {
+          await localDatabase.clearReconciledShift(active.profileId);
+          current = await localDatabase.currentShift(active.profileId);
+        }
       }
     }
     setShift(current);
@@ -847,20 +863,25 @@ export default function App() {
     const handleOffline = () => {
       setSyncStatus((current) => ({ ...current, state: "offline" }));
     };
+    // Caja que arrancó (o quedó) sin sesión en línea: al volver Internet se intenta recuperar la sesión técnica
+    // guardada (getSession renueva el token vencido). Un único intento en el evento "online" no alcanza: la red
+    // suele reportarse antes de poder llegar a Supabase, y una caja que no reintenta queda en "no sincroniza"
+    // hasta que alguien reconecta con la contraseña técnica. Por eso también se reintenta cada minuto (sólo
+    // lee almacenamiento local si no hay sesión guardada, sin tocar la red).
+    let recovering = false;
+    const recoverSession = () => {
+      if (!userOffline || recovering || !navigator.onLine) return;
+      recovering = true;
+      void recoverOnlineSession(supabase.auth)
+        .then((recovery) => {
+          if (recovery.status === "online") setUser({ id: recovery.user.id, email: recovery.user.email, offline: false });
+        })
+        .catch(() => undefined)
+        .finally(() => { recovering = false; });
+    };
     const handleOnline = () => {
-      if (userOffline) {
-        void supabase.auth.getUser().then(({ data, error: authError }) => {
-          if (!authError) {
-            setUser({
-              id: data.user.id,
-              email: data.user.email ?? data.user.id,
-              offline: false
-            });
-          }
-        });
-      } else {
-        void syncRunnerRef.current();
-      }
+      if (userOffline) recoverSession();
+      else void syncRunnerRef.current();
     };
 
     window.addEventListener("offline", handleOffline);
@@ -868,9 +889,12 @@ export default function App() {
     const stopBackgroundSync = userOffline
       ? () => undefined
       : startBackgroundSyncPolling(() => syncRunnerRef.current());
+    const recoveryTimer = userOffline ? window.setInterval(recoverSession, SESSION_RECOVERY_INTERVAL_MS) : null;
+    if (userOffline) recoverSession();
 
     return () => {
       stopBackgroundSync();
+      if (recoveryTimer !== null) window.clearInterval(recoveryTimer);
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
     };
@@ -2030,12 +2054,13 @@ export default function App() {
     }
   }
 
-  async function selectOperator(active: LocalOperator) {
+  async function selectOperator(active: LocalOperator, loginNotice?: string) {
     setError(null); setErrorDiagnostics(null);
     try {
       const currentShift = await loadShift(active);
       setOperator(active);
       setClockInRequired(!currentShift);
+      if (loginNotice) setNotice(loginNotice);
     } catch (shiftError) {
       await localDatabase.clearActiveOperator().catch(() => undefined);
       const caught = describeCaughtValue(shiftError);
@@ -2085,13 +2110,25 @@ export default function App() {
     shiftInFlight.current = true; setError(null); setErrorDiagnostics(null);
     try {
       let updated: LocalShift;
+      let remote: Omit<LocalShift, "employeeId"> | null = null;
       if (navigator.onLine && !user?.offline && operator.operatorToken) {
         const operatorToken = operator.operatorToken;
-        const remote = await runStage("ONLINE_RPC", "No se pudo registrar el fichaje online", async () => {
+        try {
           const { data, error: eventError } = await supabase.rpc("record_employee_time_event", { p_device_id: localRuntime.deviceId, p_event_id: crypto.randomUUID(), p_shift_id: shift?.shiftId ?? crypto.randomUUID(), p_employee_id: operator.profileId, p_operator_token: operatorToken, p_action: action });
           if (eventError) throw eventError;
-          return data as unknown as Omit<LocalShift, "employeeId">;
-        });
+          remote = data as unknown as Omit<LocalShift, "employeeId">;
+        } catch (rpcError) {
+          // JWT vencido/sesión inválida: PostgREST rechazó la llamada ANTES de ejecutarla (y el fetch ya intentó renovar),
+          // así que registrar el fichaje en la cola offline no puede duplicarlo. Cualquier otro error se informa igual que antes.
+          const kind = classifyAuthFailure(rpcError);
+          if (kind !== "jwt-expired" && kind !== "session-invalid") {
+            reportStageError("ONLINE_RPC", rpcError, "No se pudo registrar el fichaje online");
+            throw new HandledStageError();
+          }
+          console.warn("[pos] time_event_offline_fallback", { reason: kind, clockSkewMs: getClockSkewMs() });
+        }
+      }
+      if (remote) {
         updated = { ...remote, employeeId: operator.profileId };
         await runStage("LOCAL_SQLITE", "El fichaje se registró en el servidor pero no se pudo guardar localmente", () => localDatabase.applyServerShift(updated));
       } else {
@@ -2100,7 +2137,7 @@ export default function App() {
       setShift(updated.status === "CLOSED" ? null : updated);
       if (action === "CLOCK_IN" && updated.status === "OPEN") setClockInRequired(false);
       setNotice(action === "CLOCK_IN" ? "Entrada registrada" : updated.status === "REQUIRES_REVIEW" ? "El turno requiere revisión administrativa" : "Salida registrada");
-      if (!navigator.onLine) setLocalRuntime(await localDatabase.runtime());
+      if (!navigator.onLine || !remote) setLocalRuntime(await localDatabase.runtime());
       return updated;
     } catch (timeError) {
       if (!(timeError instanceof HandledStageError)) reportStageError("LOCAL_SQLITE", timeError, "No se pudo registrar el fichaje");

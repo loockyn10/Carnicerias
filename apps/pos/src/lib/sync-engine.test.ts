@@ -240,6 +240,71 @@ describe("desktop synchronization status", () => {
     expect(mocks.rpc).toHaveBeenCalledTimes(5);
   });
 
+  it("an unrenewable expired JWT on the pull is 'offline', not a red sync error, and touches no pending sale", async () => {
+    mocks.runtime.mockResolvedValue({ ...runtime, pendingCount: 2 });
+    mocks.rpc.mockImplementation((name: string) => name === "pull_pos_state"
+      ? Promise.resolve({ data: null, error: { code: "PGRST303", message: "JWT expired" } })
+      : Promise.resolve({ data: {}, error: null }));
+    const statuses: SyncStatusSnapshot[] = [];
+
+    const result = await synchronizeDesktop({ id: "profile", email: "pos@example.test" }, (status) => statuses.push(status));
+
+    expect(statuses.map((status) => status.state)).toEqual(["offline"]);
+    expect(statuses[0]).toMatchObject({ pendingCount: 2, lastError: expect.stringContaining("JWT expired") as unknown });
+    expect(result.pendingCount).toBe(2);
+    expect(mocks.dueOutbox).not.toHaveBeenCalled();
+    expect(mocks.markSyncing).not.toHaveBeenCalled();
+    expect(mocks.markSynced).not.toHaveBeenCalled();
+    expect(mocks.markFailed).not.toHaveBeenCalled();
+    expect(mocks.clearAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("a JWT that expires in the middle of the push keeps the sale in the outbox with its backoff and retries after renewal", async () => {
+    const sale = {
+      id: "event", aggregateType: "SALE", aggregateId: "sale", operation: "UPSERT", payload: {}, status: "PENDING",
+      attempts: 0, createdAt: "2026-09-14T10:00:00Z", lastAttemptAt: null, nextAttemptAt: "2026-09-14T10:00:00Z", lastError: null
+    };
+    mocks.runtime.mockResolvedValue({ ...runtime, pendingCount: 1 });
+    mocks.dueOutbox.mockResolvedValue([sale]);
+    let expired = true;
+    mocks.rpc.mockImplementation((name: string) => {
+      if (name === "pull_pos_state") return Promise.resolve({ data: pull, error: null });
+      if (name === "get_pos_commercial_config") return Promise.resolve({ data: {}, error: null });
+      if (name === "get_pos_operator_roster") return Promise.resolve({ data: { operators: [], maxShiftHours: 12 }, error: null });
+      if (name === "sync_offline_sale") return Promise.resolve(expired ? { data: null, error: { code: "PGRST303", message: "JWT expired" } } : { data: {}, error: null });
+      return Promise.resolve({ data: null, error: { message: "Failed to fetch" } });
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const firstCycle: SyncStatusSnapshot[] = [];
+
+    await synchronizeDesktop({ id: "profile", email: "pos@example.test" }, (status) => firstCycle.push(status));
+
+    expect(firstCycle.at(-1)?.state).toBe("offline");
+    expect(mocks.markSynced).not.toHaveBeenCalled();
+    expect(mocks.markFailed).toHaveBeenCalledWith("event", expect.stringContaining("JWT expired"), expect.any(String));
+
+    // Sesión renovada: el próximo ciclo reenvía la MISMA venta (mismo event id => idempotente en el servidor).
+    expired = false;
+    const secondCycle: SyncStatusSnapshot[] = [];
+    await synchronizeDesktop({ id: "profile", email: "pos@example.test" }, (status) => secondCycle.push(status));
+
+    expect(secondCycle.at(-1)?.state).toBe("online");
+    expect(mocks.markSynced).toHaveBeenCalledOnce();
+    expect(mocks.rpc.mock.calls.filter(([name]) => name === "sync_offline_sale").map(([, args]) => (args as { p_event_id: string }).p_event_id)).toEqual(["event", "event"]);
+  });
+
+  it("business errors from the server are still red sync errors (only auth/connectivity becomes offline)", async () => {
+    mocks.runtime.mockResolvedValue(runtime);
+    mocks.rpc.mockImplementation((name: string) => name === "pull_pos_state"
+      ? Promise.resolve({ data: null, error: { code: "P0001", message: "device mismatch" } })
+      : Promise.resolve({ data: {}, error: null }));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const statuses: SyncStatusSnapshot[] = [];
+
+    await expect(synchronizeDesktop({ id: "profile", email: "pos@example.test" }, (status) => statuses.push(status))).rejects.toBeDefined();
+    expect(statuses.at(-1)?.state).toBe("error");
+  });
+
   it("runs once at startup and only once more after one idle minute", async () => {
     vi.useFakeTimers();
     const runSync = vi.fn(() => Promise.resolve());

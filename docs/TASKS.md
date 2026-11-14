@@ -2,6 +2,14 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — POS: generar instalador y probar la recuperación de sesión (acción del usuario)
+
+Implementado 2026-11-14 (`docs/offline-first.md` → «Sesión técnica vencida»). Sin migraciones ni cambios en Rust/SQLite. No se pudo generar el instalador en el entorno de desarrollo (sin Rust ni `apps/pos/.env.local`): `pnpm build:pos:desktop` en la PC de build, cerrar el POS antes.
+
+1. Instalar sobre la versión actual (la SQLite y las ventas pendientes se conservan) y abrir el diagnóstico: «Versión» = build de hoy.
+2. PIN con Internet: debe entrar sin `PGRST303`. Si falla con el diagnóstico, leer la línea «Diagnóstico PIN v2»: si dice «el reloj de esta PC está N min atrasado/adelantado», corregir fecha y hora de Windows (causa raíz probable del vencimiento).
+3. Con router sin salida a Internet: el PIN debe entrar con la autorización local en ≤ 8 s («Sin servidor: ingreso con autorización local»); vender, reconectar y comprobar que las ventas pendientes se sincronizan solas.
+
 ## P0 — Envasados: PLU automático, vencimiento general y POS con reconocimiento nuevo (acción del usuario)
 
 Implementado 2026-11-12 (D-094). **Migración pendiente: `202611120099_vacuum_auto_plu_default_shelf_life.sql`** (antes, verificar con `supabase migration list --linked` el estado de 095–098; el POS necesita `get_pos_vacuum_code_status`, que sólo existe con la 099). Orden: `supabase db push --dry-run` → `db push` → desplegar el Admin → instalar el POS nuevo. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).

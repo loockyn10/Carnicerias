@@ -10,6 +10,7 @@ import {
 
 import { localDatabase, type LocalRuntime } from "./local-database";
 import { shouldRefreshQuickProductCreate, writeQuickProductCreate } from "./quick-product";
+import { classifyAuthFailure } from "./session-recovery";
 import { supabase } from "./supabase";
 
 interface SyncUser {
@@ -238,6 +239,21 @@ export async function synchronizeDesktop(
     });
     return runtime;
   } catch (error) {
+    // Sin sesión técnica utilizable (JWT irrenovable / sesión inválida) o sin alcanzar Supabase: no es un fallo de
+    // sincronización sino "sin conexión". SQLite y el outbox quedan intactos (un evento empujado que falló ya quedó
+    // FAILED con su backoff) y el próximo ciclo reintenta; no se muestra como error rojo ni se frena al empleado.
+    if (classifyAuthFailure(error) !== "other") {
+      runtime = await localDatabase.runtime();
+      listener({
+        state: "offline",
+        pendingCount: runtime.pendingCount,
+        syncingCurrent: 0,
+        syncingTotal: runtime.pendingCount,
+        lastSuccessfulSyncAt: runtime.lastSuccessfulSyncAt,
+        lastError: error instanceof Error ? error.message : describePushError(error as { message: string; code?: string })
+      });
+      return runtime;
+    }
     // A stuck outbox event (or a failed pull) must not freeze stock visibility: whatever was
     // pushed before the failure is already in the server sum, and what wasn't stays subtracted locally.
     await refreshBranchStock(runtime);

@@ -8,6 +8,8 @@ export type { Database } from "./database.merged";
 export interface PublicSupabaseConfig {
   url: string;
   anonKey: string;
+  /** Optional `fetch` wrapper for every request the client makes (e.g. to recover from an expired JWT). */
+  fetch?: typeof fetch;
 }
 
 /** Creates an RLS-bound client. A service-role key must never be passed here. */
@@ -19,6 +21,7 @@ export function createSupabaseClient(
   }
 
   return createClient<Database>(config.url, config.anonKey, {
+    ...(config.fetch ? { global: { fetch: config.fetch } } : {}),
     auth: {
       autoRefreshToken: true,
       detectSessionInUrl: true,
