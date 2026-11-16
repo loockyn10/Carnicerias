@@ -203,6 +203,10 @@ export const localDatabase = {
   currentShift: (employeeId: string) => desktopOnly<LocalShift | null>("get_local_current_shift", { employeeId }),
   clearReconciledShift: (employeeId: string) => desktopVoid("clear_reconciled_local_shift", { employeeId }),
   applyServerShift: (shift: LocalShift) => desktopVoid("apply_server_shift", { shift }),
+  /** D-098: recuerda en SQLite que el servidor dejó esta sucursal sin fichaje (`branches.timekeeping_enabled = false`). */
+  setTimekeepingDisabledBranch: (branchId: string, disabled: boolean) => desktopVoid("set_timekeeping_disabled_branch", { branchId, disabled }),
+  /** D-098: true en el POS de Central (no usa fichajes). La fuente es SQLite: la misma que gatea el sync y el cierre de sesión. */
+  timekeepingDisabled: () => desktopOnly<boolean>("is_timekeeping_disabled"),
   recordOfflineTimeEvent: (action: "CLOCK_IN" | "CLOCK_OUT") => desktopOnly<LocalShift>("record_offline_time_event", { action }),
   closeActiveOperatorShift: () => desktopOnly<CloseActiveOperatorResult>("close_active_operator_shift"),
   recordShiftHeartbeatLocal: () => desktopOnly<string | null>("record_shift_heartbeat_local"),

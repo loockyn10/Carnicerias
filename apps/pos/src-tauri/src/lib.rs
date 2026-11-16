@@ -796,6 +796,8 @@ fn initialize_connection(connection: &mut Connection) -> Result<(), String> {
 // same shift with (p_inferred=true forces REQUIRES_REVIEW + auto_closed_by_heartbeat,
 // see app_private.apply_employee_time_event) once this event reaches it.
 fn reconcile_stale_open_shifts(connection: &mut Connection) -> Result<(), String> {
+    // D-098: en Central no hay fichajes; no se cierra, ni se infiere, ni se encola nada (las filas viejas quedan como están).
+    if timekeeping_disabled(connection) { return Ok(()); }
     let timestamp = now();
     let stale: Vec<(String, String, String, String, Option<String>)> = {
         let mut statement = connection
@@ -850,6 +852,59 @@ fn metadata(connection: &Connection, key: &str) -> Result<Option<String>, String
         .map_err(|error| error.to_string())
 }
 
+/// D-098: el POS de Central NO usa fichajes de empleados. Es la misma capacidad que habilita el precio manual (D-061:
+/// la sucursal productiva que decide el servidor, recordada en `flexible_pricing_branch`, también sin Internet).
+/// Con ella el ingreso por PIN, el cambio de operador, la salida, el reinicio y la sincronización NO leen ni escriben
+/// `local_employee_shifts` ni generan eventos `SHIFT`; las filas viejas quedan intactas (sólo se ignoran).
+fn timekeeping_disabled(connection: &Connection) -> bool {
+    // Dos fuentes, cualquiera alcanza, ambas recordadas en SQLite (valen sin Internet y tras reiniciar):
+    //  - `flexible_pricing_branch`: el POS de CENTRAL; Central nunca ficha, aunque la caja todavía no haya aprendido el dato del servidor;
+    //  - `timekeeping_disabled_branch`: lo que informa el servidor (`branches.timekeeping_enabled = false`).
+    let device_branch = connection
+        .query_row("select branch_id from local_device where singleton = 1", [], |row| row.get::<_, Option<String>>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    let Some(device_branch) = device_branch else { return false; };
+    ["flexible_pricing_branch", "timekeeping_disabled_branch"]
+        .iter()
+        .any(|key| metadata(connection, key).ok().flatten().is_some_and(|value| value == device_branch))
+}
+
+/// Recuerda (por sucursal del dispositivo) que el servidor la dejó sin fichaje. Sólo la sucursal de este dispositivo puede marcarse.
+fn set_timekeeping_disabled_branch_inner(connection: &mut Connection, branch_id: &str, disabled: bool) -> Result<(), String> {
+    let device_branch: Option<String> = connection
+        .query_row("select branch_id from local_device where singleton = 1", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if device_branch.as_deref() != Some(branch_id) {
+        return Err("The timekeeping setting is for a different branch than this device".to_string());
+    }
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    set_metadata(&transaction, "timekeeping_disabled_branch", if disabled { branch_id } else { "" }, &now())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_timekeeping_disabled_branch(state: State<'_, DatabaseState>, branch_id: String, disabled: bool) -> Result<(), String> {
+    let mut connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    set_timekeeping_disabled_branch_inner(&mut connection, &branch_id, disabled)
+}
+
+#[tauri::command]
+fn is_timekeeping_disabled(state: State<'_, DatabaseState>) -> Result<bool, String> {
+    let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    Ok(timekeeping_disabled(&connection))
+}
+
+/// Eventos pendientes de enviar. En Central los `SHIFT` heredados no cuentan ni se envían (no se borran).
+fn pending_outbox_count(connection: &Connection) -> Result<i64, String> {
+    let hide_shifts = i64::from(timekeeping_disabled(connection));
+    connection
+        .query_row("select count(*) from sync_outbox where status <> 'SYNCED' and (?1 = 0 or aggregate_type <> 'SHIFT')", [hide_shifts], |row| row.get(0))
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn get_local_runtime(state: State<'_, DatabaseState>) -> Result<LocalRuntime, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
@@ -886,13 +941,7 @@ fn get_local_runtime(state: State<'_, DatabaseState>) -> Result<LocalRuntime, St
         .unwrap_or(0);
     runtime.last_successful_sync_at = metadata(&connection, "last_successful_sync_at")?;
     runtime.last_error = metadata(&connection, "last_sync_error")?;
-    runtime.pending_count = connection
-        .query_row(
-            "select count(*) from sync_outbox where status <> 'SYNCED'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
+    runtime.pending_count = pending_outbox_count(&connection)?;
     runtime.local_sales_count = connection
         .query_row("select count(*) from local_sales", [], |row| row.get(0))
         .map_err(|error| error.to_string())?;
@@ -1568,27 +1617,61 @@ fn clear_active_operator(state: State<'_, DatabaseState>, session: State<'_, Ope
 #[tauri::command]
 fn get_local_current_shift(state: State<'_, DatabaseState>, employee_id: String) -> Result<Option<LocalShift>, String> {
     let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    local_current_shift_in_connection(&connection, &employee_id)
+}
+
+fn local_current_shift_in_connection(connection: &Connection, employee_id: &str) -> Result<Option<LocalShift>, String> {
+    // D-098: Central no usa fichajes; no hay turno que buscar ni que marcar «a revisar».
+    if timekeeping_disabled(connection) { return Ok(None); }
     let max_hours=metadata(&connection,"max_shift_hours")?.and_then(|value|value.parse::<i64>().ok()).unwrap_or(12);
-    connection.execute("update local_employee_shifts set status='REQUIRES_REVIEW',updated_at=?2 where employee_id=?1 and clock_out_at is null and status='OPEN' and julianday(clock_in_at)+(cast(?3 as real)/24.0)<julianday(?2)",params![&employee_id,now(),max_hours]).map_err(|e|e.to_string())?;
+    connection.execute("update local_employee_shifts set status='REQUIRES_REVIEW',updated_at=?2 where employee_id=?1 and clock_out_at is null and status='OPEN' and julianday(clock_in_at)+(cast(?3 as real)/24.0)<julianday(?2)",params![employee_id,now(),max_hours]).map_err(|e|e.to_string())?;
     connection.query_row("select id,employee_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status from local_employee_shifts where employee_id=?1 and clock_out_at is null order by clock_in_at desc limit 1",[employee_id],|r|Ok(LocalShift{shift_id:r.get(0)?,employee_id:r.get(1)?,clock_in_at:r.get(2)?,clock_out_at:r.get(3)?,clock_in_source:r.get(4)?,clock_out_source:r.get(5)?,status:r.get(6)?})).optional().map_err(|e|e.to_string())
 }
 
 #[tauri::command]
 fn clear_reconciled_local_shift(state: State<'_, DatabaseState>, employee_id: String) -> Result<(), String> {
     let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    if timekeeping_disabled(&connection) { return Ok(()); }
     connection.execute("delete from local_employee_shifts where employee_id=?1 and clock_out_at is null and not exists(select 1 from sync_outbox o where o.aggregate_type='SHIFT' and o.aggregate_id=local_employee_shifts.id and o.status<>'SYNCED')",[employee_id]).map_err(|e|e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 fn apply_server_shift(state: State<'_, DatabaseState>, shift: LocalShift) -> Result<(), String> {
-    let connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    let mut connection=state.0.lock().map_err(|_|"SQLite lock poisoned".to_string())?;
+    apply_server_shift_in_connection(&mut connection, shift)
+}
+
+// Refleja en SQLite el turno que informa el servidor. CAUSA del `UNIQUE constraint failed: local_employee_shifts.employee_id`:
+// el `on conflict(id)` de abajo sólo cubre un turno con el MISMO id; si el empleado ya tiene otro turno abierto local (otro id:
+// un CLOCK_IN offline, o uno viejo que el servidor ya cerró/reemplazó), el índice único parcial `local_employee_one_open_uq`
+// (un solo turno abierto por empleado) rechazaba el insert. Ahora el turno local sobrante se reemplaza si no tiene eventos
+// pendientes de sincronizar; si los tiene, el local manda y no se inserta el del servidor (nunca se pierde un evento).
+fn apply_server_shift_in_connection(connection: &mut Connection, shift: LocalShift) -> Result<(), String> {
+    // D-098: Central no usa fichajes; nada que reflejar.
+    if timekeeping_disabled(connection) { return Ok(()); }
+    let transaction=connection.transaction().map_err(|e|e.to_string())?;
+    if shift.clock_out_at.is_none() {
+        let conflicting:Vec<String>={
+            let mut statement=transaction.prepare("select id from local_employee_shifts where employee_id=?1 and clock_out_at is null and id<>?2").map_err(|e|e.to_string())?;
+            let rows=statement.query_map(params![shift.employee_id,shift.shift_id],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?;
+            rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?
+        };
+        for id in conflicting {
+            let unsynced:bool=transaction.query_row("select exists(select 1 from sync_outbox where aggregate_type='SHIFT' and aggregate_id=?1 and status<>'SYNCED')",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if unsynced { return Ok(()); }
+            transaction.execute("delete from local_employee_shifts where id=?1",[&id]).map_err(|e|e.to_string())?;
+        }
+    }
+    let connection=&transaction;
     let runtime:(String,String)=connection.query_row("select branch_id,device_id from local_device where singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
-    connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status,updated_at) values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) on conflict(id) do update set clock_out_at=excluded.clock_out_at,clock_out_source=excluded.clock_out_source,status=excluded.status,updated_at=excluded.updated_at",params![shift.shift_id,shift.employee_id,runtime.0,runtime.1,shift.clock_in_at,shift.clock_out_at,shift.clock_in_source,shift.clock_out_source,shift.status,now()]).map_err(|e|e.to_string())?; Ok(())
+    connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status,updated_at) values(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) on conflict(id) do update set clock_out_at=excluded.clock_out_at,clock_out_source=excluded.clock_out_source,status=excluded.status,updated_at=excluded.updated_at",params![shift.shift_id,shift.employee_id,runtime.0,runtime.1,shift.clock_in_at,shift.clock_out_at,shift.clock_in_source,shift.clock_out_source,shift.status,now()]).map_err(|e|e.to_string())?;
+    transaction.commit().map_err(|e|e.to_string())
 }
 
 fn record_offline_time_event_in_connection(connection: &mut Connection, action: &str) -> Result<LocalShift, String> {
     if action!="CLOCK_IN" && action!="CLOCK_OUT" { return Err("Invalid time event action".into()); }
+    if timekeeping_disabled(connection) { return Err("Central no registra fichajes de empleados".into()); }
     let tx=connection.transaction().map_err(|e|e.to_string())?; let timestamp=now();
     let (employee,token,branch,device):(String,String,String,String)=tx.query_row("select o.profile_id,o.operator_token,d.branch_id,d.device_id from local_active_operator a join local_pos_operators o on o.profile_id=a.profile_id join local_device d on d.singleton=1 where o.active=1 and julianday(o.grant_valid_until)>julianday(?1) and d.device_status='ACTIVE' and julianday(d.authorization_expires_at)>julianday(?1)",[&timestamp],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|"La autorización offline del empleado o dispositivo venció".to_string())?;
     let existing:Option<LocalShift>=tx.query_row("select id,employee_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status from local_employee_shifts where employee_id=?1 and clock_out_at is null",[&employee],|r|Ok(LocalShift{shift_id:r.get(0)?,employee_id:r.get(1)?,clock_in_at:r.get(2)?,clock_out_at:r.get(3)?,clock_in_source:r.get(4)?,clock_out_source:r.get(5)?,status:r.get(6)?})).optional().map_err(|e|e.to_string())?;
@@ -1605,6 +1688,11 @@ fn record_offline_time_event_in_connection(connection: &mut Connection, action: 
 fn close_active_operator_shift_in_connection(connection: &mut Connection) -> Result<CloseActiveOperatorResult, String> {
     let active_employee = connection.query_row("select profile_id from local_active_operator where singleton=1",[],|row|row.get::<_,String>(0)).optional().map_err(|error|error.to_string())?;
     let Some(employee_id) = active_employee else { return Ok(CloseActiveOperatorResult { clock_out_created: false, shift: None }); };
+    // D-098: en Central cerrar la sesión del operador sólo la termina (sin salida, sin evento, sin leer turnos).
+    if timekeeping_disabled(connection) {
+        connection.execute("delete from local_active_operator",[]).map_err(|error|error.to_string())?;
+        return Ok(CloseActiveOperatorResult { clock_out_created: false, shift: None });
+    }
     let open_shift = connection.query_row("select id,employee_id,clock_in_at,clock_out_at,clock_in_source,clock_out_source,status from local_employee_shifts where employee_id=?1 and clock_out_at is null order by clock_in_at desc limit 1",[employee_id],|row|Ok(LocalShift{shift_id:row.get(0)?,employee_id:row.get(1)?,clock_in_at:row.get(2)?,clock_out_at:row.get(3)?,clock_in_source:row.get(4)?,clock_out_source:row.get(5)?,status:row.get(6)?})).optional().map_err(|error|error.to_string())?;
     let shift = if matches!(open_shift.as_ref().map(|current|current.status.as_str()), Some("OPEN")) {
         Some(record_offline_time_event_in_connection(connection, "CLOCK_OUT")?)
@@ -1646,6 +1734,7 @@ fn close_active_operator_shift(state: State<'_, DatabaseState>, session: State<'
 // None) if there's no active operator with an OPEN shift — never an error, since a heartbeat
 // tick racing a clock-out/logout is expected, not exceptional.
 fn record_shift_heartbeat_local_in_connection(connection: &Connection) -> Result<Option<String>, String> {
+    if timekeeping_disabled(connection) { return Ok(None); }
     let timestamp = now();
     let updated = connection.execute(
         "update local_employee_shifts set last_heartbeat_at=?1,updated_at=?1
@@ -2450,16 +2539,24 @@ fn set_local_payment_verification(state: State<'_, DatabaseState>, sale_id: Stri
 #[tauri::command]
 fn get_due_outbox(state: State<'_, DatabaseState>, current_time: String) -> Result<Vec<OutboxRecord>, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    due_outbox_in_connection(&connection, &current_time)
+}
+
+// D-098: en Central los eventos `SHIFT` que quedaron de antes NO se envían: un fichaje viejo rechazado por el servidor
+// («No hay un turno activo para marcar salida», P0001) cortaba el ciclo de sincronización y dejaba detrás a las ventas.
+// Las filas se conservan sin tocar; sólo se excluyen de lo que se sincroniza y de lo que se cuenta como pendiente.
+fn due_outbox_in_connection(connection: &Connection, current_time: &str) -> Result<Vec<OutboxRecord>, String> {
+    let hide_shifts = i64::from(timekeeping_disabled(connection));
     let mut statement = connection
         .prepare(
             "select id, aggregate_type, aggregate_id, operation, payload, status, attempts,
                     created_at, last_attempt_at, next_attempt_at, last_error
-             from sync_outbox where status <> 'SYNCED' and next_attempt_at <= ?1
+             from sync_outbox where status <> 'SYNCED' and next_attempt_at <= ?1 and (?2 = 0 or aggregate_type <> 'SHIFT')
              order by created_at, id limit 100",
         )
         .map_err(|error| error.to_string())?;
     let mapped = statement
-        .query_map([current_time], |row| {
+        .query_map(params![current_time, hide_shifts], |row| {
             let payload: String = row.get(4)?;
             Ok((
                 row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
@@ -2493,9 +2590,15 @@ fn get_due_outbox(state: State<'_, DatabaseState>, current_time: String) -> Resu
 #[tauri::command]
 fn get_outbox_summary(state: State<'_, DatabaseState>) -> Result<OutboxSummary, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    outbox_summary_in_connection(&connection)
+}
+
+fn outbox_summary_in_connection(connection: &Connection) -> Result<OutboxSummary, String> {
+    let hide_shifts = i64::from(timekeeping_disabled(connection));
     connection.query_row(
-        "select count(*) filter(where status='PENDING'), count(*) filter(where status='SYNCING'), count(*) filter(where status='FAILED'), count(*) filter(where status='SYNCED'), (select last_error from sync_outbox where last_error is not null order by last_attempt_at desc limit 1) from sync_outbox",
-        [], |row| Ok(OutboxSummary { pending: row.get(0)?, syncing: row.get(1)?, failed: row.get(2)?, synced: row.get(3)?, last_error: row.get(4)? })
+        "with visible as (select * from sync_outbox where ?1 = 0 or aggregate_type <> 'SHIFT')
+         select count(*) filter(where status='PENDING'), count(*) filter(where status='SYNCING'), count(*) filter(where status='FAILED'), count(*) filter(where status='SYNCED'), (select last_error from visible where last_error is not null order by last_attempt_at desc limit 1) from visible",
+        [hide_shifts], |row| Ok(OutboxSummary { pending: row.get(0)?, syncing: row.get(1)?, failed: row.get(2)?, synced: row.get(3)?, last_error: row.get(4)? })
     ).map_err(|error| error.to_string())
 }
 
@@ -2570,10 +2673,11 @@ fn force_outbox_retry(state: State<'_, DatabaseState>, event_id: String) -> Resu
 #[tauri::command]
 fn force_last_outbox_retry(state: State<'_, DatabaseState>) -> Result<Option<String>, String> {
     let connection = state.0.lock().map_err(|_| "SQLite lock poisoned".to_string())?;
+    let hide_shifts = i64::from(timekeeping_disabled(&connection));
     let event_id = connection
         .query_row(
-            "select id from sync_outbox order by created_at desc, id desc limit 1",
-            [],
+            "select id from sync_outbox where ?1 = 0 or aggregate_type <> 'SHIFT' order by created_at desc, id desc limit 1",
+            [hide_shifts],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -2669,6 +2773,8 @@ pub fn run() {
             clear_reconciled_local_shift,
             apply_server_shift,
             record_offline_time_event,
+            is_timekeeping_disabled,
+            set_timekeeping_disabled_branch,
             close_active_operator_shift,
             record_shift_heartbeat_local,
             confirm_local_sale,
@@ -3321,6 +3427,172 @@ mod tests {
         assert_eq!(connection.query_row("select count(*) from local_employee_shifts where clock_out_at is null", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(connection.query_row("select count(*) from sync_outbox where aggregate_type='SHIFT'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(connection.query_row("select count(*) from local_active_operator", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    // ---- D-098: Central no usa fichajes -----------------------------------------------------------------------------
+
+    /// Dispositivo activo de la sucursal `branch` con Fran y María ya validados (PIN online previo) y datos VIEJOS de fichajes:
+    /// Fran con un turno abierto sin heartbeat, y eventos SHIFT pendientes/fallidos en el outbox junto a una venta pendiente.
+    fn legacy_shift_fixture(central: bool) -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut connection).unwrap();
+        connection.execute("update local_device set organization_id='org',branch_id='branch',device_status='ACTIVE',authorization_expires_at='2099-01-01T00:00:00Z'", []).unwrap();
+        let timestamp = now();
+        for (id, name) in [("fran", "Fran"), ("maria", "María")] {
+            connection.execute("insert into local_pos_operators(profile_id,display_name,role_name,has_pin,active,has_shift_issue,operator_token,grant_valid_until,updated_at) values(?1,?2,'Operador',1,1,1,'token','2099-01-01T00:00:00Z',?3)", params![id, name, timestamp]).unwrap();
+        }
+        connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) select 'old-fran','fran','branch',device_id,'2026-11-01T08:00:00Z','ONLINE','OPEN','2026-11-01T08:00:00Z' from local_device where singleton=1", []).unwrap();
+        connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,attempts,created_at,next_attempt_at,last_error) values('shift-out','SHIFT','old-fran','EVENT','{}','FAILED',3,'2026-11-01T17:00:00Z','2026-11-01T17:00:00Z','No hay un turno activo para marcar salida')", []).unwrap();
+        connection.execute("insert into sync_outbox(id,aggregate_type,aggregate_id,operation,payload,status,created_at,next_attempt_at) values('sale-1','SALE','sale-1','UPSERT','{}','PENDING','2026-11-02T10:00:00Z','2026-11-02T10:00:00Z')", []).unwrap();
+        if central { set_flexible_pricing_branch_inner(&mut connection, "branch", true).unwrap(); }
+        connection
+    }
+
+    fn select_operator(connection: &Connection, profile_id: &str) {
+        // Lo mismo que hacen `verify_local_operator` / `cache_verified_operator` al validar el PIN: sólo `local_active_operator`.
+        connection.execute("insert into local_active_operator(singleton,profile_id,selected_at) values(1,?1,?2) on conflict(singleton) do update set profile_id=excluded.profile_id,selected_at=excluded.selected_at", params![profile_id, now()]).unwrap();
+    }
+
+    fn rows(connection: &Connection, sql: &str) -> i64 {
+        connection.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap()
+    }
+
+    fn server_shift(id: &str, employee: &str) -> LocalShift {
+        LocalShift { shift_id: id.into(), employee_id: employee.into(), clock_in_at: "2026-11-16T08:00:00Z".into(), clock_out_at: None, clock_in_source: "ONLINE".into(), clock_out_source: None, status: "OPEN".into() }
+    }
+
+    #[test]
+    fn the_unique_violation_comes_from_applying_a_server_shift_over_a_different_open_local_shift() {
+        let mut connection = legacy_shift_fixture(false);
+        assert!(!timekeeping_disabled(&connection));
+        // Reproduce el error exacto de Central: Fran ya tiene el turno local abierto 'old-fran' y el servidor informa OTRO turno abierto.
+        let error = connection.execute("insert into local_employee_shifts(id,employee_id,branch_id,device_id,clock_in_at,clock_in_source,status,updated_at) values('srv-1','fran','branch','device','2026-11-16T08:00:00Z','ONLINE','OPEN','2026-11-16T08:00:00Z')", []).unwrap_err().to_string();
+        assert_eq!(error, "UNIQUE constraint failed: local_employee_shifts.employee_id");
+        // `apply_server_shift` ya no explota (sucursales con fichaje): el turno local sin eventos pendientes se reemplaza por el del servidor.
+        connection.execute("update sync_outbox set status='SYNCED' where id='shift-out'", []).unwrap();
+        apply_server_shift_in_connection(&mut connection, server_shift("srv-1", "fran")).unwrap();
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where employee_id='fran' and clock_out_at is null"), 1);
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where id='srv-1'"), 1);
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where id='old-fran'"), 0);
+        // Repetirlo es idempotente.
+        apply_server_shift_in_connection(&mut connection, server_shift("srv-1", "fran")).unwrap();
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts"), 1);
+    }
+
+    #[test]
+    fn applying_a_server_shift_never_drops_a_local_shift_with_unsynced_events() {
+        let mut connection = legacy_shift_fixture(false);
+        // 'old-fran' todavía tiene su evento SHIFT sin sincronizar (FAILED): el local manda, no se pierde nada y no hay error.
+        apply_server_shift_in_connection(&mut connection, server_shift("srv-1", "fran")).unwrap();
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where id='old-fran'"), 1);
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where id='srv-1'"), 0);
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox where aggregate_type='SHIFT'"), 1);
+    }
+
+    #[test]
+    fn central_login_never_reads_or_writes_shifts_even_with_old_open_shifts_and_repeated_pin_logins() {
+        let mut connection = legacy_shift_fixture(true);
+        assert!(timekeeping_disabled(&connection));
+        let before = connection.query_row("select id,clock_out_at,status,updated_at from local_employee_shifts", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))).unwrap();
+        let session = AtomicBool::new(false);
+        // Fran, María, Fran de nuevo, y Fran otra vez con el mismo PIN (online u offline: el login sólo toca local_active_operator).
+        for profile in ["fran", "maria", "fran", "fran"] {
+            select_operator(&connection, profile);
+            session.store(true, Ordering::SeqCst);
+            assert!(local_current_shift_in_connection(&connection, profile).unwrap().is_none(), "Central no busca turnos");
+            // Aunque el servidor (o una versión vieja) informe un turno abierto con otro id: no se inserta nada y NO hay UNIQUE.
+            apply_server_shift_in_connection(&mut connection, server_shift("server-shift", profile)).unwrap();
+            assert_eq!(record_shift_heartbeat_local_in_connection(&connection).unwrap(), None);
+            assert!(record_offline_time_event_in_connection(&mut connection, "CLOCK_IN").is_err());
+            // Cambio de operador / «Salir»: sólo termina la sesión.
+            let closed = close_authenticated_operator_session(&mut connection, &session).unwrap();
+            assert!(!closed.clock_out_created && closed.shift.is_none());
+            assert_eq!(rows(&connection, "select count(*) from local_active_operator"), 0);
+        }
+        let after = connection.query_row("select id,clock_out_at,status,updated_at from local_employee_shifts", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))).unwrap();
+        assert_eq!(before, after, "las filas viejas de turnos no se tocan");
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts"), 1);
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox where aggregate_type='SHIFT'"), 1, "no se generó ningún evento SHIFT nuevo");
+    }
+
+    #[test]
+    fn central_restart_does_not_reconcile_old_open_shifts_or_queue_clock_outs() {
+        let mut connection = legacy_shift_fixture(true);
+        select_operator(&connection, "fran");
+        // Reinicio de la aplicación (varias veces): `initialize_connection` corre en cada arranque.
+        for _ in 0..3 { initialize_connection(&mut connection).unwrap(); }
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where status='OPEN' and clock_out_at is null"), 1, "el turno viejo no se cierra ni se infiere");
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox where aggregate_type='SHIFT'"), 1);
+        // Y entrar después del reinicio sigue siendo sólo el PIN.
+        assert!(local_current_shift_in_connection(&connection, "fran").unwrap().is_none());
+    }
+
+    #[test]
+    fn the_other_branches_still_reconcile_on_restart_and_report_their_shift() {
+        let mut connection = legacy_shift_fixture(false);
+        select_operator(&connection, "fran");
+        // Un turno de hoy (dentro del máximo de horas): se informa como OPEN; recién un reinicio lo reconcilia.
+        connection.execute("update local_employee_shifts set clock_in_at=?1", [now()]).unwrap();
+        let current = local_current_shift_in_connection(&connection, "fran").unwrap().unwrap();
+        assert_eq!((current.shift_id.as_str(), current.status.as_str()), ("old-fran", "OPEN"));
+        initialize_connection(&mut connection).unwrap();
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where status='REQUIRES_REVIEW'"), 1);
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox where aggregate_type='SHIFT'"), 2);
+    }
+
+    #[test]
+    fn central_sync_skips_old_shift_events_so_pending_sales_are_not_blocked_and_nothing_is_deleted() {
+        let connection = legacy_shift_fixture(true);
+        let due = due_outbox_in_connection(&connection, "2026-11-16T00:00:00Z").unwrap();
+        assert_eq!(due.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), vec!["sale-1"]);
+        assert_eq!(pending_outbox_count(&connection).unwrap(), 1);
+        let summary = outbox_summary_in_connection(&connection).unwrap();
+        assert_eq!((summary.pending, summary.failed), (1, 0));
+        assert!(summary.last_error.is_none(), "el error viejo del fichaje ya no se muestra");
+        // Nada se borró: el evento histórico sigue en la base.
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox where aggregate_type='SHIFT'"), 1);
+        assert_eq!(rows(&connection, "select count(*) from sync_outbox"), 2);
+        // Las ventas se siguen sincronizando y confirmando como siempre.
+        connection.execute("update sync_outbox set status='SYNCED' where id='sale-1'", []).unwrap();
+        assert!(due_outbox_in_connection(&connection, "2026-11-16T00:00:00Z").unwrap().is_empty());
+        assert_eq!(pending_outbox_count(&connection).unwrap(), 0);
+    }
+
+    #[test]
+    fn other_branches_keep_syncing_shift_events() {
+        let connection = legacy_shift_fixture(false);
+        let due = due_outbox_in_connection(&connection, "2026-11-16T00:00:00Z").unwrap();
+        assert_eq!(due.len(), 2);
+        assert_eq!(pending_outbox_count(&connection).unwrap(), 2);
+    }
+
+    #[test]
+    fn timekeeping_is_only_disabled_for_the_branch_of_this_device() {
+        let mut connection = legacy_shift_fixture(false);
+        assert!(!timekeeping_disabled(&connection));
+        set_flexible_pricing_branch_inner(&mut connection, "branch", true).unwrap();
+        assert!(timekeeping_disabled(&connection));
+        set_flexible_pricing_branch_inner(&mut connection, "branch", false).unwrap();
+        assert!(!timekeeping_disabled(&connection));
+        // Una bandera de otra sucursal (instalación movida de lugar) no desactiva nada.
+        connection.execute("insert into sync_metadata(key,value,updated_at) values('flexible_pricing_branch','otra',?1) on conflict(key) do update set value=excluded.value", [now()]).unwrap();
+        assert!(!timekeeping_disabled(&connection));
+    }
+
+    #[test]
+    fn a_branch_the_server_left_without_timekeeping_is_gated_like_central() {
+        let mut connection = legacy_shift_fixture(false);
+        assert!(set_timekeeping_disabled_branch_inner(&mut connection, "otra", true).is_err());
+        set_timekeeping_disabled_branch_inner(&mut connection, "branch", true).unwrap();
+        assert!(timekeeping_disabled(&connection));
+        assert!(local_current_shift_in_connection(&connection, "fran").unwrap().is_none());
+        let due = due_outbox_in_connection(&connection, "2026-11-16T00:00:00Z").unwrap();
+        assert_eq!(due.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), vec!["sale-1"]);
+        initialize_connection(&mut connection).unwrap();
+        assert_eq!(rows(&connection, "select count(*) from local_employee_shifts where status='OPEN' and clock_out_at is null"), 1);
+        // Si el servidor vuelve a habilitar el fichaje, la sucursal recupera el comportamiento de siempre.
+        set_timekeeping_disabled_branch_inner(&mut connection, "branch", false).unwrap();
+        assert!(!timekeeping_disabled(&connection));
     }
 
     fn branch_stock_fixture() -> Connection {

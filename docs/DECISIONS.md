@@ -1276,6 +1276,16 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 
 ---
 
+## D-098 — Fichaje: compuerta local en SQLite y corrección del UNIQUE de `local_employee_shifts`
+
+**Status:** Active (2026-11-16; sin migraciones SQL ni SQLite). Complementa D-096 (servidor: `branches.timekeeping_enabled`) y D-097 (cola offline): el desacople del ingreso no depende sólo del dato recordado en el navegador ni de que la migración `202611140100` esté aplicada.
+
+- **Sucursal sin fichaje en el POS** = Central (capacidad de D-061, `flexible_pricing_branch` en SQLite: nunca ficha aunque aún no haya aprendido el dato del servidor) **o** la que el servidor informe con `timekeepingEnabled=false` (`timekeeping_disabled_branch` en SQLite, espejo de lo recordado en el navegador). `timekeeping_disabled()` en Rust y `loadOperatorShift` en el POS la consultan; nunca el nombre de la sucursal.
+- **Ahí no se ejecuta:** `get_current_employee_shift`, fichajes online/offline, heartbeat, reconciliación de turnos huérfanos al reiniciar. `get_local_current_shift`, `apply_server_shift`, `clear_reconciled_local_shift`, el latido y el cierre de sesión (cambio de operador, «Salir», cierre de ventana) no leen ni escriben `local_employee_shifts` ni generan eventos `SHIFT`. La falta de turno nunca bloquea. Cierres y arqueos de caja no cambian.
+- **Datos existentes:** no se borra ni migra nada. Las filas viejas y los eventos `SHIFT` del outbox se conservan pero no se envían ni cuentan como pendientes (`get_due_outbox`, `get_outbox_summary`, conteo del runtime). Aunque la cola de D-097 ya aísla los rechazos, un fichaje viejo no debe frenar ni ensuciar el estado de Central.
+- **Causa del `UNIQUE constraint failed: local_employee_shifts.employee_id`:** `apply_server_shift` insertaba el turno abierto que informa el servidor con `on conflict(id)`; si el empleado ya tenía OTRO turno abierto local (otro id), chocaba con el índice único parcial `local_employee_one_open_uq`. Se disparaba al elegir empleado + PIN porque el ingreso llamaba a `loadShift` → `apply_server_shift`. En las sucursales con fichaje ahora el turno local sobrante sin eventos pendientes se reemplaza por el del servidor (con eventos pendientes manda el local; nunca se pierde un evento).
+- Si Admin vuelve a habilitar el fichaje en una sucursal (y no es Central), recupera el comportamiento de D-024 sin tocar datos.
+
 ## D-095 — Envasados: etiqueta comercial 55 × 44 mm con elaboración y vencimiento
 
 **Status:** Active (2026-11-12; sin migraciones). Ajuste puntual de D-090/D-092: la etiqueta comercial (precio) suma `ELAB` y `VENCE` en una fila; el papel por defecto pasa de 58 × 40 a **55 × 44 mm** (`VACUUM_LABEL_DEFAULTS`, sobrescribible por organización; cada paquete conserva sus medidas). Las fechas salen SIEMPRE del paquete registrado (nunca se calculan ni se generan al imprimir) y si falta alguna no se imprime. La estación nueva imprime sólo la comercial por defecto; la informativa y «Ambas» se conservan. El EAN-13, los precios y los registros históricos no cambian (el EAN sólo se dibuja con módulo de puntos enteros a 203 dpi). Detalle en `VACUUM_STATION.md`.

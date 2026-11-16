@@ -12,6 +12,12 @@ Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisio
 - Central ingresa con PIN y vende sin «Marcar entrada», sin heartbeat y sin CLOCK_OUT al salir; el servidor ignora (no-op) los eventos de turno de esa sucursal, incluidos los que ya estaban en la cola. Otras sucursales conservan el fichaje. Turnos históricos intactos.
 - Validado: typecheck, lint, 604 tests del POS (`timekeeping.test.ts` nuevo) y build web. **No validado:** `supabase/tests/branch_timekeeping_toggle.test.sql` (sin Docker/Supabase local), la migración contra la base real, ni el instalador de Windows (sin cambios de Rust: sólo frontend).
 
+## POS: fichaje desacoplado del ingreso también en SQLite (error `local_employee_shifts.employee_id`) — implementado 2026-11-16 (D-098; sin migraciones SQL ni SQLite; **requiere instalador nuevo del POS**)
+
+- Complementa D-096 (servidor) en el cliente: corrige `[OPERATOR_CONTEXT] UNIQUE constraint failed: local_employee_shifts.employee_id` al elegir a Fran + PIN (causa en D-098). Una sucursal «sin fichaje» es Central (capacidad de D-061, recordada en SQLite) o la que el servidor informe con `timekeepingEnabled=false`: ahí el ingreso, el cambio de operador, «Salir», el reinicio y la sincronización no tocan `local_employee_shifts`; las filas y los eventos `SHIFT` viejos se conservan pero no se envían ni cuentan como pendientes. Las sucursales con fichaje conservan todo, con `apply_server_shift` endurecido.
+- Convive con D-096/D-097 (sesión Supabase, JWT, cola offline): el turno sigue leyéndose de SQLite si el servidor no responde o la sesión técnica venció.
+- Validado: `cargo test --lib`, tests del POS y `pnpm check` (ver D-098). **No probado** en la caja real de Central ni con su SQLite real.
+
 ## Envasados: etiqueta comercial 55 × 44 mm con elaboración y vencimiento — implementado 2026-11-12 (D-095; sin migraciones)
 
 - La etiqueta comercial lleva `ELAB: DD/MM/AAAA` y `VENCE: DD/MM/AAAA` (una fila) con las fechas del paquete registrado; papel por defecto 55 × 44 mm; estación nueva imprime sólo la comercial (un equipo con «Ambas» ya guardado hay que cambiarlo en Dispositivos). Sin fecha válida no se imprime.

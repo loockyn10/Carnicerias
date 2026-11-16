@@ -41,6 +41,7 @@ import { DiscountChip } from "./DiscountChip";
 import { QuantityTierList } from "./QuantityTierList";
 import { PACK_PALETTE, tierPalette, tierPositionByMinimumUnits } from "./lib/discount-chips";
 import { ManualPriceModal } from "./ManualPriceModal";
+import { loadOperatorShift, type OperatorShiftResult } from "./lib/operator-shift";
 import { isDesktopRuntime, localDatabase, type CloseActiveOperatorResult, type LocalBranchPromotion, type LocalOperator, type LocalRuntime, type LocalShift, type LocalVacuumState, type OperatorRosterRow, type OutboxSummary, type PendingProviderPayment } from "./lib/local-database";
 import { mergeRecentSales, readRemoteRecentSales, readRemoteSaleReceipt, RECENT_SALES_LIMIT, type RecentSaleView } from "./lib/remote-recent-sales";
 import { scaleBridge, useScaleSnapshot } from "./lib/scale";
@@ -501,30 +502,28 @@ export default function App() {
     setOperators(await localDatabase.operators());
   }, [desktop, localRuntime?.branchId]);
 
-  const loadShift = useCallback(async (active: LocalOperator) => {
+  // D-096: en Central no hay fichajes (`timekeeping: false`): ni consulta de turnos ni «Marcar entrada».
+  const loadShift = useCallback(async (active: LocalOperator): Promise<OperatorShiftResult | undefined> => {
     const deviceId = localRuntime?.deviceId;
     if (!desktop || !deviceId) return;
-    // Sucursal sin fichaje: no se consulta ni se crea ningún turno (ni local ni en el servidor).
-    if (!timekeepingEnabledRef.current) { setShift(null); return null; }
-    let current = await localDatabase.currentShift(active.profileId);
-    if (navigator.onLine && !user?.offline && active.operatorToken) {
-      const { data, error: shiftError } = await supabase.rpc("get_current_employee_shift", { p_device_id: deviceId, p_employee_id: active.profileId, p_operator_token: active.operatorToken });
+    // Sucursal sin fichaje (D-096): ni local ni en el servidor se consulta, crea o reconcilia un turno. «Sin fichaje» es lo que
+    // informó el servidor (`branches.timekeeping_enabled`, recordado) O la capacidad de Central: Central nunca fichó, aunque la
+    // caja todavía no haya aprendido el dato del servidor (migración sin aplicar, primer arranque sin sync).
+    const operatorToken = active.operatorToken;
+    const result = await loadOperatorShift(active.profileId, {
+      centralHint: centralPosRef.current || !timekeepingEnabledRef.current,
+      timekeepingDisabled: () => localDatabase.timekeepingDisabled(),
+      currentShift: (employeeId) => localDatabase.currentShift(employeeId),
+      applyServerShift: (current) => localDatabase.applyServerShift(current),
+      clearReconciledShift: (employeeId) => localDatabase.clearReconciledShift(employeeId),
+      canQueryRemote: navigator.onLine && !user?.offline && Boolean(operatorToken),
+      remoteShift: async () => await supabase.rpc("get_current_employee_shift", { p_device_id: deviceId, p_employee_id: active.profileId, p_operator_token: operatorToken ?? "" }),
       // Sólo lectura: si el servidor no está alcanzable o la sesión técnica venció, el turno local de SQLite manda
       // (el empleado no queda bloqueado); cualquier otro error del servidor sigue siendo un error.
-      if (shiftError && classifyAuthFailure(shiftError) === "other") throw shiftError;
-      if (!shiftError) {
-        if (data) {
-          const remote = data as unknown as Omit<LocalShift, "employeeId">;
-          current = { ...remote, employeeId: active.profileId };
-          await localDatabase.applyServerShift(current);
-        } else {
-          await localDatabase.clearReconciledShift(active.profileId);
-          current = await localDatabase.currentShift(active.profileId);
-        }
-      }
-    }
-    setShift(current);
-    return current;
+      tolerateRemoteError: (remoteError) => classifyAuthFailure(remoteError) !== "other"
+    });
+    setShift(result.shift);
+    return result;
   }, [desktop, localRuntime?.deviceId, user?.offline]);
 
   useEffect(() => {
@@ -793,6 +792,11 @@ export default function App() {
     if (!desktop || !localRuntime?.branchId) return;
     void localDatabase.setFlexiblePricingBranch(localRuntime.branchId, centralPos).catch(() => undefined);
   }, [desktop, localRuntime?.branchId, centralPos]);
+  // Lo mismo para el fichaje (D-096): SQLite (sync, reinicio, cierre de sesión) necesita saber que esta sucursal no ficha, también sin Internet.
+  useEffect(() => {
+    if (!desktop || !localRuntime?.branchId) return;
+    void localDatabase.setTimekeepingDisabledBranch(localRuntime.branchId, !timekeepingEnabled).catch(() => undefined);
+  }, [desktop, localRuntime?.branchId, timekeepingEnabled]);
   centralPosRef.current = centralPos;
   // Central: cada ticket arranca (y vuelve después de vender/cancelar/resetear) en Efectivo, nunca sin medio elegido.
   useEffect(() => {
@@ -2079,9 +2083,10 @@ export default function App() {
   async function selectOperator(active: LocalOperator, loginNotice?: string) {
     setError(null); setErrorDiagnostics(null);
     try {
-      const currentShift = await loadShift(active);
+      const loaded = await loadShift(active);
       setOperator(active);
-      setClockInRequired(clockInRequiredAfterLogin(timekeepingEnabledRef.current, Boolean(currentShift)));
+      // Central / sucursal sin fichaje (D-096): entrar es PIN y listo; sólo las sucursales con fichaje exigen turno abierto.
+      setClockInRequired(clockInRequiredAfterLogin(Boolean(loaded?.timekeeping), Boolean(loaded?.shift)));
       if (loginNotice) setNotice(loginNotice);
     } catch (shiftError) {
       await localDatabase.clearActiveOperator().catch(() => undefined);
@@ -2346,7 +2351,7 @@ export default function App() {
           {desktop && operator ? (
             <div className={`pos-operator min-w-32 rounded-xl px-3 py-2 text-right text-xs ${shift?.status === "REQUIRES_REVIEW" ? "bg-amber-950 text-amber-200" : "bg-stone-800 text-stone-300"}`}>
               <span className="font-black text-stone-100">{operator.displayName}</span>
-              <span className="pos-operator-shift">{!timekeepingEnabled ? "" : shift?.status === "OPEN" ? ` · ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? " · A revisar" : " · Sin turno"}</span>
+              <span className="pos-operator-shift">{!timekeepingEnabled || centralPos ? "" : shift?.status === "OPEN" ? ` · ${formatShiftTime(shift.clockInAt)}` : shift?.status === "REQUIRES_REVIEW" ? " · A revisar" : " · Sin turno"}</span>
             </div>
           ) : (
             <div className="text-right text-xs text-stone-400"><p className="font-semibold text-stone-200">{roleName}</p><p>{user.email}</p></div>
