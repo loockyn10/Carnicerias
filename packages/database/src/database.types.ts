@@ -1016,6 +1016,9 @@ export type Database = {
           organization_id: string
           status: Database["public"]["Enums"]["employee_shift_status"]
           updated_at: string
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
         }
         Insert: {
           auto_closed_by_heartbeat?: boolean
@@ -1039,6 +1042,9 @@ export type Database = {
           organization_id: string
           status?: Database["public"]["Enums"]["employee_shift_status"]
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Update: {
           auto_closed_by_heartbeat?: boolean
@@ -1062,6 +1068,9 @@ export type Database = {
           organization_id?: string
           status?: Database["public"]["Enums"]["employee_shift_status"]
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Relationships: [
           {
@@ -1095,6 +1104,13 @@ export type Database = {
           {
             foreignKeyName: "employee_shifts_employee_id_fkey"
             columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "employee_shifts_voided_by_fkey"
+            columns: ["voided_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -6730,6 +6746,10 @@ export type Database = {
       void_branch_expense: {
         Args: { p_expense_id: string; p_reason: string }
         Returns: Json
+      }
+      void_employee_shift: {
+        Args: { p_reason: string; p_shift_id: string }
+        Returns: undefined
       }
       void_settlement: {
         Args: { p_reason: string; p_settlement_id: string }

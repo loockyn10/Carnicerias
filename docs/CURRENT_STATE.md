@@ -2,6 +2,11 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## Control horario: anular fichajes incorrectos y tope del costo laboral — implementado 2026-11-16 (D-099; migración `202611160102` **sin aplicar**)
+
+- Admin → Horas trabajadas ahora permite «Anular fichaje» (motivo + confirmación): se conserva en el historial pero no suma horas ni costo de personal, y el Resultado operativo de la sucursal se recalcula solo (el costo se calcula al consultar). Las fichadas no confirmadas (abiertas o con salida inferida por latido) cuentan como máximo `max_shift_hours` en el costo hasta que se corrijan o anulen.
+- Validado: `supabase/tests/void_employee_shift.test.sql` en PGlite (76/76 ejecutados; `has_function`/`has_column` no existen en el arnés; 9 mutaciones detectadas), `pnpm check` y build del Admin. **No validado:** contra la base real (sin acceso de lectura a producción desde esta máquina: no se confirmó el estado del fichaje de OTRO ni su origen exacto) ni con Docker/`supabase test db`.
+
 ## POS: la cola offline sincroniza sin token de operador vigente — implementado 2026-11-14 (D-097; migración `202611140101` **sin aplicar**)
 
 - Ventas y eventos de turno offline se aceptan por dispositivo + organización aunque el token del PIN haya vencido o se haya revocado; un evento rechazado ya no traba a los demás y el primer ciclo tras reiniciar reintenta todo lo fallido. Sin cambios en Rust/SQLite; los pendientes existentes no se tocan.

@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Control horario: anular el fichaje de OTRO en Janssen (acción del usuario)
+
+Implementado 2026-11-16 (D-099). **Migración pendiente: `202611160102_void_employee_shifts.sql`** (aditiva; re-crea 8 funciones con su cuerpo vigente + el filtro de anulados): `supabase db push --dry-run` → `supabase db push` → desplegar el Admin. Es posterior a `202611140100/101`, que van antes. Después `pnpm db:types` (comparar con la edición manual) y, con Docker, `pnpm db:reset && pnpm db:test`.
+
+1. Admin → Personal → Horas trabajadas: filtrar empleado «OTRO», sucursal Janssen y un rango que cubra el fichaje (la lista «Turnos pendientes de revisión» y el historial dependen del rango). Anotar la entrada y la salida/último heartbeat del fichaje de 175 h 50 min.
+2. Antes de anular: abrir Costos operativos de Janssen (mismo período) y anotar el costo de personal y la fila de OTRO.
+3. «Anular fichaje» en ese turno, motivo (p. ej. «Fichaje abierto por error»), confirmar. Debe quedar en el historial como «Anulado» con 0 h y $0.
+4. Volver a abrir Costos operativos de Janssen: el personal baja exactamente el importe del fichaje (el modal calcula al abrir) y el Resultado operativo sube lo mismo; los demás fichajes de OTRO y de otros empleados no cambian.
+5. Comprobar que si el cálculo seguía mostrando horas de OTRO en un turno «A revisar», ya está topeado en `max_shift_hours` (12 h por defecto) aunque no se anule.
+
 ## P0 — POS: sincronización sin token de operador (acción del usuario)
 
 Implementado 2026-11-14 (D-097). **Migraciones pendientes, en este orden: `202611140100` (fichaje por sucursal, ver abajo) y `202611140101_pos_operator_identity_without_expiry.sql`**: `supabase db push --dry-run` → `supabase db push`, y recién después instalar el POS nuevo (`pnpm build:pos:desktop`; cerrar el POS antes). Con la migración aplicada, los pendientes con 42501 se sincronizan solos en el próximo reintento (≤ 5 min) o apenas se reinicia el POS nuevo.

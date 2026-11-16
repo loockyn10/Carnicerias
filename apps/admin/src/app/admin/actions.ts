@@ -1057,6 +1057,18 @@ export async function correctShiftAction(formData: FormData) {
   revalidatePath("/admin/timekeeping");
 }
 
+/**
+ * Anula un fichaje incorrecto (D-099): se conserva en el historial pero deja de sumar horas y costo de personal. Como el costo se calcula al
+ * consultar, el Resultado operativo se recalcula solo; se revalida todo el layout para que Inicio, Sucursales y Rentabilidad lo reflejen ya.
+ */
+export async function voidShiftAction(formData: FormData) {
+  await rpcOrThrow("void_employee_shift", {
+    p_shift_id: text(formData, "shift_id"),
+    p_reason: text(formData, "reason")
+  });
+  revalidatePath("/", "layout");
+}
+
 export async function setMaxShiftHoursAction(formData: FormData) {
   const hours = Number(text(formData, "hours"));
   if (!Number.isInteger(hours) || hours < 1 || hours > 24) throw new Error("La duración debe estar entre 1 y 24 horas");

@@ -362,6 +362,13 @@ Detección server-side (`app_private.mark_overdue_shifts`, RPC `record_shift_hea
 
 Limitación no prioritaria: si un clock-out offline excede el límite, es deseable conservar en el futuro el timestamp/intento como evidencia aunque el turno permanezca `REQUIRES_REVIEW`.
 
+### Anular un fichaje incorrecto (D-099, 2026-11-16)
+
+- Admin → Horas trabajadas: «Anular fichaje» (motivo obligatorio + confirmación; permiso `timekeeping.write` y acceso a la sucursal del fichaje; auditado como `EMPLOYEE_SHIFT_VOIDED`; no se puede anular dos veces ni deshacer). Es distinto de «Corregir salida», que cambia la hora de un turno que SÍ se trabajó.
+- El fichaje anulado **se conserva en el historial** (entrada, salida, estado y origen tal como se registraron; `voided_at`/`voided_by`/`void_reason`) pero **no cuenta en nada**: ni horas, ni importe estimado, ni costo de personal del Resultado operativo (D-085), ni lista de turnos por revisar, ni aviso «turno por revisar» del selector del POS, ni turno activo/latido. Anular una fichada abierta libera al empleado para volver a fichar; una salida que llegue de la cola del POS para un fichaje anulado es un duplicado inofensivo. El empleado, sus tarifas y sus ventas no se tocan.
+- El costo de personal no se almacena: se calcula al consultar, así que anular cambia al instante el modal de Costos operativos, el Resumen de sucursal, Inicio y el reporte de horas.
+- **Tope de lo no confirmado:** en el costo de personal una fichada sin salida confirmada (abierta, o `REQUIRES_REVIEW` con salida inferida por latido) cuenta como máximo `entrada + max_shift_hours` hasta que se corrija o anule. Sólo las `CLOSED` (salida confirmada por el empleado o por Admin) cuentan completas.
+
 ## Tarifa por hora
 
 - tarifa con historial de vigencia;
