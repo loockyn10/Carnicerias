@@ -9,7 +9,7 @@ export interface FormModalState { error?: string; successToken?: string }
  * automático cuando la acción devuelve `successToken`. Lo usan Pollos y Envasados para sus altas/ediciones.
  */
 export function FormModal({
-  triggerLabel, triggerClassName, title, description, action, submitLabel, children, wide = false
+  triggerLabel, triggerClassName, title, description, action, submitLabel, children, wide = false, pendingLabel = "Guardando…", submitClassName
 }: {
   triggerLabel: string;
   triggerClassName?: string | undefined;
@@ -19,6 +19,9 @@ export function FormModal({
   submitLabel: string;
   children: ReactNode;
   wide?: boolean | undefined;
+  pendingLabel?: string | undefined;
+  /** Clase del botón de confirmación (p. ej. rojo para una acción destructiva). */
+  submitClassName?: string | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState(action, {} as FormModalState);
@@ -44,7 +47,7 @@ export function FormModal({
           {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
           <div className="mt-2 flex justify-end gap-2">
             <button className="rounded-lg px-4 py-2 text-sm font-bold text-stone-600" disabled={pending} onClick={() => { setOpen(false); }} type="button">Cancelar</button>
-            <button className="rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60" disabled={pending}>{pending ? "Guardando…" : submitLabel}</button>
+            <button className={submitClassName ?? "rounded-lg bg-rose-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"} disabled={pending}>{pending ? pendingLabel : submitLabel}</button>
           </div>
         </form>
       </section>

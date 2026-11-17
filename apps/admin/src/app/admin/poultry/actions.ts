@@ -81,6 +81,19 @@ export async function savePoultryProductSettingsAction(_: PoultryFormState, form
   } catch (error) { return failure(error, "No se pudo guardar el producto"); }
 }
 
+/**
+ * «Eliminar» un producto de Pollos (permiso `poultry.write`, lo valida la RPC). Sin historia se borra la configuración; con costos, precios o
+ * pedidos se elimina lógicamente. Nunca toca el producto del catálogo general ni la historia (D-100).
+ */
+export async function deletePoultryProductAction(_: PoultryFormState, formData: FormData): Promise<PoultryFormState> {
+  try {
+    const id = text(formData, "poultry_product_id");
+    if (!isUuid(id)) throw new Error("Producto inválido");
+    await rpc("delete_poultry_product", { p_poultry_product_id: id });
+    return done();
+  } catch (error) { return failure(error, "No se pudo eliminar el producto"); }
+}
+
 /** Costo y precios de un producto en una sola operación: cada valor que cambió abre una vigencia nueva (los iguales a los vigentes no hacen nada). */
 export async function savePoultryPricesAction(_: PoultryFormState, formData: FormData): Promise<PoultryFormState> {
   try {

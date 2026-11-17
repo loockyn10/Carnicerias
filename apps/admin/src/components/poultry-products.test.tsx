@@ -1,16 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { hasActivePoultryProducts, parseCandidates, parsePriceBoard } from "../lib/poultry";
+import { filterPoultryProducts, hasActivePoultryProducts, parseCandidates, parsePriceBoard } from "../lib/poultry";
 import { ADD_POULTRY_PRODUCT_HREF, PoultryEmptyState, PoultryNoProductsNotice } from "./poultry-empty-state";
-import { PoultryAddProductModal, PoultryProductSettingsModal } from "./poultry-product-modals";
+import { priceListNotes, PoultryPriceListButton } from "./poultry-price-list-button";
+import { PoultryPriceListImagesPanel } from "./poultry-price-list-images-panel";
+import { PoultryAddProductModal, PoultryDeleteProductModal, PoultryProductSettingsModal } from "./poultry-product-modals";
+import { PoultryProductsBoard } from "./poultry-products-board";
 
 vi.mock("../app/admin/poultry/actions", () => ({
   addPoultryProductAction: () => Promise.resolve({}),
   savePoultryProductSettingsAction: () => Promise.resolve({}),
+  deletePoultryProductAction: () => Promise.resolve({}),
+  savePoultryPricesAction: () => Promise.resolve({}),
+  savePoultryPriceListAction: () => Promise.resolve({}),
+  getPoultryPriceHistoryAction: () => Promise.resolve({ data: {} }),
   searchPoultryCandidatesAction: () => Promise.resolve({ data: [] })
 }));
 vi.mock("../app/admin/actions", () => ({ createProductModalAction: () => Promise.resolve({}) }));
+vi.mock("../app/admin/poultry/price-list/actions", () => ({
+  createPriceListUploadPathAction: () => Promise.resolve({}),
+  registerPriceListImageAction: () => Promise.resolve({}),
+  setPriceListLogoSourceAction: () => Promise.resolve({}),
+  removePriceListBackgroundAction: () => Promise.resolve({})
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 
 const createProps = { categories: [], branches: [], suppliers: [], marginBps: null, excludedCategoryIds: [], productionBranchId: null };
 const product = { id: "p1", catalogProductId: "c1", sku: "CAJ", name: "Cajón pollo entero", saleUnit: "UNIT" as const, requiresWeight: false, referenceWeightGrams: 20_000, active: true, costCents: null, costSince: null, prices: {} };
@@ -75,5 +89,91 @@ describe("Agregar producto", () => {
     expect(html).toContain("Configurar");
     const open = renderToStaticMarkup(<PoultryProductSettingsModal product={{ ...product, saleUnit: "WEIGHT" }} />);
     expect(open).not.toContain("Por cajón</option>");
+  });
+});
+
+describe("buscador de productos", () => {
+  const rows = [{ name: "Pollo entero x 20 kg" }, { name: "Pechuga entera x 15 kg" }, { name: "Muslos rellenos (JAMÓN y queso)" }, { name: "Alitas x 15 kg" }];
+  const names = (query: string) => filterPoultryProducts(rows, query).map((row) => row.name);
+
+  it("vacío (o sólo espacios) muestra todos", () => {
+    expect(names("")).toHaveLength(4);
+    expect(names("   ")).toHaveLength(4);
+  });
+
+  it("ignora mayúsculas, minúsculas y acentos", () => {
+    expect(names("POLLO")).toEqual(["Pollo entero x 20 kg"]);
+    expect(names("jamon")).toEqual(["Muslos rellenos (JAMÓN y queso)"]);
+    expect(names("Pechúga")).toEqual(["Pechuga entera x 15 kg"]);
+  });
+
+  it("todas las palabras tienen que aparecer, en cualquier orden", () => {
+    expect(names("entero pollo")).toEqual(["Pollo entero x 20 kg"]);
+    expect(names("15 kg")).toEqual(["Pechuga entera x 15 kg", "Alitas x 15 kg"]);
+    expect(names("pollo pechuga")).toEqual([]);
+  });
+
+  it("la tabla trae el buscador y una acción Eliminar por producto", () => {
+    const board = parsePriceBoard({
+      lists: [{ id: "g", name: "General", isDefault: true, active: true }],
+      products: [{ id: "p1", name: "Pollo entero x 20 kg", saleUnit: "UNIT", active: true, prices: { g: { cents: "6599900", since: "2026-11-01" } } }, { id: "p2", name: "Alitas x 15 kg", saleUnit: "UNIT", active: true, prices: {} }]
+    });
+    const html = renderToStaticMarkup(<PoultryProductsBoard lists={board.lists} products={board.products} timeZone="UTC" />);
+    expect(html).toContain('data-testid="poultry-product-search"');
+    expect(html.match(/data-testid="poultry-product-row"/g)).toHaveLength(2);
+    expect(html.match(/>Eliminar</g)).toHaveLength(2);
+    expect(html).not.toContain("poultry-search-empty");
+  });
+
+  it("sin productos no muestra el buscador sino el estado vacío", () => {
+    const html = renderToStaticMarkup(<PoultryProductsBoard lists={[]} products={[]} timeZone="UTC" />);
+    expect(html).not.toContain("poultry-product-search");
+    expect(html).toContain("Todavía no hay productos de Pollos");
+  });
+});
+
+describe("Eliminar producto", () => {
+  it("cerrado sólo muestra el botón; la confirmación aparece recién al tocarlo", () => {
+    const html = renderToStaticMarkup(<PoultryDeleteProductModal product={product} />);
+    expect(html).toContain(">Eliminar<");
+    expect(html).not.toContain("role=\"dialog\"");
+  });
+});
+
+describe("Lista de precios", () => {
+  it("es un único botón, sin pasos intermedios", () => {
+    const html = renderToStaticMarkup(<PoultryPriceListButton />);
+    expect(html).toContain("Lista de precios");
+    expect(html).not.toContain("role=\"dialog\"");
+  });
+
+  it("avisa lo que no entra con precio por cajón", () => {
+    expect(priceListNotes(0, 0)).toEqual([]);
+    expect(priceListNotes(1, 0)[0]).toContain("1 producto se vende por kg");
+    expect(priceListNotes(2, 3)).toHaveLength(2);
+    expect(priceListNotes(0, 3)[0]).toContain("«Consultar»");
+    expect(priceListNotes(0, 0, true)[0]).toContain("sin logo");
+  });
+});
+
+describe("Imágenes de la lista", () => {
+  const image = { url: "https://example.test/x.png", widthPx: 800, heightPx: 200 };
+
+  it("ofrece primero los logos ya cargados y marca el que está en uso", () => {
+    const html = renderToStaticMarkup(<PoultryPriceListImagesPanel background={null} logoUsed="ARTWORK" logos={{ ARTWORK: image, BUTCHER: image }} />);
+    expect(html).toContain('data-testid="price-list-logo-artwork"');
+    expect(html).toContain('data-testid="price-list-logo-butcher"');
+    expect(html).toContain("En uso");
+    expect(html.match(/>Usar este</g)).toHaveLength(1);
+    expect(html).toContain("Subir otro logo");
+    expect(html).toContain('data-testid="price-list-no-background"');
+    expect(html).not.toContain("Quitar foto");
+  });
+
+  it("sin ningún logo en la aplicación pide subirlo", () => {
+    const html = renderToStaticMarkup(<PoultryPriceListImagesPanel background={image} logoUsed={null} logos={{}} />);
+    expect(html).toContain('data-testid="price-list-no-logo"');
+    expect(html).toContain("Reemplazar foto");
+    expect(html).toContain("Quitar foto");
   });
 });

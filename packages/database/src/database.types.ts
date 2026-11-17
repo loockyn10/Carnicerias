@@ -5043,6 +5043,10 @@ export type Database = {
         }
         Returns: Json
       }
+      delete_poultry_product: {
+        Args: { p_poultry_product_id: string }
+        Returns: Json
+      }
       delete_production_batch: {
         Args: { p_batch_id: string }
         Returns: undefined
@@ -5317,6 +5321,7 @@ export type Database = {
         }
         Returns: Json
       }
+      get_poultry_price_list_settings: { Args: never; Returns: Json }
       get_poultry_profitability: {
         Args: {
           p_customer_id?: string
@@ -6057,6 +6062,7 @@ export type Database = {
       }
       remove_offer_sign_butcher_logo: { Args: never; Returns: Json }
       remove_organization_artwork_logo: { Args: never; Returns: Json }
+      remove_poultry_price_list_background: { Args: never; Returns: Json }
       remove_product_artwork_photo: {
         Args: { p_product_id: string }
         Returns: Json
@@ -6567,6 +6573,19 @@ export type Database = {
           p_order_id: string
           p_weights: Json
         }
+        Returns: Json
+      }
+      set_poultry_price_list_image: {
+        Args: {
+          p_height_px: number
+          p_kind: string
+          p_storage_path: string
+          p_width_px: number
+        }
+        Returns: Json
+      }
+      set_poultry_price_list_logo_source: {
+        Args: { p_source: string }
         Returns: Json
       }
       set_poultry_product_cost: {

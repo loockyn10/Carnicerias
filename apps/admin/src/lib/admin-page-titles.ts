@@ -12,6 +12,7 @@ export const adminPageHeaders: Record<string, { title: string; description: stri
   "/admin/transfers": { title: "Distribución", description: "Mover stock ya producido entre sucursales." },
   "/admin/poultry": { title: "Pollos", description: "Cajones de pollo: pedidos para entregar y lo vendido en el período." },
   "/admin/poultry/prices": { title: "Pollos · Precios", description: "Costos y listas de precios con historial de vigencias." },
+  "/admin/poultry/price-list": { title: "Pollos · Imágenes de la lista", description: "Logo y foto de fondo de la lista de precios descargable." },
   "/admin/poultry/customers": { title: "Pollos · Clientes", description: "Clientes de cajones, su lista de precios y sus pedidos." },
   "/admin/poultry/orders": { title: "Pollos · Pedidos", description: "De pendiente a entregado, con precio y costo históricos." },
   "/admin/poultry/profitability": { title: "Pollos · Rentabilidad", description: "Facturación, costo histórico, ganancia y margen." },

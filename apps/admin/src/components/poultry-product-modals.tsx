@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
-import { addPoultryProductAction, savePoultryProductSettingsAction, searchPoultryCandidatesAction, type PoultryFormState } from "../app/admin/poultry/actions";
+import { addPoultryProductAction, deletePoultryProductAction, savePoultryProductSettingsAction, searchPoultryCandidatesAction, type PoultryFormState } from "../app/admin/poultry/actions";
 import type { ProductCreateProps } from "../lib/product-create-props";
 import { parseCandidates, POULTRY_SALE_UNIT_LABELS, type PoultryCandidate, type PoultryProductRow, type PoultrySaleUnit } from "../lib/poultry";
 import { fieldInput, fieldLabel, FormModal, optionalHint } from "./form-modal";
@@ -113,5 +113,25 @@ export function PoultryProductSettingsModal({ product }: { product: PoultryProdu
     <SaleFields onSaleUnit={setSaleUnit} referenceKg={product.referenceWeightGrams ? String(product.referenceWeightGrams / 1000).replace(".", ",") : ""} requiresWeight={product.requiresWeight} saleUnit={saleUnit} />
     <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" type="checkbox" /> Activo en Pollos <span className={optionalHint}>(desmarcalo para quitarlo de Pollos: los pedidos históricos se conservan)</span></label>
     <p className="text-xs text-stone-500">La modalidad no se puede cambiar cuando el producto ya tiene costos, precios o pedidos.</p>
+  </FormModal>;
+}
+
+/**
+ * «Eliminar» un producto de Pollos, con confirmación. El servidor decide (D-100): sin historia borra la configuración de Pollos; con costos,
+ * precios o pedidos lo elimina lógicamente. En ningún caso se borra el producto del catálogo general ni se modifica un pedido.
+ */
+export function PoultryDeleteProductModal({ product }: { product: Pick<PoultryProductRow, "id" | "name"> }) {
+  return <FormModal
+    action={deletePoultryProductAction}
+    description="Deja de aparecer en el listado de Pollos, en Nuevo pedido y en la lista de precios. Los pedidos, costos y precios anteriores se conservan sin cambios, y el producto sigue existiendo en el catálogo general."
+    pendingLabel="Eliminando…"
+    submitClassName="rounded-lg bg-red-700 px-4 py-2 text-sm font-bold text-white hover:bg-red-800 disabled:opacity-60"
+    submitLabel="Eliminar"
+    title={`¿Eliminar «${product.name}» de Pollos?`}
+    triggerClassName="rounded-lg border border-red-200 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-50"
+    triggerLabel="Eliminar"
+  >
+    <input name="poultry_product_id" type="hidden" value={product.id} />
+    <p className="text-sm text-stone-600">Si más adelante lo necesitás, volvé a agregarlo con «+ Agregar producto».</p>
   </FormModal>;
 }

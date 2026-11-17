@@ -2,6 +2,16 @@
 
 Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
+## P0 — Pollos: eliminar producto y lista de precios PNG (acción del usuario)
+
+Implementado 2026-11-17 (D-100). **Migraciones pendientes, en este orden: `202611170103_poultry_product_delete.sql` y `202611170104_poultry_price_list_images.sql`** (aditivas: columna `deleted_at`, tabla `poultry_price_list_settings`, RPC nuevas y 4 funciones re-creadas con su cuerpo vigente + el filtro de eliminados): `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin.
+
+1. Pollos → Precios → «Imágenes de la lista»: comprobar que aparece el logo de SUPER OFERTAS ya cargado en Cartelería (si no, subirlo en PNG transparente) y subir una foto de productos avícolas **sin textos ni precios** como fondo.
+2. «Lista de precios»: abrir el PNG en el celular, compararlo con `docs/referencias/lista-superofertas.jpg` y cada precio con la columna «Precio General»; mandarlo por WhatsApp para ver la legibilidad.
+3. Pollos → Precios: escribir parte de un nombre sin acentos ni mayúsculas en el buscador; borrar el texto y ver todos.
+4. «Eliminar» un producto con pedidos: deja de verse en Precios, Nuevo pedido y la lista PNG; sus pedidos y la Rentabilidad no cambian. Volver a agregarlo desde «+ Agregar producto» lo restaura.
+5. Confirmar las decisiones no pedidas: los productos **por kg** no entran en la lista por cajón (se avisa), un producto sin precio General figura como «Consultar», y sin logo cargado la franja queda vacía (se avisa).
+
 ## P0 — Control horario: anular el fichaje de OTRO en Janssen (acción del usuario)
 
 Implementado 2026-11-16 (D-099). **Migración pendiente: `202611160102_void_employee_shifts.sql`** (aditiva; re-crea 8 funciones con su cuerpo vigente + el filtro de anulados): `supabase db push --dry-run` → `supabase db push` → desplegar el Admin. Es posterior a `202611140100/101`, que van antes. Después `pnpm db:types` (comparar con la edición manual) y, con Docker, `pnpm db:reset && pnpm db:test`.
@@ -78,7 +88,7 @@ Implementado 2026-11-07 (D-091). **Migración pendiente: `202611070095_vacuum_po
 
 ## P0 — Pollos y Envasados: aplicar y probar (acción del usuario)
 
-Implementado 2026-11-01 (D-089, D-090). **Migraciones pendientes, en este orden: `202611010092_poultry_module.sql`, `202611010093_vacuum_packaging.sql` y `202611060094_poultry_products_link_catalog.sql`** (esta última vincula los productos de Pollos al catálogo general) (tablas nuevas `poultry_*` y `*_vacuum_*`, permisos `poultry.*` y `vacuum.*` para el rol de administración, RPC; no modifican datos existentes ni el POS). Orden: `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin → `git push`. Después `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
+Implementado 2026-11-01 (D-089, D-090). Migraciones `202611010092`, `202611010093` y `202611060094` **ya aplicadas en el remoto** (verificado el 2026-11-17 con `supabase migration list --linked`). Pendiente `pnpm db:types` (comparar con la edición manual de `database.types.ts`).
 
 1. Pollos → Precios → «+ Agregar producto»: buscar «cajón pollo» en el catálogo (o «Crear producto nuevo»), elegir «Por cajón», cargar costo `$42.000`, precio General `$48.000` y una lista «Mayorista» `$46.000`; cambiar el costo a `$45.000` y ver ambos en Historial.
 2. Pollos → Clientes: crear un cliente con la lista Mayorista y otro con precio especial; Pedidos → Nuevo pedido: el precio de cada línea debe ser el del cliente. Entregar un pedido (con peso real si es por kg) y comprobar que cambiar después el costo/precio NO altera su ganancia (Rentabilidad).

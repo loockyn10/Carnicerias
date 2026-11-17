@@ -2,6 +2,11 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## Pollos: buscador, eliminar producto y «Lista de precios» PNG — implementado 2026-11-17 (D-100; migraciones `202611170103` y `202611170104` **sin aplicar**)
+
+- Pollos → Precios: buscador en vivo del listado, acción «Eliminar» con confirmación (física sin historia, lógica con historia) y botón «Lista de precios» que descarga `Carnicerias_Fran_Lista_Pollos_AAAA-MM-DD.png` con los productos activos por cajón y su precio General vigente, con la plantilla de la lista de SUPER OFERTAS. Pollos → Precios → «Imágenes de la lista»: logo (reutiliza los de Cartelería o uno propio) y foto de fondo, guardados por organización.
+- Validado: pgTAP en PGlite `poultry_product_delete` 31/31, `poultry_price_list_images` 37/37, `poultry_module` 160/160 (mutaciones detectadas), `pnpm check`, build del Admin y recorrido en el navegador contra un backend falso con las migraciones reales y Storage (buscar, eliminar con pedido histórico intacto, reutilizar el logo existente, subir logo y fondo, quitar fondo, descarga y reintento). **No validado:** contra Supabase real, con el logo y la foto reales de Fran, ni la descarga en el celular.
+
 ## Control horario: anular fichajes incorrectos y tope del costo laboral — implementado 2026-11-16 (D-099; migración `202611160102` **sin aplicar**)
 
 - Admin → Horas trabajadas ahora permite «Anular fichaje» (motivo + confirmación): se conserva en el historial pero no suma horas ni costo de personal, y el Resultado operativo de la sucursal se recalcula solo (el costo se calcula al consultar). Las fichadas no confirmadas (abiertas o con salida inferida por latido) cuentan como máximo `max_shift_hours` en el costo hasta que se corrijan o anulen.

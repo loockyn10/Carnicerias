@@ -1,6 +1,7 @@
 import { priceForWeight } from "@carnicerias/business-logic";
 
 import { isIsoDate } from "./date-range";
+import { normalizeSearchText } from "./text-search";
 import { isUuid } from "./uuid";
 import { asArray, asRecord, bool, cents, centsOrNull, int, intOrNull, str, strOrNull } from "./rpc-json";
 
@@ -148,6 +149,19 @@ export function parsePriceBoard(value: unknown): PoultryPriceBoard {
       };
     })
   };
+}
+
+/**
+ * Buscador del listado de Pollos: por nombre, sin distinguir mayúsculas ni acentos; cada palabra escrita tiene que aparecer (en cualquier
+ * orden: «entero pollo» encuentra «Pollo entero x 20 kg»). Vacío = todos.
+ */
+export function filterPoultryProducts<T extends { name: string }>(products: T[], query: string): T[] {
+  const words = normalizeSearchText(query).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return products;
+  return products.filter((product) => {
+    const name = normalizeSearchText(product.name);
+    return words.every((word) => name.includes(word));
+  });
 }
 
 export interface PoultryPriceHistory {
