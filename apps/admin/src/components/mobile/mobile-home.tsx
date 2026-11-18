@@ -2,10 +2,12 @@ import Link from "next/link";
 
 import { MOBILE_TASKS } from "../../lib/mobile-nav";
 import { MobileMoreButton } from "./mobile-more-sheet";
+import { MobilePriceListButton } from "./mobile-price-list-button";
 
 /**
  * Inicio del celular: sólo las 4 tareas, grandes, con ícono, título y UNA frase. Quien abre la app sin conocer el sistema tiene que entender al instante qué
- * tocar. Todo lo demás está en «Más». (El escritorio conserva su panel: esta pantalla sólo se ve debajo de `lg`.)
+ * tocar. Todo lo demás está en «Más». (El escritorio conserva su panel: esta pantalla sólo se ve debajo de `lg`.) Debajo, el botón «Descargar
+ * lista de precios Pollos» (D-102): no pide nada al abrir el Inicio, sólo al tocarlo.
  */
 export function MobileHome({ organizationName }: { organizationName: string }) {
   return <div className="mobile-screen mx-auto w-full max-w-md px-4 pb-10 pt-[max(1.5rem,env(safe-area-inset-top))] lg:hidden" data-testid="mobile-home">
@@ -17,6 +19,7 @@ export function MobileHome({ organizationName }: { organizationName: string }) {
         <span className="min-w-0"><span className="block text-xl font-black leading-tight">{task.title}</span><span className="mt-1 block text-base leading-snug text-stone-600">{task.description}</span></span>
       </Link>)}
     </nav>
+    <div className="mt-4"><MobilePriceListButton /></div>
     <div className="mt-8 flex justify-center"><MobileMoreButton className="min-h-12 rounded-xl px-5 text-base font-bold text-stone-600 active:bg-stone-200">Más opciones</MobileMoreButton></div>
   </div>;
 }

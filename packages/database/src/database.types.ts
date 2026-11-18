@@ -6233,6 +6233,7 @@ export type Database = {
           p_active?: boolean
           p_category?: string
           p_poultry_product_id: string
+          p_price_list_name?: string
           p_reference_weight_grams?: number
           p_requires_weight?: boolean
           p_sale_unit: Database["public"]["Enums"]["unit_type"]

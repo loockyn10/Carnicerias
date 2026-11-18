@@ -1336,7 +1336,7 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 
 ## D-101 — Pollos: categoría (Pollo / Congelados) y número de orden manual
 
-**Status:** Active — implementado 2026-11-17; migración `202611170105` **sin aplicar** (va después de 103 y 104). No toca precios, pedidos, `products` ni el POS.
+**Status:** Active — implementado 2026-11-17; migración `202611170105` aplicada (dry-run del 2026-11-18). No toca precios, pedidos, `products` ni el POS.
 
 - **Datos:** `poultry_products.category` (`POLLO` | `CONGELADOS`, fijas, sin administrador de categorías) y `sort_order` (entero 1..99999, **no único**, independiente por categoría). Existentes: categoría POLLO y números 1..n por organización en el orden en que se veían (activos primero, nombre, id; eliminados al final), sin auditoría ni `updated_at` del relleno.
 - **Orden** del tablero de Precios y de la lista PNG: categoría (Pollo primero) → número → nombre → id. Dos productos con el mismo número se ven los dos.
@@ -1345,3 +1345,14 @@ Cada paquete queda como **snapshot inmutable** (corte, peso, precio/kg, importe,
 - **Fuera de alcance:** Nuevo pedido y la ficha del cliente siguen ordenando por nombre.
 
 **Motivo:** que Fran ordene la lista como la vende y la separe en pollo fresco y congelados, igual que la lista de SUPER OFERTAS.
+
+## D-102 — Pollos: «Nombre para lista de precios», descarga desde el celular y consumo del generador
+
+**Status:** Active — implementado 2026-11-18; migración `202611180106` **sin aplicar**. No toca `products`, el POS, pedidos, costos, precios ni la historia.
+
+- **Nombre para lista de precios:** `poultry_products.price_list_name` (opcional, hasta 80 caracteres, sin espacios sobrantes; vacío = NULL). Se edita en «Configurar» (`save_poultry_product_settings`, `poultry.write`; sin el parámetro la base lo conserva). Sólo lo usa la lista PNG: con contenido se dibuja tal cual (sin agregar cantidades ni sufijos), si no el nombre original. El Admin sigue mostrando el nombre original; categoría y número de orden no cambian (el desempate por nombre usa el original). Un nombre largo baja de renglón como cualquier otro.
+- **Celular:** el Inicio de la PWA (el mismo Admin instalado, debajo de `lg`) tiene el botón «Descargar lista de precios Pollos». Usa la misma ruta (`POST /api/poultry/price-list`, sesión + rol administrador + `poultry.read`) y la misma lógica de cliente (`usePoultryPriceListDownload`) que el botón de Pollos: con los mismos datos sale el mismo PNG (byte a byte). Android/escritorio: descarga directa. iPhone/iPad: hoja de compartir del sistema con el archivo (Guardar imagen, WhatsApp); si el sistema pide otro toque, el botón pasa a «Guardar…» con el PNG ya generado, sin volver a pedirlo. Un toque repetido mientras genera no hace otro pedido.
+- **Generación en el servidor (se mantiene):** pasarla al navegador obligaría a bajar Satori + resvg (WASM) y ~1 MB de fuentes a cada celular, con riesgo de diferencias de dibujo; el servidor ya garantiza precios leídos con la sesión y un único resultado.
+- **Consumo por descarga:** 1 POST a Vercel; en Supabase, la sesión/membresía, 2 RPC frescas (tablero y configuración de imágenes) y el logo y el fondo sólo si esa instancia de la función no los tiene en memoria (`priceListImageCache`: clave = ruta inmutable, tope 24 MB, nunca datos comerciales). Nada se pide al abrir el Inicio, sin polling ni precarga; no se guarda el PNG en Storage; respuesta `no-store` y en streaming (el tope de 4,5 MB de Vercel no aplica; 200 productos con foto ≈ 4,1 MB).
+
+**Motivo:** que Fran configure una vez los nombres comerciales y descargue la lista actualizada desde el celular con un toque, sin repetir el consumo de la cartelería de TV.

@@ -5,10 +5,18 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { addPoultryProductAction, deletePoultryProductAction, savePoultryProductSettingsAction, searchPoultryCandidatesAction, type PoultryFormState } from "../app/admin/poultry/actions";
 import type { ProductCreateProps } from "../lib/product-create-props";
 import {
-  parseCandidates, POULTRY_CATEGORIES, POULTRY_CATEGORY_LABELS, POULTRY_SALE_UNIT_LABELS, type PoultryCandidate, type PoultryCategory, type PoultryProductRow, type PoultrySaleUnit
+  parseCandidates, POULTRY_CATEGORIES, POULTRY_CATEGORY_LABELS, POULTRY_PRICE_LIST_NAME_MAX, POULTRY_SALE_UNIT_LABELS, type PoultryCandidate, type PoultryCategory, type PoultryProductRow, type PoultrySaleUnit
 } from "../lib/poultry";
 import { fieldInput, fieldLabel, FormModal, optionalHint } from "./form-modal";
 import { ProductCreateModal } from "./product-create-modal";
+
+/** «Nombre para lista de precios» (D-102): opcional, sólo para el PNG; el nombre original del producto no cambia. Vacío = el original. */
+export function PriceListNameField({ product }: { product: Pick<PoultryProductRow, "name" | "priceListName"> }) {
+  return <label className={fieldLabel}>Nombre para lista de precios <span className={optionalHint}>opcional</span>
+    <input className={fieldInput} data-testid="poultry-price-list-name" defaultValue={product.priceListName ?? ""} maxLength={POULTRY_PRICE_LIST_NAME_MAX} name="price_list_name" placeholder={product.name} />
+    <span className={optionalHint}>Este nombre se utilizará únicamente en la lista de precios PNG. Si se deja vacío, se mostrará el nombre original del producto.</span>
+  </label>;
+}
 
 interface Selected { productId: string; name: string; sku: string | null; unitType: PoultrySaleUnit }
 
@@ -124,6 +132,7 @@ export function PoultryProductSettingsModal({ product }: { product: PoultryProdu
   >
     <input name="poultry_product_id" type="hidden" value={product.id} />
     <CategoryField defaultValue={product.category} hint="Si la cambiás, el producto pasa al final de la nueva categoría." />
+    <PriceListNameField product={product} />
     <SaleFields onSaleUnit={setSaleUnit} referenceKg={product.referenceWeightGrams ? String(product.referenceWeightGrams / 1000).replace(".", ",") : ""} requiresWeight={product.requiresWeight} saleUnit={saleUnit} />
     <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" type="checkbox" /> Activo en Pollos <span className={optionalHint}>(desmarcalo para quitarlo de Pollos: los pedidos históricos se conservan)</span></label>
     <p className="text-xs text-stone-500">La modalidad no se puede cambiar cuando el producto ya tiene costos, precios o pedidos.</p>

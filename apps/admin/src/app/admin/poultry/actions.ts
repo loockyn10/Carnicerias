@@ -7,7 +7,7 @@ import { requireAdminContext } from "../../../lib/admin";
 import { friendlyDbError } from "../../../lib/db-errors";
 import { kilogramsToGrams, optionalId, pesosToCents, text } from "../../../lib/form-parsing";
 import { localDateTimeToIso } from "../../../lib/local-datetime";
-import { isPoultryCategory, isPoultryStatus, orderRpcItems, parseOrderInput, POULTRY_SORT_ORDER_MAX } from "../../../lib/poultry";
+import { isPoultryCategory, isPoultryStatus, orderRpcItems, parseOrderInput, POULTRY_PRICE_LIST_NAME_MAX, POULTRY_SORT_ORDER_MAX } from "../../../lib/poultry";
 import { createClient } from "../../../lib/supabase/server";
 import { isUuid } from "../../../lib/uuid";
 
@@ -60,6 +60,17 @@ function category(formData: FormData): { p_category: string } {
   return { p_category: value };
 }
 
+/**
+ * «Nombre para lista de precios» (D-102). Sin el campo en el formulario no se manda (la base lo conserva); vacío lo quita. La base lo
+ * normaliza y valida (hasta 80 caracteres).
+ */
+function priceListName(formData: FormData): { p_price_list_name?: string } {
+  if (formData.get("price_list_name") === null) return {};
+  const value = text(formData, "price_list_name").replace(/\s+/g, " ");
+  if (value.length > POULTRY_PRICE_LIST_NAME_MAX) throw new Error(`El nombre para la lista de precios puede tener hasta ${String(POULTRY_PRICE_LIST_NAME_MAX)} caracteres`);
+  return { p_price_list_name: value };
+}
+
 /** Busca en el catálogo general (server-side: nombre, SKU o código de barras) los productos que se pueden asociar a Pollos. */
 export async function searchPoultryCandidatesAction(search: string): Promise<{ data: Json } | { error: string }> {
   try {
@@ -83,7 +94,7 @@ export async function savePoultryProductSettingsAction(_: PoultryFormState, form
   try {
     const id = text(formData, "poultry_product_id");
     if (!isUuid(id)) throw new Error("Producto inválido");
-    await rpc("save_poultry_product_settings", { p_poultry_product_id: id, ...saleSettings(formData), p_active: formData.get("active") === "on", ...category(formData) });
+    await rpc("save_poultry_product_settings", { p_poultry_product_id: id, ...saleSettings(formData), p_active: formData.get("active") === "on", ...category(formData), ...priceListName(formData) });
     return done();
   } catch (error) { return failure(error, "No se pudo guardar el producto"); }
 }

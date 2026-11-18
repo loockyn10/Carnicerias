@@ -69,6 +69,9 @@ export function isPoultryCategory(value: unknown): value is PoultryCategory {
 /** Número de orden válido: entero de 1 a 99999 (lo mismo que acepta la base). */
 export const POULTRY_SORT_ORDER_MAX = 99999;
 
+/** Largo máximo del «Nombre para lista de precios» (lo mismo que acepta la base, D-102). */
+export const POULTRY_PRICE_LIST_NAME_MAX = 80;
+
 /** «12» → 12. Sólo dígitos (sin signo, decimales ni exponentes) y dentro de 1..99999; cualquier otra cosa → null. */
 export function parseSortOrderInput(raw: string): number | null {
   const value = raw.trim();
@@ -159,6 +162,8 @@ export interface PoultryProductRow {
   category: PoultryCategory;
   /** Posición manual dentro de la categoría (1 = primero; puede repetirse). */
   sortOrder: number;
+  /** Nombre que usa SÓLO la «Lista de precios» PNG (D-102); null = se usa `name`. */
+  priceListName: string | null;
   costCents: bigint | null;
   costSince: string | null;
   /** Precio vigente por lista (clave = id de lista). */
@@ -166,6 +171,12 @@ export interface PoultryProductRow {
 }
 
 export interface PoultryPriceBoard { lists: PoultryPriceList[]; products: PoultryProductRow[] }
+
+/** Texto opcional: sin espacios en los bordes; vacío o ausente → null. */
+function trimmedOrNull(value: unknown): string | null {
+  const trimmed = strOrNull(value)?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
+}
 
 export function parsePriceBoard(value: unknown): PoultryPriceBoard {
   const record = asRecord(value);
@@ -185,6 +196,7 @@ export function parsePriceBoard(value: unknown): PoultryPriceBoard {
         id: str(row.id), catalogProductId: strOrNull(row.catalogProductId), sku: strOrNull(row.sku), name: str(row.name), saleUnit: saleUnit(row.saleUnit), requiresWeight: bool(row.requiresWeight),
         referenceWeightGrams: intOrNull(row.referenceWeightGrams), active: bool(row.active),
         category: isPoultryCategory(row.category) ? row.category : "POLLO", sortOrder: intOrNull(row.sortOrder) ?? POULTRY_SORT_ORDER_MAX,
+        priceListName: trimmedOrNull(row.priceListName),
         costCents: centsOrNull(row.costCents), costSince: strOrNull(row.costSince), prices
       };
     })

@@ -7,7 +7,7 @@ import { readImageInfo } from "./image-size";
 import { parsePriceBoard, type PoultryPriceBoard } from "./poultry";
 import {
   buildPoultryPriceListModel, fitLogo, formatListPrice, L, layoutPoultryPriceList, listTextWidth, localDate, PRICE_LIST_NO_PRICE, PRICE_LIST_SECTIONS, PRICE_LIST_WIDTH,
-  priceListFilename, PriceListError, priceListProductCount, sanitizeListText, wrapListText, type PoultryPriceListModel, type PriceListRow
+  priceListFilename, PriceListError, priceListProductCount, priceListRowName, sanitizeListText, wrapListText, type PoultryPriceListModel, type PriceListRow
 } from "./poultry-price-list";
 import { executePoultryPriceList, imageDataUrl, renderPoultryPriceListPng, type PriceListDeps } from "./poultry-price-list-png";
 import { makePng } from "./test-support/artwork-fixtures";
@@ -49,6 +49,36 @@ describe("modelo de la lista de precios de Pollos", () => {
       ["Alitas x 15 kg", 4199900n], ["Pata muslo x 15 kg", 4799900n], ["Pechuga entera x 15 kg", 7699900n], ["Pollo entero x 20 kg", 6599900n]
     ]);
     expect(rowsOf(model).map((row) => formatListPrice(row.priceCents))).toEqual(["$41.999", "$47.999", "$76.999", "$65.999"]);
+  });
+
+  it("usa el «Nombre para lista de precios» cuando existe y el nombre original cuando no (D-102)", () => {
+    const model = buildPoultryPriceListModel(board([
+      product("1", "Gallina", "6199900", { priceListName: "Gallina X 20kg", sortOrder: 2 }),
+      product("2", "Pollo entero", "6599900", { priceListName: null, sortOrder: 1 }),
+      product("3", "Pechuga", "7699900", { priceListName: "   ", sortOrder: 3 }),
+      product("4", "Medallones", "4999900", { priceListName: "Medallones de pollo x 6 kg", category: "CONGELADOS", sortOrder: 1 })
+    ]), "2026-11-18");
+    expect(model.sections.map((section) => [section.title, section.rows.map((row) => row.name)])).toEqual([
+      ["POLLO", ["Pollo entero", "Gallina X 20kg", "Pechuga"]],
+      ["CONGELADOS", ["Medallones de pollo x 6 kg"]]
+    ]);
+    // Sin sufijos agregados, con el precio exacto y sin cambiar categoría ni orden.
+    expect(rowsOf(model).map((row) => row.priceCents)).toEqual([6599900n, 6199900n, 7699900n, 4999900n]);
+    expect(priceListRowName({ name: "Gallina", priceListName: "Gallina X 20kg" })).toBe("Gallina X 20kg");
+    expect(priceListRowName({ name: "Gallina", priceListName: null })).toBe("Gallina");
+  });
+
+  it("un nombre personalizado largo baja de renglón sin pisar el precio", () => {
+    const long = "Gallina extra grande seleccionada de granja X 20kg (cajón cerrado, entrega en el día)";
+    const model = buildPoultryPriceListModel(board([product("1", "Gallina", "10799900", { priceListName: long })]), "2026-11-18");
+    const layout = layoutPoultryPriceList(model);
+    const row = layout.rows[0];
+    if (!row) throw new Error("sin fila");
+    expect(row.lines.length).toBeGreaterThan(1);
+    expect(row.lines.join(" ")).toBe(long);
+    for (const line of row.lines) expect(listTextWidth(line, L.nameSize, "name")).toBeLessThanOrEqual(layout.nameColumnWidth);
+    expect(layout.nameColumnWidth + L.columnGap + layout.priceColumnWidth).toBeLessThanOrEqual(layout.innerWidth);
+    expect(row.price).toBe("$107.999");
   });
 
   it("incluye todos los activos por cajón y excluye inactivos (quitados) y los productos por kg", () => {

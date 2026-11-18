@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,7 +10,7 @@ import {
 import { ADD_POULTRY_PRODUCT_HREF, PoultryEmptyState, PoultryNoProductsNotice } from "./poultry-empty-state";
 import { priceListNotes, PoultryPriceListButton } from "./poultry-price-list-button";
 import { PoultryPriceListImagesPanel } from "./poultry-price-list-images-panel";
-import { PoultryAddProductModal, PoultryDeleteProductModal, PoultryProductSettingsModal } from "./poultry-product-modals";
+import { PoultryAddProductModal, PoultryDeleteProductModal, PoultryProductSettingsModal, PriceListNameField } from "./poultry-product-modals";
 import { PoultryProductsBoard } from "./poultry-products-board";
 
 vi.mock("../app/admin/poultry/actions", () => ({
@@ -30,7 +33,7 @@ vi.mock("../app/admin/poultry/price-list/actions", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 
 const createProps = { categories: [], branches: [], suppliers: [], marginBps: null, excludedCategoryIds: [], productionBranchId: null };
-const product = { id: "p1", catalogProductId: "c1", sku: "CAJ", name: "Cajón pollo entero", saleUnit: "UNIT" as const, requiresWeight: false, referenceWeightGrams: 20_000, active: true, category: "POLLO" as const, sortOrder: 1, costCents: null, costSince: null, prices: {} };
+const product = { id: "p1", catalogProductId: "c1", sku: "CAJ", name: "Cajón pollo entero", saleUnit: "UNIT" as const, requiresWeight: false, referenceWeightGrams: 20_000, active: true, category: "POLLO" as const, sortOrder: 1, priceListName: null, costCents: null, costSince: null, prices: {} };
 
 describe("productos de Pollos (lectura)", () => {
   it("el tablero trae el producto del catálogo y su SKU", () => {
@@ -92,6 +95,28 @@ describe("Agregar producto", () => {
     expect(html).toContain("Configurar");
     const open = renderToStaticMarkup(<PoultryProductSettingsModal product={{ ...product, saleUnit: "WEIGHT" }} />);
     expect(open).not.toContain("Por cajón</option>");
+  });
+
+  it("Configurar ofrece el «Nombre para lista de precios», opcional y con el nombre guardado (D-102)", () => {
+    const html = renderToStaticMarkup(<PriceListNameField product={{ name: "Gallina", priceListName: "Gallina X 20kg" }} />);
+    expect(html).toContain("Nombre para lista de precios");
+    expect(html).toContain("Este nombre se utilizará únicamente en la lista de precios PNG. Si se deja vacío, se mostrará el nombre original del producto.");
+    expect(html).toContain('name="price_list_name"');
+    expect(html).toContain('value="Gallina X 20kg"');
+    expect(html).toContain('maxLength="80"');
+    const source = readFileSync(path.join(__dirname, "poultry-product-modals.tsx"), "utf8");
+    expect(source).toMatch(/PoultryProductSettingsModal[\s\S]*<PriceListNameField product=\{product\} \/>/);
+    const empty = renderToStaticMarkup(<PriceListNameField product={{ name: "Gallina", priceListName: null }} />);
+    expect(empty).toContain('placeholder="Gallina"');
+    expect(empty).toContain('value=""');
+  });
+
+  it("el tablero trae el nombre para la lista, sin espacios y null cuando está vacío", () => {
+    const parse = (priceListName: unknown) => parsePriceBoard({ lists: [], products: [{ id: "p1", name: "Gallina", saleUnit: "UNIT", active: true, prices: {}, priceListName }] }).products[0]?.priceListName;
+    expect(parse("Gallina X 20kg")).toBe("Gallina X 20kg");
+    expect(parse(null)).toBeNull();
+    expect(parse(undefined)).toBeNull();
+    expect(parse("  ")).toBeNull();
   });
 });
 

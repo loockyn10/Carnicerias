@@ -10,7 +10,7 @@ select plan(47);
 select ok(not has_function_privilege('anon', 'public.set_poultry_product_sort_order(uuid, integer)', 'EXECUTE'), 'anonymous cannot set the order');
 select ok(has_function_privilege('authenticated', 'public.set_poultry_product_sort_order(uuid, integer)', 'EXECUTE'), 'authenticated users reach the RPC (the permission is checked inside)');
 select ok(has_function_privilege('authenticated', 'public.add_poultry_product(uuid, public.unit_type, boolean, integer, text)', 'EXECUTE'), 'add takes the category');
-select ok(has_function_privilege('authenticated', 'public.save_poultry_product_settings(uuid, public.unit_type, boolean, integer, boolean, text)', 'EXECUTE'), 'settings take the category');
+select ok(has_function_privilege('authenticated', 'public.save_poultry_product_settings(uuid, public.unit_type, boolean, integer, boolean, text, text)', 'EXECUTE'), 'settings take the category');
 select is((select count(*) from pg_proc where proname in ('add_poultry_product', 'save_poultry_product_settings') and pronamespace = 'public'::regnamespace), 2::bigint, 'no stale overloads remain');
 select ok(not has_function_privilege('authenticated', 'app_private.poultry_next_sort_order(uuid, text, uuid)', 'EXECUTE'), 'the helper is private');
 

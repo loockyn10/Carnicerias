@@ -60,6 +60,15 @@ export function sanitizeListText(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Nombre de un producto en la lista (D-102): el «Nombre para lista de precios» si está configurado; si no, el nombre original. Se usa tal
+ * cual: no se le agregan cantidades, unidades ni sufijos.
+ */
+export function priceListRowName(product: Pick<PoultryPriceBoard["products"][number], "name" | "priceListName">): string {
+  const custom = product.priceListName ? sanitizeListText(product.priceListName) : "";
+  return custom || sanitizeListText(product.name) || product.name;
+}
+
 export function buildPoultryPriceListModel(board: PoultryPriceBoard, date: string): PoultryPriceListModel {
   const general = board.lists.find((list) => list.isDefault);
   if (!general) throw new PriceListError(422, "No se encontró la lista de precios General de Pollos");
@@ -70,7 +79,7 @@ export function buildPoultryPriceListModel(board: PoultryPriceBoard, date: strin
       category,
       title: PRICE_LIST_SECTIONS[category],
       rows: boxes.filter((product) => product.category === category)
-        .map((product) => ({ name: sanitizeListText(product.name) || product.name, priceCents: product.prices[general.id]?.cents ?? null }))
+        .map((product) => ({ name: priceListRowName(product), priceCents: product.prices[general.id]?.cents ?? null }))
     }))
     .filter((section) => section.rows.length > 0);
   const rows = sections.flatMap((section) => section.rows);

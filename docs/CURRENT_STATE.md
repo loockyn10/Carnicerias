@@ -2,7 +2,12 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
-## Pollos: categorías Pollo / Congelados y orden manual — implementado 2026-11-17 (D-101; migración `202611170105` **sin aplicar**)
+## Pollos: «Nombre para lista de precios» y descarga desde el celular — implementado 2026-11-18 (D-102; migración `202611180106` **sin aplicar**)
+
+- «Configurar» de cada producto de Pollos tiene «Nombre para lista de precios» (opcional): la lista PNG lo usa en lugar del nombre original. El Inicio del celular tiene «Descargar lista de precios Pollos», con el mismo generador y la misma lógica que el botón del Admin. El generador guarda en memoria el logo y el fondo (rutas inmutables) y responde en streaming.
+- Validado: pgTAP en PGlite `poultry_price_list_name` 34/34 (14 mutaciones detectadas) y las suites de Pollos 47/160/31/37, `pnpm check`, build del Admin y recorrido en el navegador contra el backend falso (guardar el nombre desde Configurar y verlo tras recargar con el nombre original intacto; abrir el Inicio sin pedidos a Pollos ni Storage; 3 toques = 1 pedido y 1 descarga; segunda descarga sin volver a leer Storage; mismo PNG byte a byte con los mismos datos; un precio nuevo aparece en la siguiente descarga; Storage sin PNG nuevos). **No validado:** contra Supabase real, en un iPhone/Android real ni con la PWA instalada (la hoja de compartir de iPhone se probó sólo con tests).
+
+## Pollos: categorías Pollo / Congelados y orden manual — implementado 2026-11-17 (D-101; migración `202611170105` aplicada)
 
 - Pollos → Precios: columna «Orden» editable en la fila, columna «Categoría», filtro Todos / Pollo / Congelados combinado con el buscador y selector de categoría en «+ Agregar producto» y «Configurar». La «Lista de precios» PNG sale en dos secciones (POLLO y CONGELADOS) en el orden configurado.
 - Validado: pgTAP en PGlite `poultry_product_category_order` 47/47 (16 mutaciones detectadas), relleno sobre datos previos (categoría, números deterministas, datos/`updated_at`/auditoría intactos), suites de Pollos 160/31/37 sin cambios, `pnpm check`, build del Admin y recorrido en el navegador contra el backend falso (editar el orden con Enter y al salir del campo, valor inválido y fallo de la base vuelven al número guardado, cambio de categoría, alta en Congelados con número automático, persistencia al recargar, PNG en vivo con POLLO + CONGELADOS y 13 productos). El filtro Todos / Pollo / Congelados se validó con tests, no con clics. **No validado:** contra Supabase real ni en el celular.
