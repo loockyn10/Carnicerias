@@ -2,7 +2,12 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
-## Pollos: «Nombre para lista de precios» y descarga desde el celular — implementado 2026-11-18 (D-102; migración `202611180106` **sin aplicar**)
+## Promociones: «Descargar promociones Feed (N)» desde el celular — implementado 2026-11-18 (D-103; migración `202611180107` **sin aplicar**)
+
+- Inicio del celular: un toque baja a la galería, de a una (PNG, sin ZIP), las piezas Feed de las promociones nuevas o con importes cambiados desde su última descarga; «Repetir la última tanda». Registro por promoción con la firma de lo dibujado en `promotion_feed_downloads`. Generador de Cartelería sin cambios de diseño.
+- Validado: pgTAP en PGlite `promotion_feed_downloads` 55/55 (22 mutaciones: 19 detectadas, 3 equivalentes), vitest (firmas y pendientes, pieza idéntica a la de una carpeta, cola de 94 con errores/reintentos/registro), `pnpm check`, build del Admin y recorrido en el navegador contra el backend falso con 94 promociones (94 descargas PNG únicas y 1 tanda; sin cambios 0; 10 cambios → 10; 5 + 2 nuevas → 7 con renombre/vigencia sin efecto; precio del producto → pendiente; foto ilegible → no se registra y sigue pendiente; precio cambiado antes/después de dibujar; repetir tanda; 35 s sin pedidos; 3 toques = 1 corrida). **No validado:** en el POCO real (permiso de descargas múltiples de Chrome, llegada a la galería, app instalada) ni contra Supabase real.
+
+## Pollos: «Nombre para lista de precios» y descarga desde el celular — implementado 2026-11-18 (D-102; migración `202611180106` aplicada)
 
 - «Configurar» de cada producto de Pollos tiene «Nombre para lista de precios» (opcional): la lista PNG lo usa en lugar del nombre original. El Inicio del celular tiene «Descargar lista de precios Pollos», con el mismo generador y la misma lógica que el botón del Admin. El generador guarda en memoria el logo y el fondo (rutas inmutables) y responde en streaming.
 - Validado: pgTAP en PGlite `poultry_price_list_name` 34/34 (14 mutaciones detectadas) y las suites de Pollos 47/160/31/37, `pnpm check`, build del Admin y recorrido en el navegador contra el backend falso (guardar el nombre desde Configurar y verlo tras recargar con el nombre original intacto; abrir el Inicio sin pedidos a Pollos ni Storage; 3 toques = 1 pedido y 1 descarga; segunda descarga sin volver a leer Storage; mismo PNG byte a byte con los mismos datos; un precio nuevo aparece en la siguiente descarga; Storage sin PNG nuevos). **No validado:** contra Supabase real, en un iPhone/Android real ni con la PWA instalada (la hoja de compartir de iPhone se probó sólo con tests).

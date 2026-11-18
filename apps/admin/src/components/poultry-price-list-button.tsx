@@ -68,7 +68,12 @@ export function deliveryMethod(nav: ShareNavigator, file: File): "share" | "down
   }
 }
 
-function saveWithLink(file: File) {
+/**
+ * Descarga directa (Android con Chrome, la app instalada en Android, computadoras): el archivo va a Descargas y la galería lo muestra.
+ * La URL temporal se libera después de `revokeAfterMs`: una descarga que el navegador deja en espera (p. ej. mientras pregunta si permite
+ * descargar varios archivos, D-103) necesita que siga viva hasta que arranque.
+ */
+export function saveWithLink(file: File, revokeAfterMs = 10_000) {
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
@@ -76,7 +81,7 @@ function saveWithLink(file: File) {
   document.body.append(link);
   link.click();
   link.remove();
-  window.setTimeout(() => { URL.revokeObjectURL(url); }, 10_000);
+  window.setTimeout(() => { URL.revokeObjectURL(url); }, revokeAfterMs);
 }
 
 function errorName(error: unknown): string {

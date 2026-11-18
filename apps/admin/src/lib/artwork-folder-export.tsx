@@ -82,12 +82,17 @@ export interface GeneratedPiece {
   png: Uint8Array | null;
 }
 
-function modelFor(facts: FolderFacts, item: FolderItemFacts, headline: string, branding: OfferArtworkModel["branding"], imageUrl: string | null): OfferArtworkModel {
+/** La pieza «Producto protagonista» de UN elemento ya resuelto (carpetas y, D-103, la descarga Feed de las promociones). */
+export function folderItemModel(branchName: string | null, item: FolderItemFacts, headline: string, branding: OfferArtworkModel["branding"], imageUrl: string | null): OfferArtworkModel {
   if (!item.offer) throw new ArtworkExportError(422, "La oferta no se puede armar");
   return {
-    type: "HERO", headline, branch: facts.branchName ? { name: facts.branchName } : null, branding,
+    type: "HERO", headline, branch: branchName ? { name: branchName } : null, branding,
     items: [{ ...slideToItemBase(item.productId, item.offer), imageTransparent: item.photo?.hasAlpha === true, imageUrl }]
   };
+}
+
+function modelFor(facts: FolderFacts, item: FolderItemFacts, headline: string, branding: OfferArtworkModel["branding"], imageUrl: string | null): OfferArtworkModel {
+  return folderItemModel(facts.branchName, item, headline, branding, imageUrl);
 }
 
 /** Lee una foto (con tope de pedidos en paralelo) y la deja como data-URL validada por sus bytes. */

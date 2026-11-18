@@ -5410,6 +5410,10 @@ export type Database = {
         }
         Returns: Json
       }
+      get_promotion_feed_state: {
+        Args: { p_last_batch?: boolean; p_promotion_ids?: string[] }
+        Returns: Json
+      }
       get_replenishment_plan: {
         Args: { p_days?: number }
         Returns: {
@@ -6019,6 +6023,10 @@ export type Database = {
       record_label_print_run: {
         Args: { p_group_id: string; p_items: Json }
         Returns: Json
+      }
+      record_promotion_feed_downloads: {
+        Args: { p_batch_id: string; p_items: Json }
+        Returns: number
       }
       record_shift_heartbeat: {
         Args: {

@@ -167,7 +167,8 @@ function stateOf(raw: JsonRecord, promotionActive: boolean | null): FolderItemSt
   return "READY";
 }
 
-function parseItemFacts(raw: unknown, now: Date): FolderItemFacts | null {
+/** Un elemento resuelto por `signage_resolve_entries` (carpetas y, D-103, la descarga Feed de las promociones) → hechos + oferta del motor. */
+export function parseItemFacts(raw: unknown, now: Date): FolderItemFacts | null {
   if (!isRecord(raw)) return null;
   const itemId = asString(raw.entryId);
   const productId = asString(raw.productId);

@@ -4,7 +4,9 @@ Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
 ## P0 — Pollos: eliminar producto y lista de precios PNG (acción del usuario)
 
-Implementado 2026-11-17/18 (D-100, D-101, D-102). 103, 104 y 105 ya están aplicadas (dry-run del 2026-11-18). **Migración pendiente: `202611180106_poultry_price_list_name.sql`** (aditiva: columna `price_list_name` y `save_poultry_product_settings` / `get_poultry_price_board` re-creadas con su cuerpo vigente): `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin (el Admin nuevo manda `p_price_list_name`, que la base sin 106 no conoce).
+Implementado 2026-11-17/18 (D-100 a D-103). 103 a 106 ya están aplicadas (dry-run del 2026-11-18). **Migración pendiente: `202611180107_promotion_feed_downloads.sql`** (aditiva: tabla `promotion_feed_downloads` y dos RPC nuevas; no re-crea nada existente): `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin (el Inicio del celular la consulta para mostrar N).
+
+000. Promociones Feed en el POCO: abrir la app instalada, tocar «Descargar promociones Feed (N)», tocar «Permitir» si Chrome pregunta por varios archivos, esperar el final y contar en la galería; volver a tocar (debe decir «Promociones actualizadas»); cambiar un precio y ver que N = 1. Si Chrome se bloqueó: ⋮ → Configuración → Configuración de sitios → Descargas automáticas → permitir el sitio, y «Repetir la última tanda».
 
 00. Nombre para lista y celular: en «Configurar» de Gallina escribir «Gallina X 20kg», guardar, recargar y ver que el listado sigue diciendo «Gallina»; desde el Inicio del celular tocar «Descargar lista de precios Pollos» en Android (Chrome y la app instalada) y en iPhone (Safari y la app instalada: se abre la hoja de compartir → «Guardar imagen»); comparar con la descarga del Admin.
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { MOBILE_TASKS } from "../../lib/mobile-nav";
 import { MobileMoreButton } from "./mobile-more-sheet";
@@ -7,9 +8,10 @@ import { MobilePriceListButton } from "./mobile-price-list-button";
 /**
  * Inicio del celular: sólo las 4 tareas, grandes, con ícono, título y UNA frase. Quien abre la app sin conocer el sistema tiene que entender al instante qué
  * tocar. Todo lo demás está en «Más». (El escritorio conserva su panel: esta pantalla sólo se ve debajo de `lg`.) Debajo, el botón «Descargar
- * lista de precios Pollos» (D-102): no pide nada al abrir el Inicio, sólo al tocarlo.
+ * lista de precios Pollos» (D-102): no pide nada al abrir el Inicio, sólo al tocarlo. Y «Descargar promociones Feed (N)» (D-103), que la
+ * página arma del lado servidor (`promotionFeed`) para traer N sin pedidos desde el celular.
  */
-export function MobileHome({ organizationName }: { organizationName: string }) {
+export function MobileHome({ organizationName, promotionFeed = null }: { organizationName: string; promotionFeed?: ReactNode }) {
   return <div className="mobile-screen mx-auto w-full max-w-md px-4 pb-10 pt-[max(1.5rem,env(safe-area-inset-top))] lg:hidden" data-testid="mobile-home">
     <p className="text-center text-xs font-black uppercase tracking-[0.22em] text-stone-500">{organizationName}</p>
     <h1 className="mt-3 text-center text-3xl font-black tracking-tight">¿Qué querés hacer?</h1>
@@ -20,6 +22,7 @@ export function MobileHome({ organizationName }: { organizationName: string }) {
       </Link>)}
     </nav>
     <div className="mt-4"><MobilePriceListButton /></div>
+    {promotionFeed ? <div className="mt-4">{promotionFeed}</div> : null}
     <div className="mt-8 flex justify-center"><MobileMoreButton className="min-h-12 rounded-xl px-5 text-base font-bold text-stone-600 active:bg-stone-200">Más opciones</MobileMoreButton></div>
   </div>;
 }
