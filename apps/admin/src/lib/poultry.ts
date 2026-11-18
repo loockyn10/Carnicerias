@@ -56,6 +56,42 @@ function saleUnit(value: unknown): PoultrySaleUnit {
   return value === "WEIGHT" ? "WEIGHT" : "UNIT";
 }
 
+/** Categorías de Pollos (fijas, D-101), en el orden en que se listan: primero Pollo, después Congelados. */
+export const POULTRY_CATEGORIES = ["POLLO", "CONGELADOS"] as const;
+export type PoultryCategory = (typeof POULTRY_CATEGORIES)[number];
+
+export const POULTRY_CATEGORY_LABELS: Record<PoultryCategory, string> = { POLLO: "Pollo", CONGELADOS: "Congelados" };
+
+export function isPoultryCategory(value: unknown): value is PoultryCategory {
+  return typeof value === "string" && (POULTRY_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** Número de orden válido: entero de 1 a 99999 (lo mismo que acepta la base). */
+export const POULTRY_SORT_ORDER_MAX = 99999;
+
+/** «12» → 12. Sólo dígitos (sin signo, decimales ni exponentes) y dentro de 1..99999; cualquier otra cosa → null. */
+export function parseSortOrderInput(raw: string): number | null {
+  const value = raw.trim();
+  if (!/^\d{1,5}$/.test(value)) return null;
+  const parsed = Number(value);
+  return parsed >= 1 && parsed <= POULTRY_SORT_ORDER_MAX ? parsed : null;
+}
+
+/** Orden del listado y de la lista de precios: categoría (Pollo primero), número de orden, nombre y, por último, id (estable). */
+export function comparePoultryProducts(
+  a: { category: PoultryCategory; sortOrder: number; name: string; id: string },
+  b: { category: PoultryCategory; sortOrder: number; name: string; id: string }
+): number {
+  return POULTRY_CATEGORIES.indexOf(a.category) - POULTRY_CATEGORIES.indexOf(b.category)
+    || a.sortOrder - b.sortOrder
+    || a.name.localeCompare(b.name, "es", { sensitivity: "base", numeric: true })
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+export function sortPoultryProducts<T extends { category: PoultryCategory; sortOrder: number; name: string; id: string }>(products: readonly T[]): T[] {
+  return [...products].sort(comparePoultryProducts);
+}
+
 export const PAYMENT_METHODS = ["CASH", "TRANSFER", "DEBIT", "CREDIT", "OTHER"] as const;
 export type PoultryPaymentMethod = (typeof PAYMENT_METHODS)[number];
 export const PAYMENT_METHOD_LABELS: Record<PoultryPaymentMethod, string> = {
@@ -120,6 +156,9 @@ export interface PoultryProductRow {
   requiresWeight: boolean;
   referenceWeightGrams: number | null;
   active: boolean;
+  category: PoultryCategory;
+  /** Posición manual dentro de la categoría (1 = primero; puede repetirse). */
+  sortOrder: number;
   costCents: bigint | null;
   costSince: string | null;
   /** Precio vigente por lista (clave = id de lista). */
@@ -144,11 +183,19 @@ export function parsePriceBoard(value: unknown): PoultryPriceBoard {
       }
       return {
         id: str(row.id), catalogProductId: strOrNull(row.catalogProductId), sku: strOrNull(row.sku), name: str(row.name), saleUnit: saleUnit(row.saleUnit), requiresWeight: bool(row.requiresWeight),
-        referenceWeightGrams: intOrNull(row.referenceWeightGrams), active: bool(row.active), costCents: centsOrNull(row.costCents),
-        costSince: strOrNull(row.costSince), prices
+        referenceWeightGrams: intOrNull(row.referenceWeightGrams), active: bool(row.active),
+        category: isPoultryCategory(row.category) ? row.category : "POLLO", sortOrder: intOrNull(row.sortOrder) ?? POULTRY_SORT_ORDER_MAX,
+        costCents: centsOrNull(row.costCents), costSince: strOrNull(row.costSince), prices
       };
     })
   };
+}
+
+export type PoultryCategoryFilter = "ALL" | PoultryCategory;
+
+/** Filtro «Todos / Pollo / Congelados» del listado (se combina con el buscador). */
+export function filterPoultryByCategory<T extends { category: PoultryCategory }>(products: T[], filter: PoultryCategoryFilter): T[] {
+  return filter === "ALL" ? products : products.filter((product) => product.category === filter);
 }
 
 /**

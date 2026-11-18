@@ -4,11 +4,23 @@ import { useActionState, useEffect, useRef, useState } from "react";
 
 import { addPoultryProductAction, deletePoultryProductAction, savePoultryProductSettingsAction, searchPoultryCandidatesAction, type PoultryFormState } from "../app/admin/poultry/actions";
 import type { ProductCreateProps } from "../lib/product-create-props";
-import { parseCandidates, POULTRY_SALE_UNIT_LABELS, type PoultryCandidate, type PoultryProductRow, type PoultrySaleUnit } from "../lib/poultry";
+import {
+  parseCandidates, POULTRY_CATEGORIES, POULTRY_CATEGORY_LABELS, POULTRY_SALE_UNIT_LABELS, type PoultryCandidate, type PoultryCategory, type PoultryProductRow, type PoultrySaleUnit
+} from "../lib/poultry";
 import { fieldInput, fieldLabel, FormModal, optionalHint } from "./form-modal";
 import { ProductCreateModal } from "./product-create-modal";
 
 interface Selected { productId: string; name: string; sku: string | null; unitType: PoultrySaleUnit }
+
+/** Categoría de Pollos (Pollo / Congelados): define la sección de la lista de precios y el grupo del listado. */
+function CategoryField({ defaultValue, hint }: { defaultValue: PoultryCategory; hint: string }) {
+  return <label className={fieldLabel}>Categoría
+    <select className={fieldInput} data-testid="poultry-category-select" defaultValue={defaultValue} name="category">
+      {POULTRY_CATEGORIES.map((value) => <option key={value} value={value}>{POULTRY_CATEGORY_LABELS[value]}</option>)}
+    </select>
+    <span className={optionalHint}>{hint}</span>
+  </label>;
+}
 
 function SaleFields({ saleUnit, onSaleUnit, referenceKg, requiresWeight }: { saleUnit: PoultrySaleUnit; onSaleUnit: (value: PoultrySaleUnit) => void; referenceKg: string; requiresWeight: boolean }) {
   return <>
@@ -69,6 +81,7 @@ export function PoultryAddProductModal({ createProps, defaultOpen = false, label
         {selected ? <form action={formAction} className="mt-5 grid gap-3">
           <input name="product_id" type="hidden" value={selected.productId} />
           <div className="rounded-lg bg-stone-50 p-3"><p className="text-xs font-bold uppercase tracking-wider text-stone-500">Producto</p><p className="text-lg font-black">{selected.name}</p>{selected.sku ? <p className="text-xs text-stone-500">SKU {selected.sku}</p> : null}</div>
+          <CategoryField defaultValue="POLLO" hint="Se agrega al final de su categoría; el orden se cambia después desde el listado." />
           <SaleFields onSaleUnit={setSaleUnit} referenceKg="" requiresWeight={false} saleUnit={saleUnit} />
           {state.error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{state.error}</p> : null}
           <div className="mt-2 flex justify-between gap-2">
@@ -110,6 +123,7 @@ export function PoultryProductSettingsModal({ product }: { product: PoultryProdu
     triggerLabel="Configurar"
   >
     <input name="poultry_product_id" type="hidden" value={product.id} />
+    <CategoryField defaultValue={product.category} hint="Si la cambiás, el producto pasa al final de la nueva categoría." />
     <SaleFields onSaleUnit={setSaleUnit} referenceKg={product.referenceWeightGrams ? String(product.referenceWeightGrams / 1000).replace(".", ",") : ""} requiresWeight={product.requiresWeight} saleUnit={saleUnit} />
     <label className="flex items-center gap-2 text-sm"><input defaultChecked={product.active} name="active" type="checkbox" /> Activo en Pollos <span className={optionalHint}>(desmarcalo para quitarlo de Pollos: los pedidos históricos se conservan)</span></label>
     <p className="text-xs text-stone-500">La modalidad no se puede cambiar cuando el producto ya tiene costos, precios o pedidos.</p>

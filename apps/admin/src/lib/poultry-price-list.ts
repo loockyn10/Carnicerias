@@ -1,7 +1,7 @@
 import { formatCurrency } from "@carnicerias/business-logic";
 
 import type { GlyphWidths } from "./artwork-metrics";
-import type { PoultryPriceBoard } from "./poultry";
+import { POULTRY_CATEGORIES, sortPoultryProducts, type PoultryCategory, type PoultryPriceBoard } from "./poultry";
 import { PRICE_LIST_SANS_800_ITALIC_WIDTHS, PRICE_LIST_SERIF_400_WIDTHS, PRICE_LIST_SERIF_700_ITALIC_WIDTHS, PRICE_LIST_SERIF_700_WIDTHS } from "./price-list-font-metrics";
 
 /**
@@ -15,18 +15,24 @@ import { PRICE_LIST_SANS_800_ITALIC_WIDTHS, PRICE_LIST_SERIF_400_WIDTHS, PRICE_L
  *   - sólo productos de Pollos activos (los quitados y eliminados no vienen o vienen inactivos);
  *   - los productos «Por kg» NO entran: su precio General es por kilo, no por cajón (se informan como omitidos);
  *   - un producto por cajón sin precio General no se omite: se muestra «Consultar» (y se informa).
+ *
+ * Secciones (D-101): primero POLLO y después CONGELADOS, cada una en el orden configurado en el listado (número de orden, nombre, id).
+ * Una categoría sin productos activos por cajón no muestra su encabezado.
  */
 
 export const PRICE_LIST_TITLE = "LISTA DE PRECIOS";
 export const PRICE_LIST_SUBTITLE = "Precio por cajón";
-export const PRICE_LIST_SECTION = "POLLO";
+export const PRICE_LIST_SECTIONS: Record<PoultryCategory, string> = { POLLO: "POLLO", CONGELADOS: "CONGELADOS" };
 export const PRICE_LIST_FOOTER = "TRABAJAMOS CON TODOS LOS MEDIOS DE PAGO.";
 export const PRICE_LIST_NO_PRICE = "Consultar";
 
 export interface PriceListRow { name: string; priceCents: bigint | null }
 
+export interface PriceListSection { category: PoultryCategory; title: string; rows: PriceListRow[] }
+
 export interface PoultryPriceListModel {
-  rows: PriceListRow[];
+  /** Secciones con productos, en orden (POLLO, CONGELADOS). Nunca hay una sección vacía. */
+  sections: PriceListSection[];
   /** Productos activos «Por kg»: no tienen precio por cajón y no se listan. */
   omittedByWeight: number;
   /** Productos por cajón sin precio General vigente (se listan como «Consultar»). */
@@ -58,11 +64,22 @@ export function buildPoultryPriceListModel(board: PoultryPriceBoard, date: strin
   const general = board.lists.find((list) => list.isDefault);
   if (!general) throw new PriceListError(422, "No se encontró la lista de precios General de Pollos");
   const active = board.products.filter((product) => product.active);
-  const boxes = active.filter((product) => product.saleUnit === "UNIT");
-  const rows = boxes
-    .map((product) => ({ name: sanitizeListText(product.name) || product.name, priceCents: product.prices[general.id]?.cents ?? null }))
-    .sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base", numeric: true }));
-  return { rows, omittedByWeight: active.length - boxes.length, missingPrice: rows.filter((row) => row.priceCents === null).length, date };
+  const boxes = sortPoultryProducts(active.filter((product) => product.saleUnit === "UNIT"));
+  const sections = POULTRY_CATEGORIES
+    .map((category) => ({
+      category,
+      title: PRICE_LIST_SECTIONS[category],
+      rows: boxes.filter((product) => product.category === category)
+        .map((product) => ({ name: sanitizeListText(product.name) || product.name, priceCents: product.prices[general.id]?.cents ?? null }))
+    }))
+    .filter((section) => section.rows.length > 0);
+  const rows = sections.flatMap((section) => section.rows);
+  return { sections, omittedByWeight: active.length - boxes.length, missingPrice: rows.filter((row) => row.priceCents === null).length, date };
+}
+
+/** Cantidad total de productos de la lista (todas las secciones). */
+export function priceListProductCount(model: Pick<PoultryPriceListModel, "sections">): number {
+  return model.sections.reduce((total, section) => total + section.rows.length, 0);
 }
 
 /** «$65.999» (o «$65.999,50» si el precio registrado tiene centavos): el importe exacto de la base, en pesos argentinos. */
@@ -159,6 +176,9 @@ export const L = {
   priceSize: 23,
   rowMinHeight: 34,
   separator: 2,
+  /** Encabezado de las secciones siguientes («CONGELADOS»): misma letra y color que «POLLO», alineado con los nombres, sin línea abajo. */
+  sectionHeadHeight: 34,
+  sectionHeadGap: 4,
   columnGap: 12,
   cardPadBottom: 10,
   footerHeight: 76,
@@ -168,6 +188,8 @@ export const L = {
 
 export interface PriceListRowLayout { y: number; height: number; lines: string[]; price: string; hasPrice: boolean }
 
+export interface PriceListHeadingLayout { y: number; height: number; title: string }
+
 export interface PriceListLayout {
   width: number;
   height: number;
@@ -175,6 +197,11 @@ export interface PriceListLayout {
   /** Posiciones verticales relativas a `card.y`. */
   titleY: number;
   subRowY: number;
+  /** Título de la primera sección: va en la pastilla amarilla, junto a «Precio por cajón». */
+  pillTitle: string;
+  /** Encabezados de las secciones siguientes, entre sus filas. */
+  headings: PriceListHeadingLayout[];
+  /** Todas las filas de productos, de todas las secciones, en orden. */
   rows: PriceListRowLayout[];
   innerX: number;
   innerWidth: number;
@@ -187,23 +214,33 @@ export interface PriceListLayout {
 /**
  * Diagrama la lista como la referencia: franja chica, tabla angosta y alta, renglones compactos. Cada fila mide lo que su nombre necesita
  * (un nombre largo baja a otro renglón, nunca se achica ni se corta); el alto total sale de la cantidad de productos, sin estirar filas.
+ * La primera sección usa la pastilla; cada sección siguiente agrega su encabezado («CONGELADOS») antes de sus filas, como en la referencia.
  */
-export function layoutPoultryPriceList(model: Pick<PoultryPriceListModel, "rows">): PriceListLayout {
+export function layoutPoultryPriceList(model: Pick<PoultryPriceListModel, "sections">): PriceListLayout {
   const innerX = L.cardX + L.cardBorder + L.cardPadX;
   const innerWidth = L.cardWidth - (L.cardBorder + L.cardPadX) * 2;
-  const prices = model.rows.map((row) => formatListPrice(row.priceCents));
+  const allRows = model.sections.flatMap((section) => section.rows);
+  const prices = allRows.map((row) => formatListPrice(row.priceCents));
   const priceColumnWidth = Math.ceil(Math.max(listTextWidth("$000.000", L.priceSize, "price"), ...prices.map((price) => listTextWidth(price, L.priceSize, "price"))));
   const nameColumnWidth = innerWidth - priceColumnWidth - L.columnGap;
 
   const titleY = L.cardBorder + L.titleTop;
   const subRowY = titleY + L.titleLine + 2;
   let y = subRowY + L.subRowHeight + L.rowsGap;
-  const rows: PriceListRowLayout[] = model.rows.map((row, index) => {
-    const lines = wrapListText(row.name, L.nameSize, nameColumnWidth, "name");
-    const height = Math.max(L.rowMinHeight, lines.length * L.nameLine + (L.rowMinHeight - L.nameLine));
-    const layout = { y, height, lines, price: prices[index] ?? PRICE_LIST_NO_PRICE, hasPrice: row.priceCents !== null };
-    y += height;
-    return layout;
+  const rows: PriceListRowLayout[] = [];
+  const headings: PriceListHeadingLayout[] = [];
+  model.sections.forEach((section, sectionIndex) => {
+    if (sectionIndex > 0) {
+      y += L.sectionHeadGap;
+      headings.push({ y, height: L.sectionHeadHeight, title: section.title });
+      y += L.sectionHeadHeight;
+    }
+    for (const row of section.rows) {
+      const lines = wrapListText(row.name, L.nameSize, nameColumnWidth, "name");
+      const height = Math.max(L.rowMinHeight, lines.length * L.nameLine + (L.rowMinHeight - L.nameLine));
+      rows.push({ y, height, lines, price: prices[rows.length] ?? PRICE_LIST_NO_PRICE, hasPrice: row.priceCents !== null });
+      y += height;
+    }
   });
   const footerTop = L.cardTop + y + L.cardPadBottom;
   let footerSize: number = L.footerSize;
@@ -214,7 +251,8 @@ export function layoutPoultryPriceList(model: Pick<PoultryPriceListModel, "rows"
     height: footerTop + L.footerHeight,
     // La tabla sigue por debajo del pie (como en la referencia, el pie la tapa): sin borde inferior visible.
     card: { x: L.cardX, y: L.cardTop, width: L.cardWidth, height: footerTop - L.cardTop + L.cardRadius },
-    titleY, subRowY, rows, innerX, innerWidth, nameColumnWidth, priceColumnWidth, footerTop, footerSize
+    titleY, subRowY, pillTitle: model.sections[0]?.title ?? PRICE_LIST_SECTIONS.POLLO, headings, rows,
+    innerX, innerWidth, nameColumnWidth, priceColumnWidth, footerTop, footerSize
   };
 }
 

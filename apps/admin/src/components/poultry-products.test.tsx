@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { filterPoultryProducts, hasActivePoultryProducts, parseCandidates, parsePriceBoard } from "../lib/poultry";
+import {
+  filterPoultryByCategory, filterPoultryProducts, hasActivePoultryProducts, parseCandidates, parsePriceBoard, parseSortOrderInput, sortPoultryProducts
+} from "../lib/poultry";
 import { ADD_POULTRY_PRODUCT_HREF, PoultryEmptyState, PoultryNoProductsNotice } from "./poultry-empty-state";
 import { priceListNotes, PoultryPriceListButton } from "./poultry-price-list-button";
 import { PoultryPriceListImagesPanel } from "./poultry-price-list-images-panel";
@@ -15,7 +17,8 @@ vi.mock("../app/admin/poultry/actions", () => ({
   savePoultryPricesAction: () => Promise.resolve({}),
   savePoultryPriceListAction: () => Promise.resolve({}),
   getPoultryPriceHistoryAction: () => Promise.resolve({ data: {} }),
-  searchPoultryCandidatesAction: () => Promise.resolve({ data: [] })
+  searchPoultryCandidatesAction: () => Promise.resolve({ data: [] }),
+  setPoultryProductSortOrderAction: () => Promise.resolve({ ok: true, sortOrder: 1 })
 }));
 vi.mock("../app/admin/actions", () => ({ createProductModalAction: () => Promise.resolve({}) }));
 vi.mock("../app/admin/poultry/price-list/actions", () => ({
@@ -27,7 +30,7 @@ vi.mock("../app/admin/poultry/price-list/actions", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 
 const createProps = { categories: [], branches: [], suppliers: [], marginBps: null, excludedCategoryIds: [], productionBranchId: null };
-const product = { id: "p1", catalogProductId: "c1", sku: "CAJ", name: "Cajón pollo entero", saleUnit: "UNIT" as const, requiresWeight: false, referenceWeightGrams: 20_000, active: true, costCents: null, costSince: null, prices: {} };
+const product = { id: "p1", catalogProductId: "c1", sku: "CAJ", name: "Cajón pollo entero", saleUnit: "UNIT" as const, requiresWeight: false, referenceWeightGrams: 20_000, active: true, category: "POLLO" as const, sortOrder: 1, costCents: null, costSince: null, prices: {} };
 
 describe("productos de Pollos (lectura)", () => {
   it("el tablero trae el producto del catálogo y su SKU", () => {
@@ -129,6 +132,51 @@ describe("buscador de productos", () => {
     const html = renderToStaticMarkup(<PoultryProductsBoard lists={[]} products={[]} timeZone="UTC" />);
     expect(html).not.toContain("poultry-product-search");
     expect(html).toContain("Todavía no hay productos de Pollos");
+  });
+});
+
+describe("orden y categorías", () => {
+  const row = (id: string, name: string, category: string, sortOrder: number) => ({ id, name, saleUnit: "UNIT", active: true, category, sortOrder, prices: {} });
+
+  it("el tablero trae la categoría y el número de orden (una categoría desconocida cae en Pollo)", () => {
+    const board = parsePriceBoard({ lists: [], products: [row("a", "Medallones", "CONGELADOS", 3), { id: "b", name: "Viejo", saleUnit: "UNIT", active: true, category: "OTRA", prices: {} }] });
+    expect(board.products[0]).toMatchObject({ category: "CONGELADOS", sortOrder: 3 });
+    expect(board.products[1]?.category).toBe("POLLO");
+  });
+
+  it("ordena por categoría (Pollo primero), número (numérico, no alfabético), nombre e id", () => {
+    const board = parsePriceBoard({ lists: [], products: [
+      row("c1", "Medallones", "CONGELADOS", 1), row("p10", "Pechuga", "POLLO", 10), row("p2", "Pata muslo", "POLLO", 2),
+      row("p2b", "Alitas", "POLLO", 2), row("z", "Alitas", "POLLO", 2), row("c0", "Hamburguesas", "CONGELADOS", 1)
+    ] });
+    expect(sortPoultryProducts(board.products).map((product) => product.id)).toEqual(["p2b", "z", "p2", "p10", "c0", "c1"]);
+  });
+
+  it("el número de orden acepta sólo enteros positivos", () => {
+    expect(parseSortOrderInput("3")).toBe(3);
+    expect(parseSortOrderInput(" 12 ")).toBe(12);
+    expect(parseSortOrderInput("99999")).toBe(99999);
+    for (const invalid of ["", "0", "-1", "1.5", "1,5", "1e3", "abc", "100000", "+4"]) expect(parseSortOrderInput(invalid)).toBeNull();
+  });
+
+  it("el filtro de categoría se combina con el buscador", () => {
+    const products = parsePriceBoard({ lists: [], products: [row("a", "Chorizos de pollo", "POLLO", 1), row("b", "Chorizos de cerdo", "CONGELADOS", 1), row("c", "Alitas", "POLLO", 2)] }).products;
+    expect(filterPoultryByCategory(products, "ALL")).toHaveLength(3);
+    expect(filterPoultryProducts(filterPoultryByCategory(products, "POLLO"), "chorizos").map((product) => product.id)).toEqual(["a"]);
+    expect(filterPoultryProducts(filterPoultryByCategory(products, "CONGELADOS"), "chorizos").map((product) => product.id)).toEqual(["b"]);
+    expect(filterPoultryProducts(filterPoultryByCategory(products, "CONGELADOS"), "alitas")).toEqual([]);
+  });
+
+  it("la tabla muestra Orden editable, la categoría y el filtro Todos / Pollo / Congelados, en el orden configurado", () => {
+    const board = parsePriceBoard({ lists: [], products: [row("c", "Medallones", "CONGELADOS", 1), row("b", "Pechuga", "POLLO", 10), row("a", "Pata muslo", "POLLO", 9)] });
+    const html = renderToStaticMarkup(<PoultryProductsBoard lists={board.lists} products={board.products} timeZone="UTC" />);
+    expect(html).toContain(">Orden</th>");
+    expect(html).toContain(">Categoría</th>");
+    expect([...html.matchAll(/data-testid="poultry-sort-order"[^>]*value="(\d+)"/g)].map((match) => match[1])).toEqual(["9", "10", "1"]);
+    expect([...html.matchAll(/data-testid="poultry-product-category">([^<]+)</g)].map((match) => match[1])).toEqual(["Pollo", "Pollo", "Congelados"]);
+    expect(html).toContain('data-testid="poultry-category-filter-all"');
+    expect(html).toMatch(/Pollo <span[^>]*>\(2\)/);
+    expect(html).toMatch(/Congelados <span[^>]*>\(1\)/);
   });
 });
 

@@ -4,7 +4,9 @@ Sólo trabajo próximo. Eliminar cada tarea al completarla.
 
 ## P0 — Pollos: eliminar producto y lista de precios PNG (acción del usuario)
 
-Implementado 2026-11-17 (D-100). **Migraciones pendientes, en este orden: `202611170103_poultry_product_delete.sql` y `202611170104_poultry_price_list_images.sql`** (aditivas: columna `deleted_at`, tabla `poultry_price_list_settings`, RPC nuevas y 4 funciones re-creadas con su cuerpo vigente + el filtro de eliminados): `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin.
+Implementado 2026-11-17 (D-100, D-101). `202611170103` y `202611170104` ya están aplicadas (dry-run del 2026-11-17). **Migración pendiente: `202611170105_poultry_product_category_order.sql`** (aditiva: columnas `category` y `sort_order`, RPC `set_poultry_product_sort_order` y funciones re-creadas con su cuerpo vigente): `supabase db push --dry-run` → `supabase db push` **antes** de desplegar el Admin (el Admin nuevo manda `p_category`, que la base sin 105 no conoce).
+
+0. Categorías y orden: pasar a «Congelados» (Configurar) los productos congelados, numerar desde la columna «Orden» (Enter o salir del campo), recargar y ver que se mantiene; filtrar Pollo / Congelados con y sin texto en el buscador; descargar la lista y ver POLLO arriba y CONGELADOS abajo en ese orden.
 
 1. Pollos → Precios → «Imágenes de la lista»: comprobar que aparece el logo de SUPER OFERTAS ya cargado en Cartelería (si no, subirlo en PNG transparente) y subir una foto de productos avícolas **sin textos ni precios** como fondo.
 2. «Lista de precios»: abrir el PNG en el celular, compararlo con `docs/referencias/lista-superofertas.jpg` y cada precio con la columna «Precio General»; mandarlo por WhatsApp para ver la legibilidad.

@@ -3,8 +3,8 @@ import { ImageResponse } from "next/og";
 import { readImageInfo } from "./image-size";
 import { parsePriceBoard } from "./poultry";
 import {
-  buildPoultryPriceListModel, fitLogo, L, layoutPoultryPriceList, localDate, PRICE_LIST_FOOTER, PRICE_LIST_SECTION, PRICE_LIST_SUBTITLE, PRICE_LIST_TITLE,
-  priceListFilename, PriceListError, type PoultryPriceListModel, type PriceListLayout
+  buildPoultryPriceListModel, fitLogo, L, layoutPoultryPriceList, localDate, PRICE_LIST_FOOTER, PRICE_LIST_SUBTITLE, PRICE_LIST_TITLE,
+  priceListFilename, PriceListError, priceListProductCount, type PoultryPriceListModel, type PriceListLayout
 } from "./poultry-price-list";
 import { parsePriceListSettings, type PriceListImageRef } from "./poultry-price-list-images";
 import {
@@ -15,7 +15,7 @@ import {
 /**
  * PNG de la «Lista de precios» de Pollos (D-100), lado servidor, con la plantilla de la lista SUPER OFERTAS: franja amarilla con el logo,
  * fotografía de fondo, tabla blanca con marco verde y esquinas superiores redondeadas, «LISTA DE PRECIOS», pastilla «POLLO», «Precio por
- * cajón», nombres en serif a la izquierda, precios en negrita cursiva a la derecha, separadores negros y pie amarillo de medios de pago.
+ * cajón», encabezado verde «CONGELADOS» para la segunda sección, nombres en serif a la izquierda, precios en negrita cursiva a la derecha, separadores negros y pie amarillo de medios de pago.
  *
  * Productos y precios se leen con la sesión del usuario (`get_poultry_price_board`); logo y fondo son los configurados en Pollos → Imágenes
  * de la lista (`get_poultry_price_list_settings`, bucket privado `product-artwork`). Fuentes embebidas (Gelasio + Open Sans): nada se
@@ -59,9 +59,12 @@ export function PoultryPriceListArtwork({ layout, images }: { layout: PriceListL
     <div style={at(card.x, card.y, { width: card.width, height: card.height, backgroundColor: C.card, border: `${String(L.cardBorder)}px solid ${C.green}`, borderRadius: `${String(L.cardRadius)}px ${String(L.cardRadius)}px 0 0` })} />
     <div style={at(layout.innerX, card.y + layout.titleY, { width: layout.innerWidth, height: L.titleLine, alignItems: "center", justifyContent: "center", fontSize: L.titleSize, fontWeight: 700, color: C.ink, letterSpacing: 0.5 })}>{PRICE_LIST_TITLE}</div>
     <div style={at(layout.innerX, card.y + layout.subRowY, { width: layout.innerWidth, height: L.subRowHeight, alignItems: "center", justifyContent: "space-between" })}>
-      <div style={{ display: "flex", alignItems: "center", height: L.subRowHeight, padding: `0 ${String(L.pillPadX)}px`, borderRadius: L.subRowHeight / 2, backgroundColor: C.yellow, color: C.green, fontSize: L.pillSize, fontWeight: 700, letterSpacing: 1 }}>{PRICE_LIST_SECTION}</div>
+      <div style={{ display: "flex", alignItems: "center", height: L.subRowHeight, padding: `0 ${String(L.pillPadX)}px`, borderRadius: L.subRowHeight / 2, backgroundColor: C.yellow, color: C.green, fontSize: L.pillSize, fontWeight: 700, letterSpacing: 1 }}>{layout.pillTitle}</div>
       <div style={{ display: "flex", paddingRight: 4, color: C.green, fontFamily: PRICE_LIST_SANS_FAMILY, fontSize: L.subtitleSize, fontWeight: 800, fontStyle: "italic" }}>{PRICE_LIST_SUBTITLE}</div>
     </div>
+
+    {/* Encabezados de las secciones siguientes («CONGELADOS»): la letra y el verde de «POLLO», alineados con los nombres, como en la referencia. */}
+    {layout.headings.map((heading) => <div data-testid="price-list-heading" key={`h-${heading.title}`} style={at(layout.innerX, card.y + heading.y, { width: layout.innerWidth, height: heading.height, alignItems: "center", paddingLeft: 2, color: C.green, fontSize: L.pillSize, fontWeight: 700, letterSpacing: 1 })}>{heading.title}</div>)}
 
     {layout.rows.map((row, index) => <div data-testid="price-list-row" key={`row-${String(index)}`} style={at(layout.innerX, card.y + row.y, { width: layout.innerWidth, height: row.height, alignItems: "center", justifyContent: "space-between", borderBottom: `${String(L.separator)}px solid ${C.line}` })}>
       <div style={{ display: "flex", flexDirection: "column", width: layout.nameColumnWidth, paddingLeft: 2 }}>
@@ -135,7 +138,8 @@ async function loadImage(deps: PriceListDeps, ref: PriceListImageRef | null, lab
 export async function executePoultryPriceList(deps: PriceListDeps): Promise<PriceListResult> {
   const [boardData, settingsData] = await Promise.all([deps.getBoard(), deps.getSettings()]);
   const model = buildPoultryPriceListModel(parsePriceBoard(boardData), localDate((deps.now ?? (() => new Date()))(), deps.timeZone));
-  if (model.rows.length === 0) {
+  const products = priceListProductCount(model);
+  if (products === 0) {
     throw new PriceListError(422, model.omittedByWeight > 0
       ? "No hay productos de Pollos activos por cajón: los productos por kg no llevan precio por cajón."
       : "No hay productos de Pollos activos para armar la lista.");
@@ -145,6 +149,6 @@ export async function executePoultryPriceList(deps: PriceListDeps): Promise<Pric
   const { png, layout } = await renderPoultryPriceListPng(model, { logo, background: background ? { src: background.src } : null });
   return {
     png, filename: priceListFilename(model.date), width: layout.width, height: layout.height,
-    products: model.rows.length, omittedByWeight: model.omittedByWeight, missingPrice: model.missingPrice, hasLogo: logo !== null
+    products, omittedByWeight: model.omittedByWeight, missingPrice: model.missingPrice, hasLogo: logo !== null
   };
 }

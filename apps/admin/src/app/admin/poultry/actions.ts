@@ -7,7 +7,7 @@ import { requireAdminContext } from "../../../lib/admin";
 import { friendlyDbError } from "../../../lib/db-errors";
 import { kilogramsToGrams, optionalId, pesosToCents, text } from "../../../lib/form-parsing";
 import { localDateTimeToIso } from "../../../lib/local-datetime";
-import { isPoultryStatus, orderRpcItems, parseOrderInput } from "../../../lib/poultry";
+import { isPoultryCategory, isPoultryStatus, orderRpcItems, parseOrderInput, POULTRY_SORT_ORDER_MAX } from "../../../lib/poultry";
 import { createClient } from "../../../lib/supabase/server";
 import { isUuid } from "../../../lib/uuid";
 
@@ -53,6 +53,13 @@ function saleSettings(formData: FormData) {
   return { p_sale_unit: saleUnit, p_requires_weight: formData.get("requires_weight") === "on", ...(reference ? { p_reference_weight_grams: kilogramsToGrams(reference) } : {}) };
 }
 
+/** Categoría elegida en el formulario (Pollo / Congelados). */
+function category(formData: FormData): { p_category: string } {
+  const value = text(formData, "category");
+  if (!isPoultryCategory(value)) throw new Error("Elegí la categoría: Pollo o Congelados");
+  return { p_category: value };
+}
+
 /** Busca en el catálogo general (server-side: nombre, SKU o código de barras) los productos que se pueden asociar a Pollos. */
 export async function searchPoultryCandidatesAction(search: string): Promise<{ data: Json } | { error: string }> {
   try {
@@ -66,7 +73,7 @@ export async function addPoultryProductAction(_: PoultryFormState, formData: For
   try {
     const productId = text(formData, "product_id");
     if (!isUuid(productId)) throw new Error("Elegí un producto del catálogo");
-    await rpc("add_poultry_product", { p_product_id: productId, ...saleSettings(formData) });
+    await rpc("add_poultry_product", { p_product_id: productId, ...saleSettings(formData), ...category(formData) });
     return done();
   } catch (error) { return failure(error, "No se pudo agregar el producto"); }
 }
@@ -76,9 +83,27 @@ export async function savePoultryProductSettingsAction(_: PoultryFormState, form
   try {
     const id = text(formData, "poultry_product_id");
     if (!isUuid(id)) throw new Error("Producto inválido");
-    await rpc("save_poultry_product_settings", { p_poultry_product_id: id, ...saleSettings(formData), p_active: formData.get("active") === "on" });
+    await rpc("save_poultry_product_settings", { p_poultry_product_id: id, ...saleSettings(formData), p_active: formData.get("active") === "on", ...category(formData) });
     return done();
   } catch (error) { return failure(error, "No se pudo guardar el producto"); }
+}
+
+export type SetPoultrySortOrderResult = { ok: true; sortOrder: number } | { ok: false; error: string };
+
+/**
+ * Número de orden editado en la columna «Orden» del listado (permiso `poultry.write`, lo valida la RPC). Devuelve el valor guardado: la
+ * pantalla sólo lo muestra después de que la base lo confirmó.
+ */
+export async function setPoultryProductSortOrderAction(productId: string, sortOrder: number): Promise<SetPoultrySortOrderResult> {
+  try {
+    if (!isUuid(productId)) throw new Error("Producto inválido");
+    if (!Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > POULTRY_SORT_ORDER_MAX) throw new Error(`El orden tiene que ser un número entero entre 1 y ${String(POULTRY_SORT_ORDER_MAX)}`);
+    const { data } = await rpc("set_poultry_product_sort_order", { p_poultry_product_id: productId, p_sort_order: sortOrder });
+    const saved = typeof data === "object" && data !== null && !Array.isArray(data) ? Number(data.sortOrder) : Number.NaN;
+    if (!Number.isInteger(saved)) throw new Error("No se pudo confirmar el orden guardado");
+    revalidatePath("/admin/poultry", "layout");
+    return { ok: true, sortOrder: saved };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "No se pudo guardar el orden" }; }
 }
 
 /**

@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { readImageInfo } from "./image-size";
 import { parsePriceBoard, type PoultryPriceBoard } from "./poultry";
 import {
-  buildPoultryPriceListModel, fitLogo, formatListPrice, L, layoutPoultryPriceList, listTextWidth, localDate, PRICE_LIST_NO_PRICE, PRICE_LIST_WIDTH,
-  priceListFilename, PriceListError, sanitizeListText, wrapListText, type PoultryPriceListModel
+  buildPoultryPriceListModel, fitLogo, formatListPrice, L, layoutPoultryPriceList, listTextWidth, localDate, PRICE_LIST_NO_PRICE, PRICE_LIST_SECTIONS, PRICE_LIST_WIDTH,
+  priceListFilename, PriceListError, priceListProductCount, sanitizeListText, wrapListText, type PoultryPriceListModel, type PriceListRow
 } from "./poultry-price-list";
 import { executePoultryPriceList, imageDataUrl, renderPoultryPriceListPng, type PriceListDeps } from "./poultry-price-list-png";
 import { makePng } from "./test-support/artwork-fixtures";
@@ -33,6 +33,8 @@ function board(products: unknown[]): PoultryPriceBoard {
   });
 }
 
+const rowsOf = (model: Pick<PoultryPriceListModel, "sections">) => model.sections.flatMap((section) => section.rows);
+
 const REFERENCE = [
   product("1", "Pollo entero x 20 kg", "6599900"),
   product("2", "Pechuga entera x 15 kg", "7699900"),
@@ -43,10 +45,10 @@ const REFERENCE = [
 describe("modelo de la lista de precios de Pollos", () => {
   it("usa exclusivamente el precio vigente de la lista General, tal cual está registrado", () => {
     const model = buildPoultryPriceListModel(board(REFERENCE), "2026-11-17");
-    expect(model.rows.map((row) => [row.name, row.priceCents])).toEqual([
+    expect(rowsOf(model).map((row) => [row.name, row.priceCents])).toEqual([
       ["Alitas x 15 kg", 4199900n], ["Pata muslo x 15 kg", 4799900n], ["Pechuga entera x 15 kg", 7699900n], ["Pollo entero x 20 kg", 6599900n]
     ]);
-    expect(model.rows.map((row) => formatListPrice(row.priceCents))).toEqual(["$41.999", "$47.999", "$76.999", "$65.999"]);
+    expect(rowsOf(model).map((row) => formatListPrice(row.priceCents))).toEqual(["$41.999", "$47.999", "$76.999", "$65.999"]);
   });
 
   it("incluye todos los activos por cajón y excluye inactivos (quitados) y los productos por kg", () => {
@@ -55,16 +57,55 @@ describe("modelo de la lista de precios de Pollos", () => {
       product("5", "Menudos x 15 kg", "4949900", { active: false }),
       product("6", "Suprema por kg", "900000", { saleUnit: "WEIGHT", requiresWeight: true })
     ]), "2026-11-17");
-    expect(model.rows).toHaveLength(4);
-    expect(model.rows.some((row) => row.name.startsWith("Menudos") || row.name.startsWith("Suprema"))).toBe(false);
+    expect(rowsOf(model)).toHaveLength(4);
+    expect(rowsOf(model).some((row) => row.name.startsWith("Menudos") || row.name.startsWith("Suprema"))).toBe(false);
     expect(model.omittedByWeight).toBe(1);
   });
 
   it("un producto por cajón sin precio General no se omite: dice «Consultar» y se informa", () => {
     const model = buildPoultryPriceListModel(board([...REFERENCE, product("7", "Molida x 20 kg", null)]), "2026-11-17");
-    expect(model.rows).toHaveLength(5);
+    expect(rowsOf(model)).toHaveLength(5);
     expect(model.missingPrice).toBe(1);
-    expect(formatListPrice(model.rows.find((row) => row.name.startsWith("Molida"))?.priceCents ?? null)).toBe(PRICE_LIST_NO_PRICE);
+    expect(formatListPrice(rowsOf(model).find((row) => row.name.startsWith("Molida"))?.priceCents ?? null)).toBe(PRICE_LIST_NO_PRICE);
+  });
+
+  it("arma la sección POLLO y debajo CONGELADOS, cada una en el orden configurado (numérico, desempata el nombre)", () => {
+    const model = buildPoultryPriceListModel(board([
+      product("c2", "Medallones x 6 kg", "5579900", { category: "CONGELADOS", sortOrder: 2 }),
+      product("p10", "Pechuga entera x 15 kg", "7699900", { category: "POLLO", sortOrder: 10 }),
+      product("c1", "Patitas rebozadas x 6 kg", "3899900", { category: "CONGELADOS", sortOrder: 1 }),
+      product("p2", "Pollo entero x 20 kg", "6599900", { category: "POLLO", sortOrder: 2 }),
+      product("p9", "Pata muslo x 15 kg", "4799900", { category: "POLLO", sortOrder: 9 }),
+      product("p2b", "Gallina x 20 kg", "6199900", { category: "POLLO", sortOrder: 2 }),
+      product("cw", "Suprema congelada por kg", "900000", { category: "CONGELADOS", sortOrder: 0, saleUnit: "WEIGHT" }),
+      product("cx", "Milanesas x 5 kg", "3149900", { category: "CONGELADOS", sortOrder: 0, active: false })
+    ]), "2026-11-17");
+    expect(model.sections.map((section) => [section.title, section.rows.map((row) => row.name)])).toEqual([
+      ["POLLO", ["Gallina x 20 kg", "Pollo entero x 20 kg", "Pata muslo x 15 kg", "Pechuga entera x 15 kg"]],
+      ["CONGELADOS", ["Patitas rebozadas x 6 kg", "Medallones x 6 kg"]]
+    ]);
+    expect(rowsOf(model).map((row) => formatListPrice(row.priceCents))).toEqual(["$61.999", "$65.999", "$47.999", "$76.999", "$38.999", "$55.799"]);
+    expect(priceListProductCount(model)).toBe(6);
+  });
+
+  it("una categoría sin productos activos por cajón no aparece (ni su encabezado)", () => {
+    const onlyFrozen = buildPoultryPriceListModel(board([product("c1", "Medallones x 6 kg", "5579900", { category: "CONGELADOS", sortOrder: 1 })]), "2026-11-17");
+    expect(onlyFrozen.sections.map((section) => section.title)).toEqual(["CONGELADOS"]);
+    const layout = layoutPoultryPriceList(onlyFrozen);
+    expect(layout.pillTitle).toBe("CONGELADOS");
+    expect(layout.headings).toEqual([]);
+    const onlyChicken = buildPoultryPriceListModel(board(REFERENCE), "2026-11-17");
+    expect(onlyChicken.sections.map((section) => section.title)).toEqual(["POLLO"]);
+    expect(layoutPoultryPriceList(onlyChicken).headings).toEqual([]);
+  });
+
+  it("incluye TODOS los productos activos, sin límite de 10 ni paginación", () => {
+    const many = Array.from({ length: 37 }, (_, index) => product(`x${String(index)}`, `Producto ${String(index)} x 5 kg`, String(1_000_000 + index),
+      { category: index % 3 === 0 ? "CONGELADOS" : "POLLO", sortOrder: 37 - index }));
+    const model = buildPoultryPriceListModel(board(many), "2026-11-17");
+    expect(priceListProductCount(model)).toBe(37);
+    expect(model.sections.map((section) => section.rows.length)).toEqual([24, 13]);
+    expect(layoutPoultryPriceList(model).rows).toHaveLength(37);
   });
 
   it("formatea en pesos sin redondear los centavos registrados", () => {
@@ -87,14 +128,18 @@ describe("modelo de la lista de precios de Pollos", () => {
   });
 });
 
-function model(rows: number, longEvery = 0): PoultryPriceListModel {
-  return {
-    rows: Array.from({ length: rows }, (_, index) => ({
-      name: longEvery && index % longEvery === 0 ? `Medallones de pollo rellenos con jamón, queso y verduras (premium) x 6 kg n.º ${String(index)}` : `Producto ${String(index)} x 15 kg`,
-      priceCents: index % 7 === 3 ? null : BigInt(1_000_000 + index * 123_400)
-    })),
-    omittedByWeight: 0, missingPrice: 0, date: "2026-11-17"
-  };
+/** `rows` productos; los últimos `frozen` van a una segunda sección CONGELADOS. */
+function model(rows: number, longEvery = 0, frozen = 0): PoultryPriceListModel {
+  const all: PriceListRow[] = Array.from({ length: rows }, (_, index) => ({
+    name: longEvery && index % longEvery === 0 ? `Medallones de pollo rellenos con jamón, queso y verduras (premium) x 6 kg n.º ${String(index)}` : `Producto ${String(index)} x 15 kg`,
+    priceCents: index % 7 === 3 ? null : BigInt(1_000_000 + index * 123_400)
+  }));
+  const chicken = all.slice(0, rows - frozen);
+  const sections = [
+    { category: "POLLO" as const, title: PRICE_LIST_SECTIONS.POLLO, rows: chicken },
+    { category: "CONGELADOS" as const, title: PRICE_LIST_SECTIONS.CONGELADOS, rows: all.slice(rows - frozen) }
+  ].filter((section) => section.rows.length > 0);
+  return { sections, omittedByWeight: 0, missingPrice: 0, date: "2026-11-17" };
 }
 
 describe("diagramación de la lista (proporciones de la referencia)", () => {
@@ -115,22 +160,36 @@ describe("diagramación de la lista (proporciones de la referencia)", () => {
     expect(few.rows.every((row) => row.height === L.rowMinHeight)).toBe(true);
     const many = layoutPoultryPriceList(model(40));
     expect(many.height - few.height).toBe(37 * L.rowMinHeight);
+    // La segunda sección sólo suma su encabezado: las filas no cambian de alto.
+    const split = layoutPoultryPriceList(model(40, 0, 15));
+    expect(split.height - many.height).toBe(L.sectionHeadGap + L.sectionHeadHeight);
+    expect(split.rows.every((row) => row.height === L.rowMinHeight)).toBe(true);
   });
 
-  for (const count of [1, 4, 23, 60]) {
-    it(`con ${String(count)} productos (y nombres largos) nada se corta ni se superpone`, () => {
-      const sample = model(count, 3);
+  for (const [count, frozen] of [[1, 0], [4, 0], [4, 2], [23, 13], [60, 25], [120, 70]] as const) {
+    it(`con ${String(count)} productos (${String(frozen)} congelados, nombres largos) nada se corta ni se superpone`, () => {
+      const sample = model(count, 3, frozen);
       const layout = layoutPoultryPriceList(sample);
       expect(layout.rows).toHaveLength(count);
+      expect(layout.headings.map((heading) => heading.title)).toEqual(frozen > 0 && frozen < count ? ["CONGELADOS"] : []);
+      const blocks = [...layout.rows.map((row) => ({ ...row, heading: false })), ...layout.headings.map((heading) => ({ ...heading, lines: [], price: "", heading: true }))]
+        .sort((a, b) => a.y - b.y);
       let previousBottom = layout.subRowY + L.subRowHeight;
-      for (const row of layout.rows) {
-        expect(row.y).toBeGreaterThanOrEqual(previousBottom);
-        previousBottom = row.y + row.height;
-        expect(row.lines.length * L.nameLine).toBeLessThanOrEqual(row.height);
-        for (const line of row.lines) expect(listTextWidth(line, L.nameSize, "name")).toBeLessThanOrEqual(layout.nameColumnWidth);
-        expect(listTextWidth(row.price, L.priceSize, "price")).toBeLessThanOrEqual(layout.priceColumnWidth);
+      for (const block of blocks) {
+        expect(block.y).toBeGreaterThanOrEqual(previousBottom);
+        previousBottom = block.y + block.height;
+        if (block.heading) continue;
+        expect(block.lines.length * L.nameLine).toBeLessThanOrEqual(block.height);
+        for (const line of block.lines) expect(listTextWidth(line, L.nameSize, "name")).toBeLessThanOrEqual(layout.nameColumnWidth);
+        expect(listTextWidth(block.price, L.priceSize, "price")).toBeLessThanOrEqual(layout.priceColumnWidth);
       }
-      layout.rows.forEach((row, index) => { expect(row.lines.join(" ")).toBe(sample.rows[index]?.name); });
+      // El encabezado CONGELADOS queda justo después de la última fila de POLLO y antes de la primera congelada.
+      const heading = layout.headings[0];
+      if (heading) {
+        expect(heading.y).toBeGreaterThanOrEqual((layout.rows[count - frozen - 1]?.y ?? 0) + (layout.rows[count - frozen - 1]?.height ?? 0));
+        expect(heading.y + heading.height).toBeLessThanOrEqual(layout.rows[count - frozen]?.y ?? 0);
+      }
+      layout.rows.forEach((row, index) => { expect(row.lines.join(" ")).toBe(rowsOf(sample)[index]?.name); });
       expect(layout.card.y + previousBottom).toBeLessThanOrEqual(layout.footerTop);
       expect(layout.footerTop + L.footerHeight).toBe(layout.height);
       expect(layout.nameColumnWidth + L.columnGap + layout.priceColumnWidth).toBe(layout.innerWidth);
@@ -172,7 +231,7 @@ function deps(overrides: Partial<PriceListDeps> = {}): PriceListDeps {
 
 describe("PNG de la lista", () => {
   it("dibuja un PNG con el alto calculado", async () => {
-    const { png, layout } = await renderPoultryPriceListPng(model(30, 5));
+    const { png, layout } = await renderPoultryPriceListPng(model(30, 5, 12));
     expect(isPng(png)).toBe(true);
     expect(readImageInfo(png)).toMatchObject({ width: 1080, height: layout.height });
   }, 60_000);
@@ -214,8 +273,7 @@ describe("PNG de la lista", () => {
     const logo = read(process.env.PRICE_LIST_SAMPLE_LOGO);
     const bg = read(process.env.PRICE_LIST_SAMPLE_BG);
     const images = { logo, background: bg ? { src: bg.src } : null };
-    const reference: PoultryPriceListModel = {
-      rows: [
+    const referenceRows: PriceListRow[] = [
         ["Gallina x 20 kg.", 6199900n], ["Pollo entero x 20 kg. (7,8,9,10)", 6599900n], ["Pechuga entera x 15 kg", 7699900n],
         ["Filet de pechuga (PREMIUM) x 15 kg", 10799900n], ["Pata muslo x 15 kg (grandes)", 4799900n], ["Alitas x 15 kg", 4199900n],
         ["Molida x 15kg", 2499900n], ["Molida x 20kg", 3499900n], ["Menudos x 15 kg", 4949900n], ["Chorizos de pollo x 5 kg", 4299900n],
@@ -223,10 +281,17 @@ describe("PNG de la lista", () => {
         ["Hamburguesas de pollo x 40un.", 3219900n], ["Hamburguesas de cerdo x40 un.", 4599900n], ["Hambur de Carne x 40un. (50% carne +50% cerdo)", 4599900n],
         ["Muslos rellenos (Jamón, queso y verduras) x 10 u.", 3999900n], ["Milanesas de Cerdo x 5kg", 3249900n], ["Milanesas de pollo x 5kg", 3149900n],
         ["Milanesas vacunas x 5kg", 6299900n], ["Chorizos de Cerdo x 5kg", 3499900n], ["Chorizos parrilleros vacunos x 5kg", 3849900n], ["Chorizos de pollo X 5KG", null]
-      ].map(([name, priceCents]) => ({ name: name as string, priceCents: priceCents as bigint | null })),
+      ].map(([name, priceCents]) => ({ name: name as string, priceCents: priceCents as bigint | null }));
+    // Como la referencia: 10 de POLLO y 13 CONGELADOS.
+    const reference: PoultryPriceListModel = {
+      sections: [
+        { category: "POLLO", title: PRICE_LIST_SECTIONS.POLLO, rows: referenceRows.slice(0, 10) },
+        { category: "CONGELADOS", title: PRICE_LIST_SECTIONS.CONGELADOS, rows: referenceRows.slice(10) }
+      ],
       omittedByWeight: 0, missingPrice: 1, date: "2026-11-17"
     };
-    for (const [name, sample] of [["reference", reference], ["few", model(3)], ["many", model(45, 4)]] as const) {
+    const frozenOnly: PoultryPriceListModel = { ...reference, sections: [{ category: "CONGELADOS", title: PRICE_LIST_SECTIONS.CONGELADOS, rows: referenceRows.slice(10, 13) }] };
+    for (const [name, sample] of [["reference", reference], ["few", model(3)], ["frozen-only", frozenOnly], ["many", model(45, 4, 20)]] as const) {
       writeFileSync(path.join(dir, `${name}.png`), (await renderPoultryPriceListPng(sample, images)).png);
       writeFileSync(path.join(dir, `${name}-plain.png`), (await renderPoultryPriceListPng(sample)).png);
     }

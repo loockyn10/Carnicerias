@@ -6231,6 +6231,7 @@ export type Database = {
       save_poultry_product_settings: {
         Args: {
           p_active?: boolean
+          p_category?: string
           p_poultry_product_id: string
           p_reference_weight_grams?: number
           p_requires_weight?: boolean
@@ -6240,6 +6241,7 @@ export type Database = {
       }
       add_poultry_product: {
         Args: {
+          p_category?: string
           p_product_id: string
           p_reference_weight_grams?: number
           p_requires_weight?: boolean
@@ -6586,6 +6588,10 @@ export type Database = {
       }
       set_poultry_price_list_logo_source: {
         Args: { p_source: string }
+        Returns: Json
+      }
+      set_poultry_product_sort_order: {
+        Args: { p_poultry_product_id: string; p_sort_order: number }
         Returns: Json
       }
       set_poultry_product_cost: {

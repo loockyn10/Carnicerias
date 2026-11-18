@@ -2,7 +2,12 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
-## Pollos: buscador, eliminar producto y «Lista de precios» PNG — implementado 2026-11-17 (D-100; migraciones `202611170103` y `202611170104` **sin aplicar**)
+## Pollos: categorías Pollo / Congelados y orden manual — implementado 2026-11-17 (D-101; migración `202611170105` **sin aplicar**)
+
+- Pollos → Precios: columna «Orden» editable en la fila, columna «Categoría», filtro Todos / Pollo / Congelados combinado con el buscador y selector de categoría en «+ Agregar producto» y «Configurar». La «Lista de precios» PNG sale en dos secciones (POLLO y CONGELADOS) en el orden configurado.
+- Validado: pgTAP en PGlite `poultry_product_category_order` 47/47 (16 mutaciones detectadas), relleno sobre datos previos (categoría, números deterministas, datos/`updated_at`/auditoría intactos), suites de Pollos 160/31/37 sin cambios, `pnpm check`, build del Admin y recorrido en el navegador contra el backend falso (editar el orden con Enter y al salir del campo, valor inválido y fallo de la base vuelven al número guardado, cambio de categoría, alta en Congelados con número automático, persistencia al recargar, PNG en vivo con POLLO + CONGELADOS y 13 productos). El filtro Todos / Pollo / Congelados se validó con tests, no con clics. **No validado:** contra Supabase real ni en el celular.
+
+## Pollos: buscador, eliminar producto y «Lista de precios» PNG — implementado 2026-11-17 (D-100; migraciones `202611170103` y `202611170104` aplicadas)
 
 - Pollos → Precios: buscador en vivo del listado, acción «Eliminar» con confirmación (física sin historia, lógica con historia) y botón «Lista de precios» que descarga `Carnicerias_Fran_Lista_Pollos_AAAA-MM-DD.png` con los productos activos por cajón y su precio General vigente, con la plantilla de la lista de SUPER OFERTAS. Pollos → Precios → «Imágenes de la lista»: logo (reutiliza los de Cartelería o uno propio) y foto de fondo, guardados por organización.
 - Validado: pgTAP en PGlite `poultry_product_delete` 31/31, `poultry_price_list_images` 37/37, `poultry_module` 160/160 (mutaciones detectadas), `pnpm check`, build del Admin y recorrido en el navegador contra un backend falso con las migraciones reales y Storage (buscar, eliminar con pedido histórico intacto, reutilizar el logo existente, subir logo y fondo, quitar fondo, descarga y reintento). **No validado:** contra Supabase real, con el logo y la foto reales de Fran, ni la descarga en el celular.
