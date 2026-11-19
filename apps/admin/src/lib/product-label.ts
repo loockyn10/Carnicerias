@@ -46,9 +46,6 @@ export interface ProductLabelData {
   price: string;
   /** Sufijo pequeño pegado al precio ("/kg"). */
   priceSuffix: string | null;
-  /** Fila inferior de la oferta: «PRECIO NORMAL» + precio normal. */
-  normalLabel: string | null;
-  normalPrice: string | null;
   /** «PRECIO UNITARIO» / «PRECIO POR KILO» bajo el precio (variantes sin oferta). */
   footLabel: string | null;
   /** Valores exactos impresos (para el historial y para detectar cambios); null = no imprimible (sin precio). */
@@ -73,7 +70,7 @@ export function labelDisplayName(name: string): string {
 }
 
 const EMPTY_TEXTS = {
-  headline: OFFER_HEADLINE, conditionLine: null, discountLine: null, priceSuffix: null, normalLabel: null, normalPrice: null, footLabel: null
+  headline: OFFER_HEADLINE, conditionLine: null, discountLine: null, priceSuffix: null, footLabel: null
 } as const;
 
 export function buildProductLabel(input: ProductLabelInput): ProductLabelData {
@@ -110,7 +107,6 @@ export function buildProductLabel(input: ProductLabelInput): ProductLabelData {
           conditionLine: `LLEVANDO ${String(bulk.minimumUnits)} UNIDADES`,
           discountLine: `Descuento ${formatBasisPointsPercent(bulk.discountBps)}%`,
           price: formatCurrency(pricing.cashPriceCents),
-          normalLabel: "PRECIO NORMAL", normalPrice: listText,
           values: values({ cents: pricing.cashPriceCents, minimumUnits: bulk.minimumUnits, discountBps: bulk.discountBps })
         };
       }

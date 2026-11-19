@@ -62,32 +62,20 @@ export interface HeroLayout {
   mechanicAlign: Align;
   mechanicSize: number;
   mechanicRotate: number;
-  /** Sello de ahorro («25% OFF»): cuadrado. */
-  sticker: Rect;
-  /** Línea «PRECIO NORMAL …». */
-  normal: Rect;
-  normalSize: number;
-  normalAlign: Align;
   contact: Rect;
-}
-
-export interface HeroFlags {
-  /** La oferta tiene promoción real (lleva la línea «precio normal»). */
-  promo: boolean;
-  /** Tiene una mecánica para destacar (etiqueta). */
-  mechanic: boolean;
 }
 
 type HeroFormat = "feed" | "story";
 
 interface Metrics {
   headlineH: number; headlineSize: number; nameSize: number; nameLines: number;
-  priceH: number; priceSize: number; normalH: number; normalSize: number; mechanicH: number; mechanicSize: number; sticker: number;
+  priceH: number; priceSize: number; mechanicH: number; mechanicSize: number;
 }
 
 const METRICS: Record<HeroFormat, Metrics> = {
-  feed: { headlineH: 124, headlineSize: 140, nameSize: 76, nameLines: 3, priceH: 206, priceSize: 178, normalH: 40, normalSize: 36, mechanicH: 72, mechanicSize: 46, sticker: 184 },
-  story: { headlineH: 134, headlineSize: 150, nameSize: 86, nameLines: 3, priceH: 236, priceSize: 200, normalH: 44, normalSize: 40, mechanicH: 82, mechanicSize: 52, sticker: 208 }
+  // El precio promocional es lo único que se compara con nada: sin «precio normal» ni sello de ahorro, gana tamaño (≈ +12 %) y el resto es para la foto.
+  feed: { headlineH: 124, headlineSize: 140, nameSize: 76, nameLines: 3, priceH: 228, priceSize: 200, mechanicH: 72, mechanicSize: 46 },
+  story: { headlineH: 134, headlineSize: 150, nameSize: 86, nameLines: 3, priceH: 262, priceSize: 224, mechanicH: 82, mechanicSize: 52 }
 };
 
 /** El nombre reserva dos renglones; uno largo admite un tercero achicando la letra (nunca se corta con «...»). */
@@ -112,26 +100,21 @@ const PRICE_OVERLAP = 0.34;
  * Dónde va cada bloque en `format` con la variante `variant`. La foto siempre se ve entera (`contain`): estos rectángulos son sus cajas,
  * pensadas para que ocupe entre 15 y 30 % más que en la composición anterior sin tapar el nombre ni el precio.
  */
-export function heroLayout(format: HeroFormat, variant: HeroVariantId, flags: HeroFlags): HeroLayout {
+export function heroLayout(format: HeroFormat, variant: HeroVariantId): HeroLayout {
   const m = METRICS[format];
   const column = contentColumn(format);
   const { top } = verticalBounds(format);
   const contact = contactRect(format);
-  const promo = flags.promo;
-  const normalY = contact.y - 8 - m.normalH;
-  const bottomOfPrice = promo ? normalY - 6 : contact.y - 14;
-  const price: Rect = { x: column.x, y: bottomOfPrice - m.priceH, w: column.w, h: m.priceH };
-  const normal: Rect = { x: column.x, y: normalY, w: column.w, h: m.normalH };
+  const price: Rect = { x: column.x, y: contact.y - 14 - m.priceH, w: column.w, h: m.priceH };
   const headline: Rect = { x: column.x, y: top - 4, w: column.w, h: m.headlineH };
   const nameH = nameHeight(m);
   const name: Rect = { x: column.x, y: headline.y + headline.h + 2, w: column.w, h: nameH };
   const blobSeed = seedFromText(`${format}-${variant}`);
-  const sticker = (x: number, y: number): Rect => ({ x, y, w: m.sticker, h: m.sticker });
   const mechanicZone = (y: number): Rect => ({ x: column.x, y, w: column.w, h: m.mechanicH });
 
   const common = {
     id: variant, headlineSize: m.headlineSize, nameSize: m.nameSize, nameLines: m.nameLines, blobSeed, priceSize: m.priceSize,
-    mechanicSize: m.mechanicSize, normalSize: m.normalSize, contact
+    mechanicSize: m.mechanicSize, contact
   };
 
   if (variant === "PHOTO_LEFT" || variant === "PHOTO_RIGHT") {
@@ -151,8 +134,6 @@ export function heroLayout(format: HeroFormat, variant: HeroVariantId, flags: He
       photo, blob: inflate(photo, 18),
       price: { x: priceZone.x, y: price.y, w: priceZone.w, h: m.priceH }, priceAlign: other,
       mechanic: { ...mechanicZone(price.y - Math.round(m.mechanicH * 0.62)), x: priceZone.x, w: priceZone.w }, mechanicAlign: other, mechanicRotate: left ? 2 : -2,
-      sticker: sticker(left ? column.x + column.w - m.sticker - 4 : column.x + 4, photoTop + 6),
-      normal: { ...normal, x: priceZone.x, w: priceZone.w }, normalAlign: other === "end" ? "end" : "start"
     };
   }
 
@@ -161,8 +142,7 @@ export function heroLayout(format: HeroFormat, variant: HeroVariantId, flags: He
     const priceTop = name.y + name.h + 6;
     // El precio va primero pero un poco más bajo: la foto conserva el espacio que gana en esta composición.
     const priceBox: Rect = { x: column.x, y: priceTop, w: column.w, h: Math.round(m.priceH * 0.86) };
-    const normalBox: Rect = { x: column.x, y: priceBox.y + priceBox.h + 2, w: column.w, h: m.normalH };
-    const photoTop = (promo ? normalBox.y + normalBox.h : priceBox.y + priceBox.h) + 4;
+    const photoTop = priceBox.y + priceBox.h + 4;
     const photoBottom = contact.y - 6;
     const photo: Rect = { x: column.x + 6, y: photoTop, w: column.w - 6, h: photoBottom - photoTop };
     return {
@@ -172,8 +152,6 @@ export function heroLayout(format: HeroFormat, variant: HeroVariantId, flags: He
       price: priceBox, priceAlign: "start",
       // La etiqueta de mecánica va sobre el borde superior de la foto, a la derecha del precio.
       mechanic: { x: column.x, y: photoTop + 6, w: column.w, h: m.mechanicH }, mechanicAlign: "end", mechanicRotate: -3,
-      sticker: sticker(column.x + column.w - m.sticker - 6, photoBottom - m.sticker - 8),
-      normal: normalBox, normalAlign: "start"
     };
   }
 
@@ -187,7 +165,5 @@ export function heroLayout(format: HeroFormat, variant: HeroVariantId, flags: He
     photo, blob: inflate(photo, 16),
     price, priceAlign: "center",
     mechanic: mechanicZone(price.y - Math.round(m.mechanicH * 0.6)), mechanicAlign: "center", mechanicRotate: -2,
-    sticker: sticker(column.x + column.w - m.sticker - 2, photoTop + 4),
-    normal, normalAlign: "center"
   };
 }

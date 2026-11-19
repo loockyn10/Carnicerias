@@ -97,55 +97,49 @@ interface Plan {
   badge: { top: number; height: number; maxPt: number; minPt: number; fullWidth: boolean; padMm: number };
   price: { baseline: number; maxPt: number; maxCapMm: number };
   unit: { baseline: number; maxPt: number };
-  normal: { baseline: number; maxPt: number; minPt: number };
   border: number;
 }
 
 const PLANS: Record<OfferSignFormat, Plan> = {
   STRIP: {
     padX: 6, logo: { width: 70, height: 25, cy: 18.5, align: "middle", left: 0 }, offer: { maxPt: 52, baseline: 50 },
-    name: { top: 56, bottom: 104, maxPt: 50, minPt: 22, maxLines: 3 },
-    badge: { top: 108, height: 20, maxPt: 34, minPt: 14, fullWidth: true, padMm: 4 },
-    price: { baseline: 164, maxPt: 130, maxCapMm: 30 },
-    unit: { baseline: 177, maxPt: 24 },
-    normal: { baseline: 189, maxPt: 13, minPt: 7 },
+    name: { top: 56, bottom: 108, maxPt: 50, minPt: 22, maxLines: 3 },
+    badge: { top: 112, height: 20, maxPt: 34, minPt: 14, fullWidth: true, padMm: 4 },
+    price: { baseline: 172, maxPt: 130, maxCapMm: 30 },
+    unit: { baseline: 186, maxPt: 24 },
     border: 0.8
   },
   MEDIUM: {
     padX: 9, logo: { width: 100, height: 26, cy: 17, align: "middle", left: 0 }, offer: { maxPt: 56, baseline: 50 },
-    name: { top: 54, bottom: 99, maxPt: 66, minPt: 26, maxLines: 3 },
-    badge: { top: 102, height: 22, maxPt: 40, minPt: 16, fullWidth: true, padMm: 5 },
-    price: { baseline: 166, maxPt: 190, maxCapMm: 38 },
-    unit: { baseline: 178, maxPt: 28 },
-    normal: { baseline: 189, maxPt: 16, minPt: 8 },
+    name: { top: 54, bottom: 103, maxPt: 66, minPt: 26, maxLines: 3 },
+    badge: { top: 106, height: 22, maxPt: 40, minPt: 16, fullWidth: true, padMm: 5 },
+    price: { baseline: 177, maxPt: 190, maxCapMm: 40 },
+    unit: { baseline: 189, maxPt: 28 },
     border: 0.6
   },
   POSTER: {
     padX: 14, logo: { width: 90, height: 32, cy: 25, align: "start", left: 12 }, offer: { maxPt: 56, baseline: 33 },
-    name: { top: 42, bottom: 78, maxPt: 84, minPt: 30, maxLines: 2 },
-    badge: { top: 82, height: 18, maxPt: 42, minPt: 20, fullWidth: false, padMm: 12 },
-    price: { baseline: 158, maxPt: 330, maxCapMm: 50 },
-    unit: { baseline: 173, maxPt: 34 },
-    normal: { baseline: 188, maxPt: 24, minPt: 9 },
+    name: { top: 42, bottom: 83, maxPt: 84, minPt: 30, maxLines: 2 },
+    badge: { top: 87, height: 18, maxPt: 42, minPt: 20, fullWidth: false, padMm: 12 },
+    price: { baseline: 173, maxPt: 330, maxCapMm: 59 },
+    unit: { baseline: 188, maxPt: 34 },
     border: 1
   },
   // Compactos (media altura, ~94,5 mm): mismo orden y mismo estilo que MEDIUM / STRIP, sin logo; el precio sigue siendo lo más grande.
   MEDIUM_HALF: {
     padX: 9, logo: null, offer: { maxPt: 30, baseline: 12.5 },
-    name: { top: 16, bottom: 39, maxPt: 44, minPt: 20, maxLines: 2 },
-    badge: { top: 41, height: 11, maxPt: 24, minPt: 12, fullWidth: true, padMm: 5 },
-    price: { baseline: 76, maxPt: 120, maxCapMm: 22 },
-    unit: { baseline: 83.5, maxPt: 18 },
-    normal: { baseline: 90, maxPt: 12, minPt: 7 },
+    name: { top: 16, bottom: 41, maxPt: 44, minPt: 20, maxLines: 2 },
+    badge: { top: 43, height: 11, maxPt: 24, minPt: 12, fullWidth: true, padMm: 5 },
+    price: { baseline: 82.5, maxPt: 120, maxCapMm: 26 },
+    unit: { baseline: 90, maxPt: 18 },
     border: 0.6
   },
   STRIP_HALF: {
     padX: 5, logo: null, offer: { maxPt: 26, baseline: 11 },
-    name: { top: 14, bottom: 35, maxPt: 30, minPt: 14, maxLines: 2 },
-    badge: { top: 37, height: 10, maxPt: 20, minPt: 10, fullWidth: true, padMm: 3 },
-    price: { baseline: 73, maxPt: 120, maxCapMm: 24 },
-    unit: { baseline: 81, maxPt: 14 },
-    normal: { baseline: 88.5, maxPt: 10, minPt: 6 },
+    name: { top: 14, bottom: 37, maxPt: 30, minPt: 14, maxLines: 2 },
+    badge: { top: 39, height: 10, maxPt: 20, minPt: 10, fullWidth: true, padMm: 3 },
+    price: { baseline: 80.5, maxPt: 120, maxCapMm: 28 },
+    unit: { baseline: 88.5, maxPt: 14 },
     border: 0.8
   }
 };
@@ -183,7 +177,7 @@ function priceTexts(price: OfferSign["price"], plan: Plan, width: number): SignT
   return texts;
 }
 
-/** Un cartel: OFERTA → producto → condición → precio → unidad → precio normal → logo. Siempre dentro del panel. */
+/** Un cartel: OFERTA → producto → condición → precio → unidad → logo. Sin precio normal: sólo el precio de la promoción. Siempre dentro del panel. */
 export function buildSignLayout(sign: OfferSign, format: OfferSignFormat, brand: SignBrand): SignLayout {
   const plan = PLANS[format];
   const { width, height } = OFFER_PANEL_MM[format];
@@ -225,13 +219,7 @@ export function buildSignLayout(sign: OfferSign, format: OfferSignFormat, brand:
   const unit = oneLine(unitText, inner, plan.unit.maxPt, 12);
   texts.push({ text: unit.text, x: center, y: plan.unit.baseline, sizePt: unit.sizePt, anchor: "middle", inverse: false });
 
-  // 6. Precio normal: sólo si hay una comparación válida.
-  if (sign.normalPrice) {
-    const normal = oneLine(sign.normalPrice, inner, plan.normal.maxPt, plan.normal.minPt);
-    texts.push({ text: normal.text, x: center, y: plan.normal.baseline, sizePt: normal.sizePt, anchor: "middle", inverse: false });
-  }
-
-  // 7. Logo (o, sin logo, el nombre del negocio en el mismo lugar).
+  // 6. Logo (o, sin logo, el nombre del negocio en el mismo lugar).
   const box = plan.logo;
   if (!box) return { width, height, texts, rects, logo: null };
   const boxX = box.align === "middle" ? center - box.width / 2 : box.left;

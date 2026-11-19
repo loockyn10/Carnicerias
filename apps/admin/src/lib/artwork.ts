@@ -11,7 +11,7 @@ import { buildOfferSlide, parseSlideFacts, type OfferPrice, type OfferSlideData,
  *
  * No hay fórmula de descuento propia: el precio promocional sale de `buildOfferSlide` (cartelería de TV, D-072), que a su vez usa el
  * mismo motor que el POS y la etiqueta de góndola (`calculateBranchPromotionLinePricing` / `applyWeightDiscount`). Acá sólo se
- * decide QUÉ se muestra: con promoción, precio promocional + condición + precio normal; sin promoción, sólo el precio vigente.
+ * decide QUÉ se muestra: con promoción, SÓLO el precio promocional + su condición (sin precio normal ni «% OFF», D-104); sin promoción, el precio vigente.
  * Ningún precio se escribe a mano: cada ítem se resuelve contra la base para la sucursal elegida.
  */
 
@@ -28,7 +28,7 @@ export interface OfferItem {
   /** La foto tiene fondo transparente (recorte): la pieza la aprovecha con una mancha detrás. false = con fondo propio o sin analizar. */
   imageTransparent: boolean;
   unitType: "UNIT" | "WEIGHT";
-  /** Precio vigente de lista (el «precio normal»). */
+  /** Precio vigente de lista (el «precio normal»): dato interno, las piezas NO lo dibujan junto a una promoción. */
   regularPrice: OfferPrice;
   /** Precio con la promoción vigente; null = no hay promoción (la pieza no inventa «llevando 3» ni descuentos). */
   promotionalPrice: OfferPrice | null;
@@ -36,8 +36,6 @@ export interface OfferItem {
   promotionCondition: string | null;
   /** La mecánica dicha corta y en grande («LLEVANDO 3», «PACK 10 UNIDADES», «DESDE 2 KG»); null cuando no hay promoción. */
   mechanic: string | null;
-  /** «25% OFF» cuando la regla vigente es un porcentaje real; null si no aplica (nunca se inventa). */
-  savings: string | null;
   /** Sufijo del precio ("/ KG"); null para productos por unidad. */
   priceSuffix: string | null;
   /** Línea bajo el nombre para productos por peso ("X KG"); null por unidad. */
@@ -179,7 +177,7 @@ export function parseArtworkFacts(payload: unknown): ArtworkFacts | null {
 /**
  * Una oferta de cartelería (`buildOfferSlide`, el motor de pricing) → el ítem que dibujan las piezas. ES LA MISMA conversión para
  * el producto de una pieza y para cada diapositiva del televisor: sin promoción, sólo el precio vigente; con promoción, precio
- * promocional + condición + precio normal. No calcula nada.
+ * promocional + condición (el precio normal queda como dato interno, no se dibuja). No calcula nada.
  */
 export function slideToItemBase(productId: string, offer: OfferSlideData): Omit<OfferItem, "imageUrl"> {
   return {
@@ -191,7 +189,6 @@ export function slideToItemBase(productId: string, offer: OfferSlideData): Omit<
     promotionalPrice: offer.promo ? offer.price : null,
     promotionCondition: offer.promo ? offer.condition : null,
     mechanic: offer.promo ? offer.mechanic : null,
-    savings: offer.promo ? offer.savings : null,
     priceSuffix: offer.priceSuffix,
     unitLabel: offer.unitType === "WEIGHT" && offer.variant !== "PACK" ? "X KG" : null
   };

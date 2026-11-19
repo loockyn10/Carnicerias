@@ -98,10 +98,11 @@ describe("PDF real", () => {
     expect(cells(pages[1]?.rects)).toHaveLength(1);
   });
 
-  it("el texto del PDF es el del layout: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES, PRECIO NORMAL y precio normal", async () => {
+  it("el texto del PDF es el del layout: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES (sin precio normal)", async () => {
     const [page] = await inspectPdf(await renderLabelSheetPdf([bicarbonato], options));
     const texts = (page?.texts ?? []).map((entry) => entry.text);
-    for (const expected of ["SUPER OFERTAS", "BICARBONATO ALICANTE X 50", "$ 765", "LLEVANDO 3 UNIDADES", "PRECIO NORMAL", "$ 900"]) expect(texts).toContain(expected);
+    for (const expected of ["SUPER OFERTAS", "BICARBONATO ALICANTE X 50", "$ 765", "LLEVANDO 3 UNIDADES"]) expect(texts).toContain(expected);
+    expect(texts.join(" ")).not.toMatch(/NORMAL|\$ 900/);
     for (const absent of ["OFERTA!!!", "Descuento 15%"]) expect(texts).not.toContain(absent);
     const header = texts.find((entry) => entry.includes("Página 1 de 1"));
     expect(header).toContain("Góndolas Despensa Central");
@@ -134,7 +135,7 @@ describe("PDF real", () => {
   it("nada se escala: ningún texto de etiqueta queda a menos de 4 mm del borde de su celda", async () => {
     const [page] = await inspectPdf(await render(21));
     const body = (page?.texts ?? []).filter((entry) => !entry.text.includes("Página"));
-    expect(body.length).toBeGreaterThan(21 * 4);
+    expect(body.length).toBeGreaterThanOrEqual(21 * 4);
     for (const entry of body) {
       const column = Math.min(2, Math.floor((mmOf(entry.x) - 15) / 60));
       const relativeX = mmOf(entry.x) - 15 - column * 60;

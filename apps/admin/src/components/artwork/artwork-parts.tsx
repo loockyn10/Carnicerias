@@ -1,11 +1,11 @@
 import type { CSSProperties, ReactNode } from "react";
 
-import { formatPriceText, hasPromotion, heroPrice, type OfferItem } from "../../lib/artwork";
+import { heroPrice, type OfferItem } from "../../lib/artwork";
 import { placeLogoFor, type ArtworkBranding, type ArtworkContact } from "../../lib/artwork-branding";
 import { ARTWORK_DISPLAY_FONT_FAMILY } from "../../lib/artwork-display-font-data";
 import { ARTWORK_FONT_FAMILY } from "../../lib/artwork-font-data";
 import type { Rect } from "../../lib/artwork-layout";
-import { burstPoints, organicBlobPath, organicPillPath } from "../../lib/artwork-shapes";
+import { organicBlobPath, organicPillPath } from "../../lib/artwork-shapes";
 import { fitText, textWidth, type FittedText } from "../../lib/artwork-text";
 import { ARTWORK_COLORS as C, ARTWORK_FORMATS, BAND_WIDTH, PRICE_BADGE, STORY_SAFE, type ArtworkFormat } from "../../lib/artwork-tokens";
 import type { OfferPrice } from "../../lib/signage";
@@ -178,7 +178,7 @@ export function PhotoStage({ photo, blob, seed, imageUrl, transparent }: { photo
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Mecánica promocional y sello de ahorro
+// Mecánica promocional (etiqueta verde: «LLEVANDO 3», «PACK 10 UNIDADES»). Sin sello de ahorro ni precio normal (D-104)
 // ---------------------------------------------------------------------------------------------------------------------
 
 /**
@@ -195,24 +195,6 @@ export function MechanicTag({ rect, text, maxSize, align = "center", rotate = 0 
       display: "flex", alignItems: "center", justifyContent: "center", width, height: rect.h, background: C.BRAND_GREEN, borderRadius: Math.round(rect.h * 0.3),
       transform: rotate ? `rotate(${String(rotate)}deg)` : "none"
     }}><Line color={C.WHITE} size={fitted.size} text={fitted.lines[0] ?? text} /></div>
-  </Box>;
-}
-
-/** Sello rojo de ahorro («25% OFF»): estrella de puntas suaves con el porcentaje grande. Sólo si la regla vigente es un porcentaje real. */
-export function SavingsSticker({ rect, text }: { rect: Rect; text: string | null }) {
-  if (!text) return null;
-  const [percent = text, ...rest] = text.split(" ");
-  const tail = rest.join(" ") || "OFF";
-  const percentSize = fitText({ text: percent, maxWidth: Math.round(rect.w * 0.66), maxLines: 1, maxSize: Math.round(rect.w * 0.34), minSize: 24 });
-  const tailSize = Math.round(percentSize.size * 0.5);
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: "center", transform: "rotate(-8deg)" }}>
-    <svg data-testid="artwork-sticker" height={rect.h} style={{ position: "absolute", left: 0, top: 0 }} viewBox="0 0 100 100" width={rect.w} xmlns={SVG_NS}>
-      <polygon fill={C.ACCENT_RED} points={burstPoints(18, 0.88)} />
-    </svg>
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", width: "100%" }}>
-      <Line color={C.WHITE} size={percentSize.size} text={percentSize.lines[0] ?? percent} />
-      <Line color={C.WHITE} size={tailSize} text={tail} />
-    </div>
   </Box>;
 }
 
@@ -322,16 +304,6 @@ export function PriceBadge({ rect, item, maxPriceSize, conditionMaxSize, align =
       {content(false)}
     </div>
   </Box>;
-}
-
-/** «PRECIO NORMAL $ 2.050» (sólo con promoción real; sin promoción no se duplica el precio ni se inventa un descuento). */
-export function NormalPriceLine({ rect, item, size, align = "center" }: { rect: Rect; item: OfferItem; size: number; align?: TextAlign }) {
-  if (!hasPromotion(item)) return null;
-  // «/KG» acompaña al precio normal de un producto por peso; «C/U» (precio por unidad de una oferta) no: el normal ya es el de una unidad.
-  const suffix = item.priceSuffix?.startsWith("/") ? ` ${item.priceSuffix.replace(/\s+/g, "")}` : "";
-  const text = `PRECIO NORMAL ${formatPriceText(item.regularPrice)}${suffix}`;
-  const fitted = fitText({ text, maxWidth: rect.w, maxLines: 1, maxSize: size, minSize: 20, weight: 700 });
-  return <Box rect={rect} style={{ alignItems: "center", justifyContent: JUSTIFY[align] }}><Line align={JUSTIFY[align]} color={C.INK_MUTED} size={fitted.size} text={text} weight={700} /></Box>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

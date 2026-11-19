@@ -34,13 +34,12 @@ describe("layout: especificación 60 × 40 mm", () => {
     for (const [, layout] of samples) expect([layout.widthMm, layout.heightMm]).toEqual([60, 40]);
   });
 
-  it("oferta UNIT: orden vertical SUPER OFERTAS → nombre → precio → LLEVANDO N UNIDADES → fila PRECIO NORMAL (sin descuento)", () => {
+  it("oferta UNIT: orden vertical SUPER OFERTAS → nombre → precio → LLEVANDO N UNIDADES (sin precio normal ni descuento)", () => {
     const layout = promo("Bicarbonato Alicante x 50", 90_000n);
-    expect(ids(layout)).toEqual(["headline", "name-1", "price", "condition", "normal-label", "normal-price"]);
-    const baselines = ["headline", "name-1", "price", "condition", "normal-label"].map((id) => text(layout, id).y);
+    expect(ids(layout)).toEqual(["headline", "name-1", "price", "condition"]);
+    const baselines = ["headline", "name-1", "price", "condition"].map((id) => text(layout, id).y);
     expect([...baselines].sort((a, b) => a - b)).toEqual(baselines);
-    expect(text(layout, "normal-label").y).toBe(text(layout, "normal-price").y);
-    expect(layout.texts.map((entry) => entry.text).join("|")).not.toMatch(/Descuento|% OFF|%|^OFERTA|\|OFERTA/);
+    expect(layout.texts.map((entry) => entry.text).join("|")).not.toMatch(/Descuento|% OFF|%|NORMAL|^OFERTA|\|OFERTA/);
   });
 
   it("franja negra superior con SUPER OFERTAS en blanco y borde fino negro", () => {
@@ -57,12 +56,10 @@ describe("layout: especificación 60 × 40 mm", () => {
     }
   });
 
-  it("tipografía: nombre/condición en negrita, todo centrado salvo la fila inferior", () => {
+  it("tipografía: nombre y condición en negrita, todo centrado", () => {
     const layout = promo("Bicarbonato Alicante x 50", 90_000n);
     expect(text(layout, "name-1")).toMatchObject({ style: "bold", sizePt: LABEL_TYPE.name.maxPt, anchor: "middle" });
     expect(text(layout, "condition")).toMatchObject({ text: "LLEVANDO 3 UNIDADES", style: "bold", sizePt: LABEL_TYPE.condition.pt, anchor: "middle" });
-    expect(text(layout, "normal-label")).toMatchObject({ text: "PRECIO NORMAL", style: "bold", anchor: "start", x: LABEL_PAD_X_MM });
-    expect(text(layout, "normal-price")).toMatchObject({ text: "$ 900", style: "bold", anchor: "end", x: LABEL_WIDTH_MM - LABEL_PAD_X_MM });
     expect(layout.rules).toEqual([]);
   });
 
@@ -111,7 +108,7 @@ describe("layout: especificación 60 × 40 mm", () => {
 
   it("el tope de cada texto no pisa al anterior (separación vertical positiva entre bloques)", () => {
     for (const [name, layout] of samples) {
-      const ordered = [...layout.texts].filter((entry) => entry.id !== "price-suffix" && entry.id !== "normal-price").sort((a, b) => a.y - b.y);
+      const ordered = [...layout.texts].filter((entry) => entry.id !== "price-suffix").sort((a, b) => a.y - b.y);
       for (let index = 1; index < ordered.length; index += 1) {
         const previous = must(ordered[index - 1]);
         const current = must(ordered[index]);
@@ -121,11 +118,9 @@ describe("layout: especificación 60 × 40 mm", () => {
     }
   });
 
-  it("en la fila inferior «PRECIO NORMAL» y su precio no se superponen", () => {
-    for (const [, layout] of samples.filter(([, entry]) => entry.variant === "PROMO")) {
-      const label = textExtentMm(text(layout, "normal-label"));
-      const price = textExtentMm(text(layout, "normal-price"));
-      expect(label.right + 1).toBeLessThan(price.left);
+  it("ninguna etiqueta dibuja el precio normal (D-104): sólo el precio de la oferta y su condición", () => {
+    for (const [name, layout] of samples) {
+      expect(layout.texts.some((entry) => entry.id === "normal-label" || entry.id === "normal-price" || entry.text.includes("NORMAL")), name).toBe(false);
     }
   });
 
@@ -143,7 +138,7 @@ describe("layout: especificación 60 × 40 mm", () => {
     expect(text(long, "name-1").sizePt).toBeGreaterThanOrEqual(LABEL_TYPE.name.minPt);
     expect(text(long, "name-2").text.endsWith("...")).toBe(true);
     // un nombre de 2 líneas ya no ocupa el lugar de otros elementos: sigue entrando todo
-    expect(text(long, "normal-label").y).toBeLessThanOrEqual(LABEL_HEIGHT_MM - LABEL_PAD_BOTTOM_MM + 0.05);
+    expect(text(long, "condition").y).toBeLessThanOrEqual(LABEL_HEIGHT_MM - LABEL_PAD_BOTTOM_MM + 0.05);
   });
 
   it("un precio muy largo se achica para entrar a lo ancho pero sigue siendo el más grande", () => {

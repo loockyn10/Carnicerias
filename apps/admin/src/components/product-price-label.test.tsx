@@ -37,9 +37,9 @@ describe("preview SVG de la etiqueta de góndola", () => {
     expect(html.slice(0, html.indexOf(">"))).not.toMatch(/ (width|height)="/);
   });
 
-  it("oferta UNIT: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES, PRECIO NORMAL y precio normal (sin porcentaje)", () => {
+  it("oferta UNIT: SUPER OFERTAS, nombre, precio promocional, LLEVANDO 3 UNIDADES (sin precio normal ni porcentaje)", () => {
     const text = visibleText(render(mayonesa));
-    expect(text).toEqual(["SUPER OFERTAS", "MAYONESA HELLMANN&#x27;S 250GR", "$ 1.742,50", "LLEVANDO 3 UNIDADES", "PRECIO NORMAL", "$ 2.050"]);
+    expect(text).toEqual(["SUPER OFERTAS", "MAYONESA HELLMANN&#x27;S 250GR", "$ 1.742,50", "LLEVANDO 3 UNIDADES"]);
     const html = render(mayonesa);
     expect(html).toContain('data-label-variant="PROMO"');
     expect(html).toContain('data-label-part="band"');

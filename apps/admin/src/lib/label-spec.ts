@@ -38,14 +38,11 @@ export const LABEL_TYPE = {
   /** Nombre del producto — negrita, centrado, hasta 2 líneas (se achica de maxPt a minPt hasta que entre). */
   name: { maxPt: 9, minPt: 6, stepPt: 0.25, lineHeightEm: 1.12, maxLines: 2, style: "bold" },
   /** «LLEVANDO 3 UNIDADES» — bajo el precio promocional, negrita. */
-  condition: { pt: 8.5, style: "bold" },
+  condition: { pt: 11, style: "bold" },
   /** Precio promocional (o el precio unitario en la variante simple): el más grande. Se reduce sólo si no entra a lo ancho. */
-  price: { promoMaxPt: 30, simpleMaxPt: 36, minPt: 16, style: "bold" },
+  price: { promoMaxPt: 36, simpleMaxPt: 36, minPt: 16, style: "bold" },
   /** Sufijo «/kg» pegado al precio, como proporción de su tamaño. */
   priceSuffix: { scale: 0.4, style: "bold" },
-  /** Fila inferior de la oferta: «PRECIO NORMAL» a la izquierda y el precio normal a la derecha. */
-  normalLabel: { pt: 7, style: "bold" },
-  normalPrice: { pt: 9, style: "bold" },
   /** «PRECIO UNITARIO» / «PRECIO POR KILO» bajo el precio de la variante simple. */
   footLabel: { pt: 7.5, style: "bold" }
 } as const satisfies Record<string, Record<string, number | string>>;
@@ -53,8 +50,7 @@ export const LABEL_TYPE = {
 /** Separaciones MÍNIMAS entre bloques (mm). Si sobra alto, se reparten (hasta duplicarlas) y el resto se centra. */
 export const LABEL_GAPS_MM = {
   nameToPrice: 2.4,
-  priceToCondition: 1.8,
-  conditionToNormal: 2.6,
+  priceToCondition: 4.8,
   priceToFootLabel: 2,
   /** Cuánto puede crecer cada separación respecto de su mínimo cuando sobra alto (1 = hasta el doble). */
   maxGrowth: 1

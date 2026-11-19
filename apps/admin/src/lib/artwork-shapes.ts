@@ -1,5 +1,5 @@
 /**
- * Formas orgánicas de las piezas (mancha detrás del producto, mancha del precio, sello de ahorro). Puras y determinísticas: la misma
+ * Formas orgánicas de las piezas (mancha detrás del producto, mancha del precio; la estrella `burstPoints` ya no se usa en las piezas, D-104). Puras y determinísticas: la misma
  * semilla da siempre la misma forma (regenerar una pieza nunca la cambia) y las usan el preview y el PNG (Satori) por igual. Todo en un
  * lienzo de 100 × 100 que cada renderer estira al rectángulo que corresponda.
  */

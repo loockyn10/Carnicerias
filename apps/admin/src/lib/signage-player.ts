@@ -181,7 +181,7 @@ function readSlide(value: unknown): OfferSlideData | null {
   const text = (field: unknown): string | null => typeof field === "string" && field.trim() !== "" ? field : null;
   return {
     ...(offer as unknown as OfferSlideData), imageUrl: ownImageUrl(offer.imageUrl), imageTransparent: offer.imageTransparent === true,
-    mechanic: text(offer.mechanic), savings: text(offer.savings), validUntil: text(offer.validUntil)
+    mechanic: text(offer.mechanic), validUntil: text(offer.validUntil)
   };
 }
 

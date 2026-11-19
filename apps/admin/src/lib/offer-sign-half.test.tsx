@@ -111,7 +111,7 @@ describe("4 por hoja (deriva del mediano) y 6 por hoja (deriva de la tira)", () 
         expect(full.logo).not.toBeNull();
         for (const word of ["OFERTA", item.condition, item.price.whole]) expect(compact.texts.some((text) => text.text === word), `${half}: ${word}`).toBe(true);
         expect(compact.texts.some((text) => text.text.startsWith(item.unitLabel)), `${half}: ${item.unitLabel}`).toBe(true);
-        expect(compact.texts.some((text) => text.text === item.normalPrice)).toBe(Boolean(item.normalPrice));
+        expect(compact.texts.some((text) => text.text.includes("NORMAL"))).toBe(false);
       }
     }
   });

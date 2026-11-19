@@ -7,13 +7,13 @@ import {
 import { must } from "./test-support/must";
 
 describe("promoción → cartel", () => {
-  it("desde X kg: condición humana, precio por kilo y precio normal", () => {
+  it("desde X kg: condición humana y precio por kilo (sin precio normal)", () => {
     const sign = must(buildOfferSign(choricito()));
     expect(sign.name).toBe("CHORICITO DE CERDO");
     expect(sign.condition).toBe("DESDE 2 KG");
     expect(sign.price).toEqual({ whole: "6.500", cents: null });
     expect(sign.unitLabel).toBe("/ KG");
-    expect(sign.normalPrice).toBe("PRECIO NORMAL $7.000/KG");
+    expect(sign).not.toHaveProperty("normalPrice");
     expect(sign.summary).toBe("Desde 2 kg · $6.500/kg");
   });
 
@@ -21,15 +21,13 @@ describe("promoción → cartel", () => {
     const sign = must(buildOfferSign(filetPechuga()));
     expect(sign.condition).toBe("DESDE 3 KG");
     expect(sign.price.whole).toBe("10.800");
-    expect(sign.normalPrice).toBe("PRECIO NORMAL $12.000/KG");
   });
 
-  it("pack por peso: total fijo contra el precio normal de esa cantidad", () => {
+  it("pack por peso: total fijo de esa cantidad", () => {
     const sign = must(buildOfferSign(costilla()));
     expect(sign.condition).toBe("LLEVANDO 2 KG");
     expect(sign.price).toEqual({ whole: "15.000", cents: null });
     expect(sign.unitLabel).toBe("POR LOS 2 KG");
-    expect(sign.normalPrice).toBe("PRECIO NORMAL $17.000");
   });
 
   it("pack de unidades: condición PACK, total y precio por unidad secundario", () => {
@@ -38,7 +36,6 @@ describe("promoción → cartel", () => {
     expect(sign.price.whole).toBe("8.900");
     expect(sign.unitLabel).toBe("POR EL PACK");
     expect(sign.secondary).toBe("$741,67 C/U");
-    expect(sign.normalPrice).toBe("PRECIO NORMAL $10.200");
   });
 
   it("muestra los centavos sólo si son reales", () => {
@@ -53,8 +50,10 @@ describe("promoción → cartel", () => {
   it("no expone nombres técnicos de la promoción", () => {
     for (const row of [choricito(), costilla(), hamburguesas(), filetPechuga()]) {
       const sign = must(buildOfferSign(row));
-      const text = [sign.condition, sign.unitLabel, sign.secondary ?? "", sign.normalPrice ?? "", sign.summary].join(" ");
+      const text = [sign.condition, sign.unitLabel, sign.secondary ?? "", sign.summary].join(" ");
       expect(text).not.toMatch(/PACK_FIXED_TOTAL|THRESHOLD|FROM_MINIMUM|FIXED_PRICE|PERCENTAGE/);
+      // D-104: sin precio normal ni «% OFF» en ningún texto del cartel.
+      expect(text).not.toMatch(/NORMAL|OFF|%/i);
     }
   });
 

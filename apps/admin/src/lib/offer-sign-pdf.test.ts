@@ -48,13 +48,13 @@ describe("layout del cartel", () => {
     expect(page.rules).toHaveLength(0);
   });
 
-  it("lleva OFERTA, el producto, la condición, el precio y el precio normal (en ese orden de lectura vertical)", () => {
+  it("lleva OFERTA, el producto, la condición y el precio (en ese orden de lectura vertical), sin precio normal", () => {
     const layout = buildSignLayout(sign(choricito()), "STRIP", WITH_LOGO);
-    expect(textsOf(layout)).toEqual(expect.arrayContaining(["OFERTA", "CHORICITO DE", "CERDO", "DESDE 2 KG", "$", "6.500", "/ KG", "PRECIO NORMAL $7.000/KG"].filter((text) => text !== "CHORICITO DE" && text !== "CERDO")));
+    expect(textsOf(layout)).toEqual(expect.arrayContaining(["OFERTA", "CHORICITO DE", "CERDO", "DESDE 2 KG", "$", "6.500", "/ KG"].filter((text) => text !== "CHORICITO DE" && text !== "CERDO")));
     const baselineOf = (text: string) => must(layout.texts.find((entry) => entry.text === text), text).y;
     expect(baselineOf("OFERTA")).toBeLessThan(baselineOf("DESDE 2 KG"));
     expect(baselineOf("DESDE 2 KG")).toBeLessThan(baselineOf("6.500"));
-    expect(baselineOf("6.500")).toBeLessThan(baselineOf("PRECIO NORMAL $7.000/KG"));
+    expect(baselineOf("6.500")).toBeLessThan(baselineOf("/ KG"));
   });
 
   it("el precio es lo más grande del cartel y la condición va en blanco sobre negro", () => {
@@ -77,11 +77,13 @@ describe("layout del cartel", () => {
     expect(new Set(baselines).size).toBe(1);
   });
 
-  it("precio normal sólo cuando hay una comparación real", () => {
-    const withNormal = buildSignLayout(sign(choricito()), "STRIP", WITH_LOGO);
-    expect(textsOf(withNormal).some((text) => text.startsWith("PRECIO NORMAL"))).toBe(true);
-    const without = buildSignLayout({ ...sign(choricito()), normalPrice: null }, "STRIP", WITH_LOGO);
-    expect(textsOf(without).some((text) => text.includes("NORMAL"))).toBe(false);
+  it("nunca dibuja precio normal ni «% OFF» (D-104): sólo el precio de la promoción", () => {
+    for (const format of ["STRIP", "MEDIUM", "POSTER", "MEDIUM_HALF", "STRIP_HALF"] as const) {
+      for (const row of [choricito(), costilla(), hamburguesas()]) {
+        const text = textsOf(buildSignLayout(sign(row), format, WITH_LOGO)).join(" ");
+        expect(text, format).not.toMatch(/NORMAL|OFF|%/);
+      }
+    }
   });
 
   it("nombre largo: se reparte en renglones sin partir palabras y sin letra microscópica", () => {

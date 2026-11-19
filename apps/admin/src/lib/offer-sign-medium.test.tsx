@@ -84,10 +84,10 @@ describe("formato mediano: 2 ofertas por hoja", () => {
     expect(sizeOf(layouts.MEDIUM, "6.500")).toBeGreaterThan(sizeOf(layouts.STRIP, "6.500") * 1.15);
   });
 
-  it("los tres formatos usan EXACTAMENTE los mismos datos (mismo texto de condición, precio, unidad y precio normal)", () => {
+  it("los tres formatos usan EXACTAMENTE los mismos datos (mismo texto de condición, precio y unidad)", () => {
     for (const row of [choricito(), costilla(), hamburguesas(), conCentavos()]) {
       const item = sign(row);
-      const words = (format: OfferSignFormat) => buildSignLayout(item, format, WITH_LOGO).texts.map((entry) => entry.text).filter((text) => text === item.condition || text === item.price.whole || text === item.normalPrice || text === item.unitLabel);
+      const words = (format: OfferSignFormat) => buildSignLayout(item, format, WITH_LOGO).texts.map((entry) => entry.text).filter((text) => text === item.condition || text === item.price.whole || text === item.unitLabel);
       expect(words("MEDIUM").sort()).toEqual(words("STRIP").sort());
       expect(words("POSTER").sort()).toEqual(words("STRIP").sort());
       expect(words("MEDIUM")).toContain(item.price.whole);
@@ -107,7 +107,7 @@ describe("formato mediano: 2 ofertas por hoja", () => {
     }
   });
 
-  it("los bloques no se pisan en ningún formato: condición, precio, unidad y precio normal van uno debajo del otro", () => {
+  it("los bloques no se pisan en ningún formato: condición, precio y unidad van uno debajo del otro", () => {
     for (const format of ["STRIP", "MEDIUM", "POSTER"] as const) {
       for (const row of rows()) {
         const item = sign(row);
@@ -118,8 +118,6 @@ describe("formato mediano: 2 ofertas por hoja", () => {
         expect(priceTop, `${format} ${item.name}: precio vs condición`).toBeGreaterThan(badge.y + badge.height + 3);
         const unit = must(layout.texts.find((entry) => entry.text.startsWith(item.unitLabel)));
         expect(unit.y - ANTON_CAP_EM * unit.sizePt * MM_PER_PT, `${format} ${item.name}: unidad vs precio`).toBeGreaterThan(price.y + 1);
-        const normal = layout.texts.find((entry) => entry.text === item.normalPrice);
-        if (normal) expect(normal.y - ANTON_CAP_EM * normal.sizePt * MM_PER_PT).toBeGreaterThan(unit.y + 1);
         const logo = must(layout.logo);
         const offer = must(layout.texts.find((entry) => entry.text === "OFERTA"));
         // En el cartel grande el logo va al costado de OFERTA; en los otros, arriba.

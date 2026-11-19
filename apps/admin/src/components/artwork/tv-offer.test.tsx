@@ -57,13 +57,12 @@ describe("TvOfferSlide — la identidad de Super Ofertas en 16:9", () => {
     expect(unit).not.toContain("/KG");
   });
 
-  it("promoción real: precio promocional + «LLEVANDO 3» + «PRECIO NORMAL» (los del motor, sin recalcular)", () => {
+  it("promoción real: sólo el precio promocional + «LLEVANDO 3» (los del motor, sin recalcular): sin precio normal ni «% OFF»", () => {
     const text = textOf(render(<TvOfferSlide model={withPhoto("mayo", { headline: "X MAYOR" })} />));
     expect(text).toContain("X MAYOR");
     expect(text).toContain("1.742");
     expect(text).toContain("LLEVANDO 3");
-    expect(text).toContain("15%");
-    expect(text).toContain("PRECIO NORMAL $ 2.050");
+    expect(text).not.toMatch(/%|OFF|PRECIO NORMAL|2\.050/);
   });
 
   it("sin promoción: no inventa condición, precio normal ni descuento", () => {

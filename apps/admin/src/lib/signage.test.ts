@@ -20,7 +20,6 @@ describe("buildOfferSlide — productos por unidad", () => {
     // 2.035 − 15 % = 1.729,75 (el mismo número que la etiqueta de góndola y el POS)
     expect(offer?.price).toEqual({ whole: "1.729", cents: "75" });
     expect(offer?.condition).toBe("LLEVANDO 3 UNIDADES");
-    expect(offer?.secondary).toBe("Precio unitario $ 2.035");
     expect(offer?.promo).toBe(true);
     expect(offer?.name).toBe("Mayonesa Hellmann's 250gr");
   });
@@ -29,7 +28,6 @@ describe("buildOfferSlide — productos por unidad", () => {
     const offer = buildOfferSlide(unit({ listPriceCents: 100_000n, bulkMinimumUnits: 4, bulkDiscountBps: 2_000 }));
     expect(offer?.price).toEqual({ whole: "800", cents: null });
     expect(offer?.condition).toBe("LLEVANDO 4 UNIDADES");
-    expect(offer?.secondary).toBe("Precio unitario $ 1.000");
   });
 
   it("sin promoción NO inventa «llevando 3»: precio unitario y nada más", () => {
@@ -37,7 +35,6 @@ describe("buildOfferSlide — productos por unidad", () => {
     expect(offer?.variant).toBe("REGULAR");
     expect(offer?.price).toEqual({ whole: "2.450", cents: null });
     expect(offer?.condition).toBe("PRECIO UNITARIO");
-    expect(offer?.secondary).toBeNull();
     expect(offer?.promo).toBe(false);
     expect(JSON.stringify(offer)).not.toMatch(/llevando/i);
   });
@@ -70,7 +67,6 @@ describe("buildOfferSlide — productos por peso", () => {
     expect(offer?.variant).toBe("WEIGHT_PROMO");
     expect(offer?.price).toEqual({ whole: "9.900", cents: null });
     expect(offer?.condition).toBe("DESDE 2 KG");
-    expect(offer?.secondary).toBe("Precio normal $ 11.000 / KG");
     expect(offer?.promo).toBe(true);
   });
 
@@ -236,7 +232,7 @@ describe("textos y reordenamiento del Admin", () => {
 describe("privacidad: lo que se dibuja no contiene costos, márgenes ni datos administrativos", () => {
   it("una oferta sólo tiene campos comerciales", () => {
     const offer = buildOfferSlide(unit());
-    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "imageTransparent", "imageUrl", "key", "mechanic", "name", "price", "priceSuffix", "promo", "regularPrice", "savings", "secondary", "unitType", "validUntil", "variant"]);
+    expect(Object.keys(offer ?? {}).sort()).toEqual(["condition", "imageTransparent", "imageUrl", "key", "mechanic", "name", "price", "priceSuffix", "promo", "regularPrice", "unitType", "validUntil", "variant"]);
   });
 
   it("aunque la base mandara campos de más, la vista no los arrastra", () => {

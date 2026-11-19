@@ -146,15 +146,13 @@ describe("composiciones del protagonista: muestras", () => {
   it("la geometría de cada variante entra en el lienzo (y Story respeta las zonas seguras)", () => {
     for (const format of ["feed", "story"] as const) {
       for (const variant of HERO_VARIANTS) {
-        for (const promo of [true, false]) {
-          const layout = heroLayout(format, variant, { promo, mechanic: promo });
-          const spec = ARTWORK_FORMATS[format];
-          for (const rect of [layout.headline, layout.name, layout.photo, layout.price, layout.contact]) {
-            expect(rect.x).toBeGreaterThanOrEqual(0);
-            expect(rect.y).toBeGreaterThanOrEqual(0);
-            expect(rect.x + rect.w).toBeLessThanOrEqual(spec.width);
-            expect(rect.y + rect.h).toBeLessThanOrEqual(spec.height);
-          }
+        const layout = heroLayout(format, variant);
+        const spec = ARTWORK_FORMATS[format];
+        for (const rect of [layout.headline, layout.name, layout.photo, layout.price, layout.contact]) {
+          expect(rect.x).toBeGreaterThanOrEqual(0);
+          expect(rect.y).toBeGreaterThanOrEqual(0);
+          expect(rect.x + rect.w).toBeLessThanOrEqual(spec.width);
+          expect(rect.y + rect.h).toBeLessThanOrEqual(spec.height);
         }
       }
     }

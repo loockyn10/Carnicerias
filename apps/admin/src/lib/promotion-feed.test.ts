@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
-import { feedFilename, feedPriceSignature, isPending, parsePromotionFeedState, pendingPromotions, skippedPromotions, type PromotionFeedState } from "./promotion-feed";
+import { FEED_DESIGN_VERSION, feedFilename, feedPriceSignature, isPending, parsePromotionFeedState, pendingPromotions, skippedPromotions, type PromotionFeedState } from "./promotion-feed";
 import { itemId, packPromotion, photoOf, rawItem, thresholdPromotion } from "./test-support/folder-fixtures";
 import { must } from "./test-support/must";
 
@@ -84,7 +86,7 @@ describe("estado de la descarga Feed", () => {
     expect(pendingPromotions(parse(rawState(today)))).toHaveLength(7);
   });
 
-  it("5) cambia el precio del PRODUCTO de la promoción (precio normal y porcentaje): pendiente", () => {
+  it("5) cambia el precio del PRODUCTO: pendiente sólo si mueve el precio promocional que se dibuja (el precio normal ya no se muestra)", () => {
     const pack = promo(1, { listPriceCents: 1_000_000 });
     const percent = promo(2, { listPriceCents: 1_000_000, promotion: thresholdPromotion(2) });
     const done = downloadedAs(parse(rawState([pack, percent])));
@@ -92,8 +94,8 @@ describe("estado de la descarga Feed", () => {
       promo(1, { listPriceCents: 1_050_000, downloaded: must(done.get(itemId(1))) }),
       promo(2, { listPriceCents: 1_050_000, promotion: thresholdPromotion(2), downloaded: must(done.get(itemId(2))) })
     ]));
-    // El pack muestra «precio normal» de esa cantidad; el 10 % baja el precio por kilo: las dos piezas cambian.
-    expect(pendingPromotions(today).map((item) => item.position)).toEqual([1, 2]);
+    // El pack tiene total fijo y el precio normal no se dibuja: no cambia nada visible. El 10 % sí mueve el precio por kilo que se muestra.
+    expect(pendingPromotions(today).map((item) => item.position)).toEqual([2]);
   });
 
   it("no se vuelve pendiente por datos que NO cambian los importes: nombre, foto, vigencia, SKU, orden", () => {
@@ -110,6 +112,34 @@ describe("estado de la descarga Feed", () => {
     const done = downloadedAs(parse(rawState([promo(1, { promotion: thresholdPromotion(1) })])));
     const after = promo(1, { promotion: thresholdPromotion(1, { minimumGrams: 3000 }), downloaded: must(done.get(itemId(1))) });
     expect(pendingPromotions(parse(rawState([after])))).toHaveLength(1);
+  });
+
+  it("D-104: cambiar sólo el precio normal, sin mover el promocional, no la vuelve pendiente", () => {
+    const done = downloadedAs(parse(rawState([promo(1, { listPriceCents: 1_000_000 })])));
+    const after = promo(1, { listPriceCents: 1_200_000, downloaded: must(done.get(itemId(1))) });
+    expect(pendingPromotions(parse(rawState([after])))).toHaveLength(0);
+  });
+
+  it("D-104: versión del diseño — con las firmas del diseño anterior TODAS quedan pendientes una vez y, ya descargadas, no vuelven a estarlo", () => {
+    const items = Array.from({ length: 94 }, (_, index) => promo(index + 1));
+    const current = parse(rawState(items));
+    // Lo que había registrado la versión 1 (con «precio normal» y «% OFF»): otra firma para cada promoción.
+    const oldSignature = (position: number) => createHash("sha256").update(JSON.stringify(["feed-v1", "WEIGHT", position])).digest("hex");
+    const stored = parse(rawState(items.map((item, index) => ({ ...item, downloaded: { signature: oldSignature(index), summary: null, at: "2026-11-17T10:00:00Z", batchId: BATCH } }))));
+    expect(pendingPromotions(stored)).toHaveLength(94);
+    // Se descargan (se registra la firma de la versión nueva): no hay descargas repetidas.
+    const done = downloadedAs(current);
+    const again = parse(rawState(items.map((item) => ({ ...item, downloaded: must(done.get(String(item.entryId))) }))));
+    expect(pendingPromotions(again)).toHaveLength(0);
+    expect(FEED_DESIGN_VERSION).toBe(2);
+  });
+
+  it("la versión del diseño entra en la firma: otra versión, otra firma para los mismos datos", () => {
+    const item = must(parse(rawState([promo(1)])).items[0]);
+    const drawn = [item.offer?.name, item.signature];
+    expect(drawn[1]).toMatch(/^[0-9a-f]{64}$/);
+    const sameDataOtherVersion = createHash("sha256").update(JSON.stringify([FEED_DESIGN_VERSION + 1, "WEIGHT"])).digest("hex");
+    expect(sameDataOtherVersion).not.toBe(item.signature);
   });
 
   it("lo que hoy no se puede generar no queda pendiente y se informa con su motivo", () => {

@@ -2,6 +2,16 @@
 
 Estado verificado contra el repositorio el 22 de septiembre de 2026. Las decisiones normativas viven en `PRODUCT.md`, `DOMAIN_RULES.md` y `DECISIONS.md`.
 
+## Pollos: «Mercadería a encargar» — implementado 2026-11-19 (D-105; migración `202611190108` **sin aplicar**)
+
+- Pollos → «Mercadería a encargar» (pestaña y botón en el Resumen): cajones pendientes por producto, calculados al consultar con los pedidos abiertos (pendiente/preparando/listo) que ya existen; vistas Total general, Sin fecha y Por fecha, orden y categorías del catálogo de Pollos, total general. Sólo lectura (una RPC nueva, sin tablas): no cambia pedidos, precios, costos ni stock. El pedido ya tenía fecha de entrega opcional. No hay entregas parciales en el modelo.
+- Validado: pgTAP en PGlite `poultry_boxes_to_order` 64/64 (11 mutaciones detectadas), vitest `poultry-to-order.test.ts` (17), `pnpm typecheck`/`lint`/`test` (todo el monorepo) y build del Admin, y recorrido en el navegador contra el backend falso con las migraciones reales (ejemplo, entregado/cancelado excluidos, vencida, vistas y fecha vacía; cancelar un pedido baja el total al recargar). **No validado:** contra Supabase real ni en el celular. `database.types.ts` se editó a mano (1 RPC nueva).
+
+## Promociones: sólo el precio promocional en todas las gráficas — implementado 2026-11-18 (D-104; sin migración)
+
+- Feed, Story, TV, carpetas, collage, «Descargar promociones Feed», carteles A4 y etiquetas de góndola de oferta ya no muestran precio normal, tachados ni «% OFF»; conservan cantidades y condiciones. Layouts redistribuidos (precio y foto más grandes). `FEED_DESIGN_VERSION = 2`: tras el despliegue, todas las promociones activas quedan pendientes en «Descargar promociones Feed» una única vez.
+- Validado: tests del Admin actualizados (renderers, layouts, modelo, carteles, etiquetas, firma/versión), `pnpm check`, build y revisión visual de piezas Feed/Story/TV generadas. **No validado:** impresión física de carteles/etiquetas, TV real ya abierta, POCO.
+
 ## Promociones: «Descargar promociones Feed (N)» desde el celular — implementado 2026-11-18 (D-103; migración `202611180107` **sin aplicar**)
 
 - Inicio del celular: un toque baja a la galería, de a una (PNG, sin ZIP), las piezas Feed de las promociones nuevas o con importes cambiados desde su última descarga; «Repetir la última tanda». Registro por promoción con la firma de lo dibujado en `promotion_feed_downloads`. Generador de Cartelería sin cambios de diseño.

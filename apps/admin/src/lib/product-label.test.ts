@@ -8,7 +8,7 @@ const bulk: BulkPromotionFact = { minimumUnits: 3, discountBps: 1_500 };
 const unit = (name: string, listPriceCents: bigint | null, promo: BulkPromotionFact | null = bulk) => buildProductLabel({ name, unitType: "UNIT", listPriceCents, bulk: promo });
 
 describe("contenido de la etiqueta: variante UNIT con «llevando 3u»", () => {
-  it("Bicarbonato: SUPER OFERTAS, nombre, LLEVANDO 3 UNIDADES, precio promocional y precio normal", () => {
+  it("Bicarbonato: SUPER OFERTAS, nombre, LLEVANDO 3 UNIDADES y precio promocional (sin precio normal)", () => {
     const label = unit("Bicarbonato Alicante x 50", 90_000n);
     expect(label.variant).toBe("PROMO");
     expect(label.headline).toBe("SUPER OFERTAS");
@@ -16,8 +16,8 @@ describe("contenido de la etiqueta: variante UNIT con «llevando 3u»", () => {
     expect(label.conditionLine).toBe("LLEVANDO 3 UNIDADES");
     expect(label.discountLine).toBe("Descuento 15%");
     expect(label.price).toBe("$ 765");
-    expect(label.normalLabel).toBe("PRECIO NORMAL");
-    expect(label.normalPrice).toBe("$ 900");
+    expect(label).not.toHaveProperty("normalLabel");
+    expect(label).not.toHaveProperty("normalPrice");
     expect(label.values).toMatchObject({ listPriceCents: "90000", promoPriceCents: "76500", promoMinimumUnits: 3, promoDiscountBps: 1_500 });
   });
 
@@ -29,7 +29,6 @@ describe("contenido de la etiqueta: variante UNIT con «llevando 3u»", () => {
     expect(label.name).toBe("MAYONESA HELLMANN'S 250GR");
     expect(label.price).toBe(formatCurrency(engine?.cashPriceCents ?? -1n));
     expect(label.price).toBe("$ 1.742,50");
-    expect(label.normalPrice).toBe("$ 2.050");
   });
 
   it("respeta la cantidad mínima y el porcentaje de la regla de la sucursal (no asume 3 / 15 %)", () => {
@@ -58,7 +57,6 @@ describe("contenido de la etiqueta: sin promoción no inventa ofertas", () => {
       expect(label.headline).toBe("SUPER OFERTAS");
       expect(label.conditionLine).toBeNull();
       expect(label.discountLine).toBeNull();
-      expect(label.normalLabel).toBeNull();
       expect(label.price).toBe("$ 2.050");
       expect(label.footLabel).toBe("PRECIO UNITARIO");
       expect(label.values?.promoPriceCents).toBeNull();

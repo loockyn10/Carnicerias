@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Rect } from "./artwork-layout";
-import { TV_AREA, TV_LAYOUTS, TV_NORMAL_LINE_HEIGHT, tvLayoutFor } from "./artwork-tv-layouts";
+import { TV_AREA, TV_LAYOUTS, tvLayoutFor } from "./artwork-tv-layouts";
 import { ARTWORK_FORMATS, BAND_WIDTH } from "./artwork-tokens";
 
 const right = (r: Rect) => r.x + r.w;
@@ -15,14 +15,12 @@ describe("TV_LAYOUTS — cuatro disposiciones 16:9 propias (no una pieza vertica
     expect(TV_LAYOUTS.map((layout) => layout.id)).toEqual(["PHOTO_LEFT", "PHOTO_RIGHT", "PHOTO_CENTER", "DIAGONAL"]);
   });
 
-  it("todo cae dentro del lienzo de 1920 × 1080 y a la derecha de la franja verde, con la línea «precio normal» incluida", () => {
+  it("todo cae dentro del lienzo de 1920 × 1080 y a la derecha de la franja verde", () => {
     for (const layout of TV_LAYOUTS) {
-      for (const rect of [layout.photo, layout.headline, layout.name, layout.price, layout.mechanic, layout.sticker, layout.normal]) {
+      for (const rect of [layout.photo, layout.headline, layout.name, layout.price, layout.mechanic]) {
         expect(inside(rect, canvas), layout.id).toBe(true);
         expect(rect.x, layout.id).toBeGreaterThanOrEqual(BAND_WIDTH.tv);
       }
-      expect(bottom(layout.normal), layout.id).toBeLessThanOrEqual(canvas.h);
-      expect(layout.normal.h, layout.id).toBeGreaterThanOrEqual(TV_NORMAL_LINE_HEIGHT - 12);
     }
   });
 
@@ -34,7 +32,7 @@ describe("TV_LAYOUTS — cuatro disposiciones 16:9 propias (no una pieza vertica
     }
   });
 
-  it("titular y nombre no se pisan entre sí ni tapan la foto; el precio, la mecánica y el sello sí se montan sobre ella (a propósito)", () => {
+  it("titular y nombre no se pisan entre sí ni tapan la foto; el precio y la mecánica sí se montan sobre ella (a propósito)", () => {
     for (const layout of TV_LAYOUTS) {
       expect(overlapArea(layout.headline, layout.name), layout.id).toBe(0);
       expect(overlapArea(layout.headline, layout.price), layout.id).toBe(0);
@@ -42,8 +40,7 @@ describe("TV_LAYOUTS — cuatro disposiciones 16:9 propias (no una pieza vertica
       expect(overlapArea(layout.name, layout.mechanic), layout.id).toBe(0);
       expect(overlapArea(layout.headline, layout.photo), layout.id).toBe(0);
       expect(overlapArea(layout.name, layout.photo), layout.id).toBe(0);
-      // El precio nunca queda tapado por la mecánica ni por su línea de precio normal.
-      expect(overlapArea(layout.price, layout.normal), layout.id).toBe(0);
+      // El precio nunca queda tapado por la mecánica.
       expect(overlapArea(layout.mechanic, layout.price), layout.id).toBe(0);
     }
   });

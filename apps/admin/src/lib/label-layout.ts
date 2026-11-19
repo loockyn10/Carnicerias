@@ -198,26 +198,6 @@ function priceBlock(data: ProductLabelData, fit: number): Block {
   };
 }
 
-/** «PRECIO NORMAL» a la izquierda y el precio normal a la derecha, sobre la misma línea base. */
-function normalRowBlock(label: string, price: string, fit: number): Block {
-  const labelSpec = LABEL_TYPE.normalLabel;
-  const priceSpec = LABEL_TYPE.normalPrice;
-  let scale = fit;
-  // Si ambos no entran con aire entre medio (precio larguísimo), se achican juntos.
-  while (scale > 0.4 && (textWidthPt(label, labelSpec.pt * scale, labelSpec.style) + textWidthPt(price, priceSpec.pt * scale, priceSpec.style)) * MM_PER_PT + 3 > INNER_WIDTH_MM) scale -= 0.02;
-  const labelPt = labelSpec.pt * scale;
-  const pricePt = priceSpec.pt * scale;
-  return {
-    heightMm: capMm(pricePt, priceSpec.style),
-    gapBeforeMm: 0,
-    draw: (top, out) => {
-      const baseline = round2(top + capMm(pricePt, priceSpec.style));
-      out.texts.push({ id: "normal-label", text: label, x: LABEL_PAD_X_MM, y: baseline, sizePt: round2(labelPt), style: labelSpec.style, anchor: "start" });
-      out.texts.push({ id: "normal-price", text: price, x: LABEL_WIDTH_MM - LABEL_PAD_X_MM, y: baseline, sizePt: round2(pricePt), style: priceSpec.style, anchor: "end" });
-    }
-  };
-}
-
 function withGap(block: Block, gapBeforeMm: number): Block {
   return { ...block, gapBeforeMm };
 }
@@ -232,8 +212,7 @@ function blocksFor(data: ProductLabelData, fit: number): Block[] {
       return [
         name,
         withGap(price, gaps.nameToPrice),
-        withGap(textBlock("condition", data.conditionLine ?? "", type.condition.pt * fit, type.condition.style), gaps.priceToCondition),
-        withGap(normalRowBlock(data.normalLabel ?? "", data.normalPrice ?? "", fit), gaps.conditionToNormal)
+        withGap(textBlock("condition", data.conditionLine ?? "", type.condition.pt * fit, type.condition.style), gaps.priceToCondition)
       ];
     }
     case "SIMPLE":

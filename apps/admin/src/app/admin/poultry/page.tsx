@@ -37,7 +37,10 @@ export default async function PoultryHomePage({ searchParams }: { searchParams: 
   return <main className="mx-auto max-w-6xl p-5 sm:p-8">
     <div className="flex flex-wrap items-end justify-between gap-3">
       <p className="max-w-2xl text-stone-600">Cajones de pollo: lo que hay que preparar y entregar, y lo que se vendió, con el costo de cada momento.</p>
-      <Link className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" href="/admin/poultry/orders?new=1">+ Nuevo pedido</Link>
+      <div className="flex flex-wrap gap-2">
+        <Link className="rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-bold text-stone-700 hover:bg-stone-50" data-testid="poultry-to-order-link" href="/admin/poultry/to-order">Mercadería a encargar</Link>
+        <Link className="rounded-lg bg-rose-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-900" href="/admin/poultry/orders?new=1">+ Nuevo pedido</Link>
+      </div>
     </div>
     <SectionTabs tabs={POULTRY_TABS} />
     {error ? <p className="mt-5 rounded-lg bg-red-50 p-4 text-red-800">{error.message}</p> : null}

@@ -62,8 +62,6 @@ export interface OfferSign {
   unitLabel: string;
   /** Línea secundaria opcional («$741,67 C/U»); null = no se muestra. */
   secondary: string | null;
-  /** «PRECIO NORMAL $7.000/KG»; null = no hay una comparación válida (nunca se inventa). */
-  normalPrice: string | null;
   /** Resumen para la lista de selección («Desde 2 kg · $6.500/kg»). */
   summary: string;
   branchName: string | null;
@@ -132,22 +130,20 @@ export function buildOfferSign(raw: unknown): OfferSign | null {
   };
 
   if (offer.variant === "WEIGHT_PROMO") {
-    const normal = `PRECIO NORMAL ${moneyText(offer.regularPrice)}/KG`;
     const condition = offer.mechanic ?? `DESDE ${formatMinimumWeight(promotion.minimumGrams ?? 0)}`;
-    return { ...base, condition, unitLabel: "/ KG", secondary: null, normalPrice: normal, summary: `${capitalize(condition)} · ${moneyText(price)}/kg` };
+    return { ...base, condition, unitLabel: "/ KG", secondary: null, summary: `${capitalize(condition)} · ${moneyText(price)}/kg` };
   }
 
-  // PACK: el total fijo contra el precio normal de ESA cantidad.
+  // PACK: el total fijo de ESA cantidad (el precio normal no se muestra).
   const { grams, units } = packQuantity(promotion, unitType);
-  const normal = `PRECIO NORMAL ${moneyText(offer.regularPrice)}`;
   if (grams !== null) {
     const quantity = formatMinimumWeight(grams);
-    return { ...base, condition: `LLEVANDO ${quantity}`, unitLabel: `POR LOS ${quantity}`, secondary: null, normalPrice: normal, summary: `${quantity.toLowerCase()} por ${moneyText(price)}` };
+    return { ...base, condition: `LLEVANDO ${quantity}`, unitLabel: `POR LOS ${quantity}`, secondary: null, summary: `${quantity.toLowerCase()} por ${moneyText(price)}` };
   }
   if (units !== null && promotion.packPriceCents !== null) {
     const each = perUnitText(promotion.packPriceCents, units);
     return {
-      ...base, condition: `PACK ${unitsText(units)}`, unitLabel: "POR EL PACK", secondary: each ? `${each} C/U` : null, normalPrice: normal,
+      ...base, condition: `PACK ${unitsText(units)}`, unitLabel: "POR EL PACK", secondary: each ? `${each} C/U` : null,
       summary: `Pack ${unitsText(units).toLowerCase()} · ${moneyText(price)}`
     };
   }

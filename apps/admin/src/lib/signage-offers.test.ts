@@ -13,8 +13,8 @@ const offerOf = (facts: SlideFacts) => must(buildOfferSlide(facts));
 describe("llevando N: precio por unidad del motor, mecánica y % real", () => {
   const offer = offerOf(unit({ bulkMinimumUnits: 3, bulkDiscountBps: 1_500, listPriceCents: 245_000n }));
 
-  it("«LLEVANDO 3» + $2.082,50 C/U (15 % de $2.450), con el precio normal debajo", () => {
-    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 3", savings: "15% OFF", priceSuffix: "C/U", condition: "LLEVANDO 3 UNIDADES", secondary: "Precio unitario $ 2.450" });
+  it("«LLEVANDO 3» + $2.082,50 C/U (15 % de $2.450), sin precio normal ni «% OFF»", () => {
+    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 3", priceSuffix: "C/U", condition: "LLEVANDO 3 UNIDADES" });
     expect(offer.price).toEqual({ whole: "2.082", cents: "50" });
     expect(offer.regularPrice).toEqual({ whole: "2.450", cents: null });
     expect(offer.promo).toBe(true);
@@ -22,16 +22,16 @@ describe("llevando N: precio por unidad del motor, mecánica y % real", () => {
 
   it("sin descuento de cantidad no se inventa ninguna mecánica", () => {
     const plain = offerOf(unit());
-    expect(plain).toMatchObject({ variant: "REGULAR", mechanic: null, savings: null, priceSuffix: null, promo: false });
+    expect(plain).toMatchObject({ variant: "REGULAR", mechanic: null, priceSuffix: null, promo: false });
   });
 });
 
-describe("pack del producto (D-064): «PACK 10 UNIDADES» + C/U + % OFF", () => {
+describe("pack del producto (D-064): «PACK 10 UNIDADES» + C/U", () => {
   const pack = (list: bigint, bps: number, size = 10) => offerOf(unit({ listPriceCents: list, packSizeUnits: size, packDiscountBps: bps }));
 
   it("$1.650 con 25 % → $1.237,50 C/U (el motor del POS, no una cuenta nueva)", () => {
     const offer = pack(165_000n, 2_500);
-    expect(offer).toMatchObject({ variant: "UNIT_PACK", mechanic: "PACK 10 UNIDADES", savings: "25% OFF", priceSuffix: "C/U", condition: "PACK 10 UNIDADES" });
+    expect(offer).toMatchObject({ variant: "UNIT_PACK", mechanic: "PACK 10 UNIDADES", priceSuffix: "C/U", condition: "PACK 10 UNIDADES" });
     expect(offer.price).toEqual({ whole: "1.237", cents: "50" });
     expect(offer.regularPrice).toEqual({ whole: "1.650", cents: null });
   });
@@ -63,15 +63,15 @@ describe("promociones por kilo y por pack a precio total", () => {
     promotion: must(parsePromotionFact({ promotionId: "p", mode: "THRESHOLD", status: "ACTIVE", ...promotion }))
   });
 
-  it("umbral por porcentaje: «DESDE 2 KG» y «10% OFF» (el porcentaje real de la regla)", () => {
+  it("umbral por porcentaje: «DESDE 2 KG» con el precio ya descontado", () => {
     const offer = weight({ minimumGrams: 2_000, discountType: "PERCENTAGE", discountValue: "1000" });
-    expect(offer).toMatchObject({ variant: "WEIGHT_PROMO", mechanic: "DESDE 2 KG", savings: "10% OFF" });
+    expect(offer).toMatchObject({ variant: "WEIGHT_PROMO", mechanic: "DESDE 2 KG" });
     expect(offer.price).toEqual({ whole: "9.000", cents: null });
   });
 
   it("precio fijo por kilo: «DESDE 1 KG» sin porcentaje inventado", () => {
     const offer = weight({ minimumGrams: 1_000, discountType: "FIXED_PRICE_PER_KG", discountValue: "900000" });
-    expect(offer).toMatchObject({ mechanic: "DESDE 1 KG", savings: null });
+    expect(offer).toMatchObject({ mechanic: "DESDE 1 KG" });
     expect(offer.price).toEqual({ whole: "9.000", cents: null });
   });
 
@@ -80,7 +80,7 @@ describe("promociones por kilo y por pack a precio total", () => {
       key: "k", name: "Costilla", unitType: "WEIGHT", listPriceCents: 800_000n, bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [],
       promotion: must(parsePromotionFact({ promotionId: "p", mode: "PACK_FIXED_TOTAL", status: "ACTIVE", packQuantityGrams: 2_000, packPriceCents: "1400000" }))
     });
-    expect(kg).toMatchObject({ variant: "PACK", mechanic: "POR 2 KG", savings: null, priceSuffix: null });
+    expect(kg).toMatchObject({ variant: "PACK", mechanic: "POR 2 KG", priceSuffix: null });
     expect(kg.price).toEqual({ whole: "14.000", cents: null });
     const units = offerOf({
       key: "c", name: "Chorizo", unitType: "UNIT", listPriceCents: 150_000n, bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [],
@@ -111,19 +111,19 @@ describe("AZUCAR JL 1KG: 3u 15 % + 5u 20 % + Pack 10u 25 % → UNA oferta, la me
 
   it("3u → $1.402,50 C/U", () => {
     const offer = azucar({ bulkTiers: [tiers[0] ?? { minimumUnits: 3, discountBps: 1_500 }] });
-    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 3", savings: "15% OFF" });
+    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 3" });
     expect(offer.price).toEqual({ whole: "1.402", cents: "50" });
   });
 
   it("3u + 5u → se anuncia el escalón de menor precio por unidad: 5u → $1.320 C/U", () => {
     const offer = azucar({ bulkTiers: tiers });
-    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 5", savings: "20% OFF" });
+    expect(offer).toMatchObject({ variant: "BULK", mechanic: "LLEVANDO 5" });
     expect(offer.price).toEqual({ whole: "1.320", cents: null });
   });
 
   it("3u + 5u + Pack 10u 25 % → gana el Pack: $1.237,50 C/U, una sola oferta", () => {
     const offer = azucar({ bulkTiers: tiers, packSizeUnits: 10, packDiscountBps: 2_500 });
-    expect(offer).toMatchObject({ variant: "UNIT_PACK", mechanic: "PACK 10 UNIDADES", savings: "25% OFF", secondary: "Precio unitario $ 1.650" });
+    expect(offer).toMatchObject({ variant: "UNIT_PACK", mechanic: "PACK 10 UNIDADES" });
     expect(offer.price).toEqual({ whole: "1.237", cents: "50" });
   });
 
@@ -137,5 +137,23 @@ describe("AZUCAR JL 1KG: 3u 15 % + 5u 20 % + Pack 10u 25 % → UNA oferta, la me
       bulkTiers: [{ minimumUnits: 3, discountBps: 1500 }, { minimumUnits: 1, discountBps: 900 }, { minimumUnits: 5 }, "x", { minimumUnits: 5, discountBps: 2000 }]
     });
     expect(facts?.bulkTiers).toEqual(tiers);
+  });
+});
+
+describe("una promoción se muestra sólo con su precio promocional y su condición (D-104)", () => {
+  it("ninguna oferta trae precio normal, ahorro ni «% OFF» en sus textos; el precio normal sigue existiendo como dato interno", () => {
+    const offers = [
+      buildOfferSlide({ key: "a", name: "Mayonesa", unitType: "UNIT", listPriceCents: 245_000n, bulkMinimumUnits: 3, bulkDiscountBps: 1_500, weightTiers: [] }),
+      buildOfferSlide({ key: "b", name: "Pata muslo", unitType: "WEIGHT", listPriceCents: 1_000_000n, bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [{ id: "t", minimumGrams: 2_000, discountType: "PERCENTAGE", discountValue: 1_000n }] }),
+      buildOfferSlide({ key: "c", name: "Chorizo", unitType: "UNIT", listPriceCents: 150_000n, bulkMinimumUnits: null, bulkDiscountBps: null, weightTiers: [], packSizeUnits: 10, packDiscountBps: 2_500 })
+    ];
+    for (const offer of offers) {
+      expect(offer?.promo).toBe(true);
+      expect(offer).not.toHaveProperty("savings");
+      expect(offer).not.toHaveProperty("secondary");
+      expect(JSON.stringify(offer)).not.toMatch(/OFF|precio normal|precio unitario/i);
+      // Interno: el precio de lista sigue disponible (historial y comparaciones), pero ninguna pieza lo dibuja.
+      expect(offer?.regularPrice.whole).toMatch(/\d/);
+    }
   });
 });

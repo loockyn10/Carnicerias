@@ -5299,6 +5299,7 @@ export type Database = {
         Returns: Json
       }
       get_pos_vacuum_state: { Args: { p_branch_id: string }; Returns: Json }
+      get_poultry_boxes_to_order: { Args: never; Returns: Json }
       get_poultry_customer_detail: {
         Args: {
           p_customer_id: string

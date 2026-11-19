@@ -66,7 +66,9 @@ describe("parseFolderFacts: lo VIGENTE de cada elemento", () => {
     expect(by("Matambre").summary).toBe("$ 11.000 / kg · desde 1 kg");
     expect(by("Nalga vacuna").summary).toBe("$ 17.900 / kg");
     expect(by("Pata muslo").offer?.mechanic).toBe("DESDE 2 KG");
-    expect(by("Pata muslo").offer?.savings).toBe("10% OFF");
+    // Una promoción sólo muestra su precio promocional y su condición: el modelo ya no trae «% OFF» ni línea de precio normal.
+    expect(by("Pata muslo").offer).not.toHaveProperty("savings");
+    expect(by("Pata muslo").offer).not.toHaveProperty("secondary");
   });
 
   it("un producto sin promoción se anuncia con su precio vigente (nunca con una promoción inventada)", () => {

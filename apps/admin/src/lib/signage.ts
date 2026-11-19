@@ -1,5 +1,5 @@
 import {
-  applyWeightDiscount, calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, formatBasisPointsPercent, formatCurrency, priceForWeight
+  applyWeightDiscount, calculateBranchPromotionLinePricing, calculateUnitPackLinePricing, formatCurrency, priceForWeight
 } from "@carnicerias/business-logic";
 
 import { buildArtworkBranding, emptyArtworkBranding, parseArtworkBrandingFacts, type ArtworkBranding } from "./artwork-branding";
@@ -44,17 +44,16 @@ export interface OfferSlideData {
    * "POR 2 KG"); es lo que las piezas destacan junto al precio. null = sin promoción (nunca se inventa una mecánica).
    */
   mechanic: string | null;
-  /** «25% OFF» sólo cuando la regla vigente es un porcentaje real (pack, escalón, tramo); nunca se calcula a mano. null = no aplica. */
-  savings: string | null;
   /** Fin de la vigencia de la promoción (ISO) para que el televisor deje de mostrarla aunque pierda conexión; null = sin fin. */
   validUntil: string | null;
-  /** Línea secundaria ("Precio unitario $ 2.035"); null = no se muestra. */
-  secondary: string | null;
   /** true cuando hay una promoción real: la plantilla la resalta. */
   promo: boolean;
   /** Por kilo o por unidad (la pieza imprime «X KG» sólo en los de peso). */
   unitType: "UNIT" | "WEIGHT";
-  /** Precio de lista vigente (el «precio normal» que se muestra junto a una promoción). */
+  /**
+   * Precio de lista vigente (el «precio normal»). Es un dato INTERNO (historial de lo generado, comparaciones del motor): ninguna pieza lo dibuja junto a una
+   * promoción. Una promoción se muestra sólo con su precio promocional y su condición, sin precio normal, tachados, ahorros ni «% OFF».
+   */
   regularPrice: OfferPrice;
   /** Foto comercial del producto como URL que el televisor puede pedir; null = sin foto (la pieza dibuja su reemplazo). */
   imageUrl: string | null;
@@ -90,11 +89,6 @@ export function splitPrice(cents: bigint): OfferPrice {
   const comma = text.lastIndexOf(",");
   if (comma < 0) return { whole: text, cents: null };
   return { whole: text.slice(0, comma), cents: text.slice(comma + 1) };
-}
-
-/** "$ 2.035" con el formato del sistema (para las líneas secundarias). */
-function money(cents: bigint): string {
-  return formatCurrency(cents);
 }
 
 const KG_FORMAT = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 3 });
@@ -148,21 +142,15 @@ export interface SlideFacts {
   promotion?: PromotionFact | null;
 }
 
-type FinishData = Omit<OfferSlideData, "key" | "name" | "unitType" | "regularPrice" | "imageUrl" | "imageTransparent" | "mechanic" | "savings" | "validUntil">
-  & Partial<Pick<OfferSlideData, "mechanic" | "savings" | "validUntil">> & { regularPriceOverride?: OfferPrice };
+type FinishData = Omit<OfferSlideData, "key" | "name" | "unitType" | "regularPrice" | "imageUrl" | "imageTransparent" | "mechanic" | "validUntil">
+  & Partial<Pick<OfferSlideData, "mechanic" | "validUntil">> & { regularPriceOverride?: OfferPrice };
 
 function finish(facts: SlideFacts, data: FinishData): OfferSlideData {
-  const { regularPriceOverride, mechanic, savings, validUntil, ...rest } = data;
+  const { regularPriceOverride, mechanic, validUntil, ...rest } = data;
   return {
-    ...rest, mechanic: mechanic ?? null, savings: savings ?? null, validUntil: validUntil ?? facts.promotion?.validUntil ?? null,
+    ...rest, mechanic: mechanic ?? null, validUntil: validUntil ?? facts.promotion?.validUntil ?? null,
     key: facts.key, name: facts.name.trim(), unitType: facts.unitType, regularPrice: regularPriceOverride ?? splitPrice(facts.listPriceCents), imageUrl: null, imageTransparent: false
   };
-}
-
-/** «10% OFF» de una regla por porcentaje (basis points reales de la promoción); null para un precio fijo por kilo. */
-function percentSavings(discountType: "PERCENTAGE" | "FIXED_PRICE_PER_KG" | null, discountValue: bigint | null): string | null {
-  if (discountType !== "PERCENTAGE" || discountValue === null || discountValue <= 0n || discountValue >= 10_000n) return null;
-  return `${formatBasisPointsPercent(Number(discountValue))}% OFF`;
 }
 
 /**
@@ -181,8 +169,8 @@ function buildPromotionSlide(facts: SlideFacts, promotion: PromotionFact): Offer
       if (applied.ruleId !== null && applied.finalPricePerKgCents > 0n && applied.finalPricePerKgCents < list) {
         return finish(facts, {
           variant: "WEIGHT_PROMO", price: splitPrice(applied.finalPricePerKgCents), priceSuffix: "/ KG",
-          condition: `DESDE ${formatMinimumWeight(promotion.minimumGrams)}`, secondary: `Precio normal ${money(list)} / KG`, promo: true,
-          mechanic: `DESDE ${formatMinimumWeight(promotion.minimumGrams)}`, savings: percentSavings(promotion.discountType, promotion.discountValue)
+          condition: `DESDE ${formatMinimumWeight(promotion.minimumGrams)}`, promo: true,
+          mechanic: `DESDE ${formatMinimumWeight(promotion.minimumGrams)}`
         });
       }
     } catch {
@@ -200,8 +188,8 @@ function buildPromotionSlide(facts: SlideFacts, promotion: PromotionFact): Offer
         const mechanic = grams !== null ? `POR ${quantity}` : `PACK ${quantity}`;
         return finish(facts, {
           variant: "PACK", price: splitPrice(promotion.packPriceCents), priceSuffix: null,
-          condition: mechanic, mechanic, secondary: `Precio normal ${money(normalTotal)}`, promo: true,
-          // El «precio normal» que se muestra junto al total del pack es el de ESA cantidad, no el precio por kilo o por unidad.
+          condition: mechanic, mechanic, promo: true,
+          // El precio normal (dato interno, no se dibuja) del pack es el de ESA cantidad, no el precio por kilo o por unidad.
           regularPriceOverride: splitPrice(normalTotal)
         });
       }
@@ -213,8 +201,8 @@ function buildPromotionSlide(facts: SlideFacts, promotion: PromotionFact): Offer
 /** El precio normal del producto, sin promoción (WEIGHT por kilo o UNIT por unidad). */
 function finishRegular(facts: SlideFacts): OfferSlideData {
   return facts.unitType === "WEIGHT"
-    ? finish(facts, { variant: "WEIGHT", price: splitPrice(facts.listPriceCents), priceSuffix: "/ KG", condition: "PRECIO POR KILO", secondary: null, promo: false })
-    : finish(facts, { variant: "REGULAR", price: splitPrice(facts.listPriceCents), priceSuffix: null, condition: "PRECIO UNITARIO", secondary: null, promo: false });
+    ? finish(facts, { variant: "WEIGHT", price: splitPrice(facts.listPriceCents), priceSuffix: "/ KG", condition: "PRECIO POR KILO", promo: false })
+    : finish(facts, { variant: "REGULAR", price: splitPrice(facts.listPriceCents), priceSuffix: null, condition: "PRECIO UNITARIO", promo: false });
 }
 
 /** Una oferta por producto (o por promoción). `null` = no se puede mostrar (sin precio válido): el reproductor lo saltea. */
@@ -235,15 +223,15 @@ export function buildOfferSlide(facts: SlideFacts): OfferSlideData | null {
         if (applied.ruleId !== null && applied.finalPricePerKgCents > 0n && applied.finalPricePerKgCents < list) {
           return finish(facts, {
             variant: "WEIGHT_PROMO", price: splitPrice(applied.finalPricePerKgCents), priceSuffix: "/ KG",
-            condition: `DESDE ${formatMinimumWeight(tier.minimumGrams)}`, secondary: `Precio normal ${money(list)} / KG`, promo: true,
-            mechanic: `DESDE ${formatMinimumWeight(tier.minimumGrams)}`, savings: percentSavings(tier.discountType, tier.discountValue)
+            condition: `DESDE ${formatMinimumWeight(tier.minimumGrams)}`, promo: true,
+            mechanic: `DESDE ${formatMinimumWeight(tier.minimumGrams)}`
           });
         }
       } catch {
         // regla inválida: se cae al precio de lista
       }
     }
-    return finish(facts, { variant: "WEIGHT", price: splitPrice(list), priceSuffix: "/ KG", condition: "PRECIO POR KILO", secondary: null, promo: false });
+    return finish(facts, { variant: "WEIGHT", price: splitPrice(list), priceSuffix: "/ KG", condition: "PRECIO POR KILO", promo: false });
   }
 
   const bulk = bulkOffer(facts);
@@ -251,7 +239,7 @@ export function buildOfferSlide(facts: SlideFacts): OfferSlideData | null {
   // Un producto con las dos mecánicas anuncia la que deja el MENOR precio por unidad (empate: «llevando N»).
   const best = bulk && pack ? (pack.perUnit < bulk.perUnit ? pack : bulk) : bulk ?? pack;
   if (best) return best.offer;
-  return finish(facts, { variant: "REGULAR", price: splitPrice(list), priceSuffix: null, condition: "PRECIO UNITARIO", secondary: null, promo: false });
+  return finish(facts, { variant: "REGULAR", price: splitPrice(list), priceSuffix: null, condition: "PRECIO UNITARIO", promo: false });
 }
 
 interface UnitOffer { offer: OfferSlideData; perUnit: bigint }
@@ -280,8 +268,8 @@ function bulkTierOffer(facts: SlideFacts, minimum: number, bps: number): UnitOff
         perUnit: bulk.cashPriceCents,
         offer: finish(facts, {
           variant: "BULK", price: splitPrice(bulk.cashPriceCents), priceSuffix: "C/U",
-          condition: `LLEVANDO ${String(minimum)} UNIDADES`, secondary: `Precio unitario ${money(list)}`, promo: true,
-          mechanic: `LLEVANDO ${String(minimum)}`, savings: `${formatBasisPointsPercent(bps)}% OFF`
+          condition: `LLEVANDO ${String(minimum)} UNIDADES`, promo: true,
+          mechanic: `LLEVANDO ${String(minimum)}`
         })
       };
     }
@@ -307,7 +295,7 @@ function unitPackOffer(facts: SlideFacts): UnitOffer | null {
         perUnit: pricing.cashPriceCents,
         offer: finish(facts, {
           variant: "UNIT_PACK", price: splitPrice(pricing.cashPriceCents), priceSuffix: "C/U",
-          condition: mechanic, secondary: `Precio unitario ${money(list)}`, promo: true, mechanic, savings: `${formatBasisPointsPercent(bps)}% OFF`
+          condition: mechanic, promo: true, mechanic
         })
       };
     }

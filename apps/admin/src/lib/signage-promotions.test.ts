@@ -22,9 +22,9 @@ const threshold = (overrides: Record<string, unknown> = {}) => must(parsePromoti
 const pack = (overrides: Record<string, unknown> = {}) => must(parsePromotionFact({ promotionId: COSTILLA, mode: "PACK_FIXED_TOTAL", status: "ACTIVE", packQuantityGrams: 2_000, packPriceCents: "1400000", ...overrides }));
 
 describe("diapositivas de PROMOCIÓN (precio y condición del motor, nunca a mano)", () => {
-  it("umbral por kg: «DESDE 2 KG» con el precio por kilo que da applyWeightDiscount y el precio normal por kilo", () => {
+  it("umbral por kg: «DESDE 2 KG» con el precio por kilo que da applyWeightDiscount (sin precio normal)", () => {
     const offer = buildOfferSlide(facts({ promotion: threshold() }));
-    expect(offer).toMatchObject({ variant: "WEIGHT_PROMO", promo: true, condition: "DESDE 2 KG", priceSuffix: "/ KG", secondary: "Precio normal $ 10.000 / KG" });
+    expect(offer).toMatchObject({ variant: "WEIGHT_PROMO", promo: true, condition: "DESDE 2 KG", priceSuffix: "/ KG" });
     expect(offer?.price).toEqual({ whole: "9.000", cents: null });
     expect(offer?.regularPrice).toEqual({ whole: "10.000", cents: null });
   });
@@ -35,16 +35,16 @@ describe("diapositivas de PROMOCIÓN (precio y condición del motor, nunca a man
     expect(offer?.price).toEqual({ whole: "9.500", cents: null });
   });
 
-  it("pack por kg: el total fijo «POR 2 KG» contra el precio normal de ESA cantidad", () => {
+  it("pack por kg: el total fijo «POR 2 KG» (el precio normal de esa cantidad queda como dato interno)", () => {
     const offer = buildOfferSlide(facts({ key: COSTILLA, name: "Costilla de cerdo", listPriceCents: 800_000n, promotion: pack() }));
-    expect(offer).toMatchObject({ variant: "PACK", promo: true, condition: "POR 2 KG", priceSuffix: null, secondary: "Precio normal $ 16.000" });
+    expect(offer).toMatchObject({ variant: "PACK", promo: true, condition: "POR 2 KG", priceSuffix: null });
     expect(offer?.price).toEqual({ whole: "14.000", cents: null });
     expect(offer?.regularPrice).toEqual({ whole: "16.000", cents: null });
   });
 
-  it("pack por unidades: «PACK 3 UNIDADES» y el precio normal de las 3", () => {
+  it("pack por unidades: «PACK 3 UNIDADES» con su total fijo", () => {
     const offer = buildOfferSlide(facts({ key: COCA, name: "Coca Cola", unitType: "UNIT", listPriceCents: 200_000n, promotion: pack({ promotionId: COCA, packQuantityGrams: null, packQuantityUnits: 3, packPriceCents: "540000" }) }));
-    expect(offer).toMatchObject({ variant: "PACK", condition: "PACK 3 UNIDADES", secondary: "Precio normal $ 6.000" });
+    expect(offer).toMatchObject({ variant: "PACK", condition: "PACK 3 UNIDADES" });
     expect(offer?.price).toEqual({ whole: "5.400", cents: null });
   });
 

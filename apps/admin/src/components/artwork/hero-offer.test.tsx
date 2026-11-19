@@ -30,7 +30,7 @@ describe("los tres renderers leen el mismo modelo", () => {
   const mayo = modelFor("mayo", { headline: "X MAYOR" });
   const renderers = [["tv", TvHeroOffer], ["feed", FeedHeroOffer], ["story", StoryHeroOffer]] as const;
 
-  it.each(renderers)("%s: logo, titular, producto, precio, condición y precio normal", (format, Renderer) => {
+  it.each(renderers)("%s: logo, titular, producto, precio promocional y condición (sin precio normal ni % OFF)", (format, Renderer) => {
     const html = render(<Renderer model={mayo} />);
     const text = textOf(html);
     expect(html).toContain(`data-artwork-format="${format}"`);
@@ -39,11 +39,13 @@ describe("los tres renderers leen el mismo modelo", () => {
     expect(text).toContain("MAYONESA");
     expect(text).toContain("1.742");
     expect(text).toContain("50");
-    // La mecánica se dice como el comercio: «LLEVANDO 3», el precio es por unidad («C/U») y el sello trae el % real de la regla.
+    // La mecánica se dice como el comercio: «LLEVANDO 3» y el precio es por unidad («C/U»).
     expect(text).toContain("LLEVANDO 3");
     expect(text).toContain("C/U");
-    expect(text).toContain("15%");
-    expect(text).toContain("PRECIO NORMAL $ 2.050");
+    // D-104: una promoción se muestra sólo con su precio promocional: ni precio normal, ni tachados, ni ahorro, ni sello «% OFF».
+    expect(text).not.toMatch(/%|OFF|PRECIO NORMAL|2\.050/);
+    expect(html).not.toContain('data-testid="artwork-sticker"');
+    expect(html).not.toMatch(/line-through/);
   });
 
   it.each(renderers)("%s: el tamaño de diseño es el del formato", (format, Renderer) => {
@@ -221,7 +223,7 @@ describe("el preview dibuja el MISMO renderer que el PNG", () => {
     const model = modelFor("mayo", { headline: "ESPECIAL" });
     const texts = (["tv", "feed", "story"] as const).map((format) => {
       const text = textOf(render(<HeroOffer format={format} model={model} />));
-      return ["ESPECIAL", "MAYONESA", "1.742", "LLEVANDO 3", "PRECIO NORMAL $ 2.050"].every((piece) => text.includes(piece));
+      return ["ESPECIAL", "MAYONESA", "1.742", "LLEVANDO 3"].every((piece) => text.includes(piece));
     });
     expect(texts).toEqual([true, true, true]);
   });
@@ -245,7 +247,8 @@ describe("composiciones del protagonista: estables y elegibles (D-086)", () => {
     expect(new Set(htmls).size).toBe(4);
     for (const html of htmls) {
       const text = textOf(html);
-      for (const piece of ["X MAYOR", "MAYONESA", "1.742", "LLEVANDO 3", "15%", "PRECIO NORMAL $ 2.050"]) expect(text).toContain(piece);
+      for (const piece of ["X MAYOR", "MAYONESA", "1.742", "LLEVANDO 3"]) expect(text).toContain(piece);
+      expect(text).not.toMatch(/%|OFF|PRECIO NORMAL/);
     }
   });
 
@@ -254,10 +257,10 @@ describe("composiciones del protagonista: estables y elegibles (D-086)", () => {
     expect(ids).toEqual(["CENTER", "PHOTO_LEFT", "PHOTO_RIGHT", "PRICE_FIRST", "CENTER"]);
   });
 
-  it("la mecánica sale como etiqueta propia y el sello «% OFF» sólo con un porcentaje real", () => {
+  it("la mecánica sale como etiqueta propia y NUNCA hay sello «% OFF» (D-104)", () => {
     const withPromo = render(<FeedHeroOffer model={model} />);
     expect(withPromo).toContain('data-testid="artwork-mechanic"');
-    expect(withPromo).toContain('data-testid="artwork-sticker"');
+    expect(withPromo).not.toContain('data-testid="artwork-sticker"');
     const plain = render(<FeedHeroOffer model={modelFor("sinFoto")} />);
     expect(plain).not.toContain('data-testid="artwork-mechanic"');
     expect(plain).not.toContain('data-testid="artwork-sticker"');

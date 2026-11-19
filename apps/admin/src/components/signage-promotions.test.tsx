@@ -80,12 +80,12 @@ describe("renderer de TV: una promoción usa el diseño moderno existente (no el
     return renderToStaticMarkup(<OfferArtwork format="tv" model={slideToArtworkModel(signageView([slide]), slide)} slideIndex={0} />);
   };
 
-  it("muestra el precio promocional, «PACK 3 UNIDADES» y el precio normal de las 3 unidades, con la franja verde y la pastilla amarilla", () => {
+  it("muestra el precio promocional y «PACK 3 UNIDADES» (sin el precio normal de las 3 unidades), con la franja verde y la pastilla amarilla", () => {
     const html = render(`/api/tv/TOKEN/media/${UUID(1)}?v=x`);
     const text = html.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     expect(text).toContain("5.400");
     expect(text).toContain("PACK 3 UNIDADES");
-    expect(text).toContain("PRECIO NORMAL $ 6.000");
+    expect(text).not.toMatch(/PRECIO NORMAL|6\.000|%|OFF/);
     expect(html).toContain('data-testid="artwork-tv"');
     expect(html.toLowerCase()).toContain("background:#ffffff");
     expect(html).not.toMatch(/gradient|#9f1239|#6b0b26/i);

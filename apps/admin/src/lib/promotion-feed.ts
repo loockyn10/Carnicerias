@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { slideToItemBase } from "./artwork";
+import { heroPrice, slideToItemBase } from "./artwork";
 import { FOLDER_STATE_LABELS, isGeneratable, parseItemFacts, slugify, type FolderItemFacts } from "./artwork-folders";
 
 /**
@@ -9,12 +9,18 @@ import { FOLDER_STATE_LABELS, isGeneratable, parseItemFacts, slugify, type Folde
  * foto y estado de HOY) y lo último descargado de cada una; acá el MISMO motor que dibuja la pieza (`buildOfferSlide` → `slideToItemBase`)
  * arma lo que la imagen muestra y se calcula su firma.
  *
- * Firma: sha-256 de los importes y condiciones que dibuja la pieza Feed (precio grande, precio normal, condición, mecánica, % OFF, sufijo
- * y unidad). Una promoción está PENDIENTE si se puede generar hoy y su firma difiere de la última descargada (o nunca se descargó). Cambiar
- * el precio de lista del producto, el descuento o el pack cambia lo dibujado y la vuelve pendiente; cambiar el nombre, la foto o la vigencia no.
+ * Firma: sha-256 de la VERSIÓN DEL DISEÑO y de lo que dibuja la pieza Feed: el precio promocional, la condición, la mecánica, el sufijo y la unidad (el
+ * precio normal y el «% OFF» NO se dibujan, así que no entran). Una promoción está PENDIENTE si se puede generar hoy y su firma difiere de la última
+ * descargada (o nunca se descargó). Cambiar el descuento, el pack o un precio de lista que mueve el precio promocional la vuelve pendiente; cambiar el
+ * precio normal sin mover el promocional, el nombre, la foto o la vigencia no.
+ *
+ * Versión del diseño: al cambiar CÓMO se ve la pieza (no sus datos) se sube `FEED_DESIGN_VERSION`; todas las firmas guardadas dejan de coincidir y
+ * todas las promociones activas quedan pendientes UNA vez. Al descargarlas se registra la firma de la versión nueva y no vuelven a quedar pendientes.
+ * Sin migración: la versión viaja dentro de la firma.
  */
 
-export const FEED_SIGNATURE_VERSION = "feed-v1";
+/** 1 = pieza con «precio normal» y sello «% OFF» (D-103). 2 = sólo el precio promocional, redistribuida (D-104). */
+export const FEED_DESIGN_VERSION = 2;
 
 export interface PromotionFeedDownload {
   signature: string;
@@ -57,8 +63,7 @@ export function feedPriceSignature(item: Pick<FolderItemFacts, "state" | "offer"
   const drawn = slideToItemBase(item.productId, item.offer);
   // Orden de claves fijo: la misma pieza siempre da el mismo texto. Sin nombre, foto ni vigencia.
   const canonical = JSON.stringify([
-    FEED_SIGNATURE_VERSION, drawn.unitType, drawn.regularPrice, drawn.promotionalPrice, drawn.promotionCondition, drawn.mechanic, drawn.savings,
-    drawn.priceSuffix, drawn.unitLabel
+    FEED_DESIGN_VERSION, drawn.unitType, heroPrice(drawn), drawn.promotionCondition, drawn.mechanic, drawn.priceSuffix, drawn.unitLabel
   ]);
   return createHash("sha256").update(canonical).digest("hex");
 }
